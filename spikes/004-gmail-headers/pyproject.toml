@@ -1,0 +1,13 @@
+[project]
+name = "orbit-spike-004-gmail-headers"
+version = "0.0.0"
+description = "SPIKE-004: Gmail API 발송 시 앱이 넣은 헤더 보존 확인 (스파이크 전용, 제품 코드 아님)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "google-api-python-client==2.201.0",
+    "google-auth-oauthlib==1.5.0",
+    "google-auth-httplib2==0.2.0",
+]
+
+[tool.uv]
+package = false
