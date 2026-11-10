@@ -1,6 +1,6 @@
 # ADR-0004 — 워크스페이스 격리: 앱 필터 + PostgreSQL RLS, 트랜잭션 범위 설정
 
-- 상태: 제안 (개발자 검토 전)
+- 상태: 채택 (2026-11-10, 개발자 승인)
 - 작성일: 2026-11-10
 - 근거: `docs/spikes/SPIKE-002-rls-sqlalchemy-pool.md`, 세부 설계 D4-1·D4-4 (비공개, `private-docs/`)
 

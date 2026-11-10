@@ -1,6 +1,6 @@
 # ADR-0005 — 작업 큐: Procrastinate, 도메인 변경과 같은 트랜잭션에서 등록
 
-- 상태: 제안 (개발자 검토 전)
+- 상태: 채택 (2026-11-10, 개발자 승인)
 - 작성일: 2026-11-10
 - 근거: `docs/spikes/SPIKE-003-procrastinate-transactional-defer.md`, 세부 설계 D5-2·D7-5 (비공개, `private-docs/`)
 
