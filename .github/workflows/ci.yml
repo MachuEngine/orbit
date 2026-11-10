@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.18.4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 비밀정보 탐지가 전체 커밋 이력을 검사하도록
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # 프로젝트 언어 런타임 설치 단계는 이 아래에 추가한다 (병합 파일).
+
+      - name: Run checks
+        run: bash scripts/check.sh
+        env:
+          CI: "true"

@@ -1,0 +1,8 @@
+# copier가 관리하는 파일이다. 직접 고치지 않는다.
+_commit: v0.2.0
+_src_path: gh:MachuEngine/claude-harness-template
+gitleaks_version: 8.18.4
+main_model: claude-opus-5-5
+project_name: Orbit
+project_summary: 웹을 먼저 개발하는 대화형 개인 AI 비서. 메일·캘린더·문서를 다룬다.
+worker_model: claude-sonnet-5-5

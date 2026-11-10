@@ -1,0 +1,55 @@
+# ── 비밀정보 ─────────────────────────────────────────
+# 실제 값은 저장소에 두지 않는다. 템플릿(.env.example)만 커밋한다.
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+credentials*.json
+token*.json
+
+# ── 비공개 문서 ─────────────────────────────────────
+# 공개하지 않을 설계 원본 문서는 여기에 두고 로컬에서만 관리한다.
+private-docs/
+
+# ── Python ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# ── Node ─────────────────────────────────────────────
+node_modules/
+.next/
+.turbo/
+coverage/
+
+# ── 에디터·OS ────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ── Claude Code 개인 설정 ────────────────────────────
+.claude/settings.local.json
+
+# ── 프로젝트 전용 ────────────────────────────────────
+# 프로젝트 고유 항목은 이 아래에 추가한다.
+
+# 실제 사용자 데이터: 평가·개발에는 합성 데이터만 쓴다 (세부 설계 D2-1).
+data/private/
+*.mbox
+*.eml
+
+# 실험 결과 JSONL은 용량이 크고 모델 응답 원문이 들어갈 수 있어 기본 제외한다.
+runs/
+*.jsonl.gz
