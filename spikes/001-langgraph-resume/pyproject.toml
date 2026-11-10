@@ -1,0 +1,13 @@
+[project]
+name = "orbit-spike-001-langgraph-resume"
+version = "0.0.0"
+description = "SPIKE-001: LangGraph interrupt + PostgreSQL checkpointer resume (spike code, not product code)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "langgraph==1.2.20",
+    "langgraph-checkpoint-postgres==3.2.0",
+    "psycopg[binary,pool]==3.3.8",
+]
+
+[tool.uv]
+package = false
