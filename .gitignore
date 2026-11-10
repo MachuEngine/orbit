@@ -53,3 +53,6 @@ data/private/
 # 실험 결과 JSONL은 용량이 크고 모델 응답 원문이 들어갈 수 있어 기본 제외한다.
 runs/
 *.jsonl.gz
+
+# 스파이크 실행 결과 (실행할 때마다 다시 만든다. 해석은 docs/spikes/에 기록한다)
+spikes/*/results.json
