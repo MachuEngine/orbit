@@ -11,6 +11,8 @@ from datetime import timedelta, tzinfo
 from pathlib import Path
 from typing import Protocol
 
+import procrastinate
+
 from orbit.connectors.contracts import CalendarConnector, MailConnector
 from orbit.connectors.sim.factory import build_sim_connectors
 from orbit.connectors.sim.world import SimWorld
@@ -66,3 +68,4 @@ class RunDeps:
     approval_ttl: timedelta = field(default_factory=lambda: timedelta(minutes=15))
     lease_seconds: float = DEFAULT_LEASE_SECONDS
     max_steps: int = DEFAULT_MAX_STEPS
+    jobs: procrastinate.App | None = None  # 워커 앱. 있으면 승인 만료 확인 작업을 예약한다

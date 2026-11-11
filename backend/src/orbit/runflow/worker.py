@@ -10,25 +10,54 @@
 """
 
 import logging
+import math
 import uuid
 from datetime import timedelta
 
 import procrastinate
+from procrastinate.retry import BaseRetryStrategy, RetryDecision
 
 from orbit.records.errors import InvalidJobArgs
 from orbit.records.jobs import make_procrastinate_app, recover_stalled_jobs, validate_job_args
 from orbit.runflow.deps import RunDeps
 from orbit.runflow.graph import advance_run
+from orbit.runflow.jobs import EXECUTE_RUN, EXPIRE_APPROVALS, RECOVER_STALLED, RESUME_RUN
+from orbit.runflow.nodes import ExecutionNotSettled
 
 logger = logging.getLogger(__name__)
 
-EXECUTE_RUN = "execute_run"
-RESUME_RUN = "resume_run"
-RECOVER_STALLED = "recover_stalled_jobs"
+__all__ = ["EXECUTE_RUN", "EXPIRE_APPROVALS", "RECOVER_STALLED", "RESUME_RUN", "build_worker_app"]
 
 STALLED_AFTER_SECONDS = 60.0  # 워커 heartbeat 간격(10초)과 stalled_worker_timeout(30초)보다 길게
 RETRY_MAX_ATTEMPTS = 5
 RETRY_WAIT_SECONDS = 30
+UNSETTLED_MAX_ATTEMPTS = 20  # 실행 기록이 끝나길 기다리는 재시도의 별도 상한
+
+
+class RunRetryStrategy(BaseRetryStrategy):
+    """재시도 시점을 오류 종류로 정한다.
+
+    - `ExecutionNotSettled`(lease 미획득, 대조 미완): `lease_seconds + 1`초 뒤에 다시 한다.
+      남은 lease는 `lease_seconds`를 넘지 않으므로 다음 실행은 만료된 lease를 넘겨받아
+      대조까지 간다. 이 경우의 상한은 일반 재시도와 따로 `UNSETTLED_MAX_ATTEMPTS`다.
+    - 그 밖의 예외: 고정 대기 `wait`초 뒤, 총 `max_attempts`번째까지.
+    """
+
+    def __init__(self, *, wait: int, lease_seconds: float, max_attempts: int) -> None:
+        self._wait = wait
+        self._unsettled_wait = math.ceil(lease_seconds) + 1
+        self._max_attempts = max_attempts
+
+    def get_retry_decision(
+        self, *, exception: BaseException, job: procrastinate.jobs.Job
+    ) -> RetryDecision | None:
+        if isinstance(exception, ExecutionNotSettled):
+            if job.attempts + 1 >= UNSETTLED_MAX_ATTEMPTS:
+                return None
+            return RetryDecision(retry_in={"seconds": self._unsettled_wait})
+        if job.attempts + 1 >= self._max_attempts:
+            return None
+        return RetryDecision(retry_in={"seconds": self._wait})
 
 
 def build_worker_app(
@@ -39,7 +68,12 @@ def build_worker_app(
 ) -> procrastinate.App:
     """작업 처리기를 등록한 Procrastinate 앱을 만든다."""
     app = make_procrastinate_app(database_url)
-    retry = procrastinate.RetryStrategy(max_attempts=RETRY_MAX_ATTEMPTS, wait=retry_wait_seconds)
+    retry = RunRetryStrategy(
+        wait=retry_wait_seconds,
+        lease_seconds=deps.lease_seconds,
+        max_attempts=RETRY_MAX_ATTEMPTS,
+    )
+    deps.jobs = app  # 승인 요청 때 만료 확인 작업을 같은 트랜잭션에 예약한다
 
     async def _handle(job_name: str, **kwargs: str) -> None:
         try:
@@ -59,6 +93,11 @@ def build_worker_app(
     @app.task(name=RESUME_RUN, retry=retry)
     async def resume_run(run_id: str, workspace_id: str) -> None:
         await _handle(RESUME_RUN, run_id=run_id, workspace_id=workspace_id)
+
+    @app.task(name=EXPIRE_APPROVALS, retry=retry)
+    async def expire_approvals(run_id: str, workspace_id: str) -> None:
+        # 만료 시각에 도착한다. 승인이 아직 pending이고 만료됐으면 expired로 바꾸고 run을 이어간다.
+        await _handle(EXPIRE_APPROVALS, run_id=run_id, workspace_id=workspace_id)
 
     @app.periodic(cron="* * * * *")
     @app.task(name=RECOVER_STALLED, queueing_lock=RECOVER_STALLED)

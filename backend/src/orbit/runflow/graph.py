@@ -23,6 +23,7 @@ from orbit.runflow.nodes import RunNodes
 from orbit.runflow.repo import latest_approval_for_run, lock_run
 from orbit.runflow.state import RunState, validate_state
 
+MAX_ADVANCE_ROUNDS = 6
 Outcome = Literal["missing", "terminal", "waiting", "advanced"]
 
 
@@ -63,22 +64,30 @@ async def advance_run(deps: RunDeps, workspace_id: uuid.UUID, run_id: uuid.UUID)
     }
     async with AsyncPostgresSaver.from_conn_string(deps.checkpoint_conninfo) as saver:
         graph = build_graph(deps, saver)
-        snapshot = await graph.aget_state(config)
-        if not snapshot.values and not snapshot.next:
-            initial = validate_state(
-                {
-                    "run_id": str(run_id),
-                    "workspace_id": str(workspace_id),
-                    "step": 0,
-                    "tool_call_id": "",
-                    "next_node": "agent",
-                }
-            )
-            await graph.ainvoke(initial, config, durability="sync")
-        elif any(task.interrupts for task in snapshot.tasks):
-            await graph.ainvoke(Command(resume=True), config, durability="sync")
-        elif snapshot.next:
-            await graph.ainvoke(None, config, durability="sync")
+        # 한 번의 invoke는 interrupt나 종료까지 간다. agent 체크포인트 저장 뒤 interrupt에 닿기 전에
+        # 끊긴 run은 이어서 실행하면 그제서야 interrupt에 닿는다. 그 사이에 승인이 이미 결정됐다면
+        # 다시 읽은 스냅샷에서 바로 재개한다(상한이 있는 루프).
+        for _ in range(MAX_ADVANCE_ROUNDS):
+            snapshot = await graph.aget_state(config)
+            if not snapshot.values and not snapshot.next:
+                initial = validate_state(
+                    {
+                        "run_id": str(run_id),
+                        "workspace_id": str(workspace_id),
+                        "step": 0,
+                        "tool_call_id": "",
+                        "next_node": "agent",
+                    }
+                )
+                await graph.ainvoke(initial, config, durability="sync")
+            elif any(task.interrupts for task in snapshot.tasks):
+                if not await _approval_decided(deps, workspace_id, run_id):
+                    break
+                await graph.ainvoke(Command(resume=True), config, durability="sync")
+            elif snapshot.next:
+                await graph.ainvoke(None, config, durability="sync")
+            else:
+                break
     return "advanced"
 
 

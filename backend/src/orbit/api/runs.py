@@ -37,6 +37,7 @@ from orbit.records.runs import (
     list_events,
 )
 from orbit.runflow.fingerprint import PATTERN, config_fingerprint
+from orbit.runflow.jobs import EXECUTE_RUN, RESUME_RUN
 from orbit.runflow.repo import (
     get_tool_call,
     is_deadlock,
@@ -45,7 +46,6 @@ from orbit.runflow.repo import (
     workspace_exists,
 )
 from orbit.runflow.summary import approval_summary
-from orbit.runflow.worker import EXECUTE_RUN, RESUME_RUN
 
 router = APIRouter()
 Workspace = Annotated[uuid.UUID, Depends(current_workspace)]
@@ -95,6 +95,7 @@ def _job_args(ws: uuid.UUID, run_id: uuid.UUID) -> dict[str, str]:
 @router.post("/runs", status_code=status.HTTP_201_CREATED)
 async def post_run(body: CreateRunBody, request: Request, ws: Workspace) -> dict[str, str]:
     db, clock, ids = _db(request), _clock(request), _ids(request)
+    settings: Settings = request.app.state.settings
     async with db.workspace_session(ws) as s:
         if not await workspace_exists(s, ws):
             raise _not_found("워크스페이스")
@@ -122,7 +123,7 @@ async def post_run(body: CreateRunBody, request: Request, ws: Workspace) -> dict
             workspace_id=ws,
             conversation_id=conversation_id,
             pattern=PATTERN,
-            config_fingerprint=config_fingerprint(),
+            config_fingerprint=config_fingerprint(settings.llm_model_id),
             clock=clock,
             ids=ids,
         )

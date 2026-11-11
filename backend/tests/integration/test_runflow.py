@@ -414,3 +414,187 @@ async def test_recover_stalled_task_returns_dead_workers_job_to_queue(make_harne
     assert await h.status(run_id) == "waiting_approval"
     async with h.db.workspace_session(h.ws) as s:
         await s.execute(text("DELETE FROM procrastinate_workers WHERE id = :w"), {"w": worker_id})
+
+
+# ---------------------------------------------------------------- interrupt 도달 전 종료
+
+
+async def test_resume_after_checkpoint_stopped_before_await_approval(make_harness: Make) -> None:
+    """agent 체크포인트까지 저장하고 interrupt에 닿기 전에 끊긴 run도 승인 뒤 끝까지 간다."""
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    from orbit.runflow.graph import build_graph
+
+    h = await make_harness(move_script())
+    run_id = await h.start("점심을 2시로 옮겨줘")
+    config = {"configurable": {"thread_id": str(run_id)}}
+    initial = {
+        "run_id": str(run_id),
+        "workspace_id": str(h.ws),
+        "step": 0,
+        "tool_call_id": "",
+        "next_node": "agent",
+    }
+    async with AsyncPostgresSaver.from_conn_string(h.deps.checkpoint_conninfo) as saver:
+        graph = build_graph(h.deps, saver)
+        await graph.ainvoke(initial, config, interrupt_before=["await_approval"])
+        snapshot = await graph.aget_state(config)
+        assert snapshot.next == ("await_approval",)
+        assert not any(task.interrupts for task in snapshot.tasks)  # 아직 interrupt에 닿지 않았다
+    assert await h.status(run_id) == "waiting_approval"
+    approval_id = await h.approval_id(run_id)
+
+    assert (await h.decide(approval_id, "approve")).status_code == 200  # 끊긴 사이에 결정이 났다
+    await h.work()
+
+    assert await h.status(run_id) == "succeeded"
+    assert h.write_calls() == ["update_event"]
+    assert len(h.world_diff().events_updated) == 1
+
+
+# ---------------------------------------------------------------- lease 만료를 실제로 기다린다
+
+
+async def test_unsettled_execution_is_retried_after_real_lease_expiry(make_harness: Make) -> None:
+    script = [
+        {
+            "text": None,
+            "tool_calls": [
+                {
+                    "name": "create_event",
+                    "arguments": {
+                        "title": "합성 회의",
+                        "start": "2026-11-14T10:00:00+09:00",
+                        "end": "2026-11-14T11:00:00+09:00",
+                    },
+                }
+            ],
+        },
+        {"text": "일정을 만들었습니다."},
+    ]
+    h = await make_harness(script, lease_seconds=3.0)
+    run_id, approval_id = await _until_waiting(h, "토요일 10시에 합성 회의 잡아줘")
+    h.calendar.crash_after_create = True
+    assert (await h.decide(approval_id, "approve")).status_code == 200
+    await h.work()  # 외부 쓰기 직후 중단. lease는 아직 남아 있다.
+    assert len(h.world_diff().events_created) == 1
+
+    # 일반 재시도 대기(30초)가 지난 것으로 보고 다시 실행한다. lease가 살아 있어 대조하지 못한다.
+    await h.make_jobs_due()
+    await h.work()
+    assert await h.status(run_id) == "running"
+    assert await h.count("SELECT count(*) FROM execution WHERE status = 'pending'") == 1
+    async with h.db.workspace_session(h.ws) as s:
+        later = (
+            await s.execute(
+                text(
+                    "SELECT count(*) FROM procrastinate_jobs WHERE task_name = 'resume_run'"
+                    " AND status = 'todo' AND scheduled_at > now() + interval '2 seconds'"
+                    " AND args->>'workspace_id' = :ws"
+                ),
+                {"ws": str(h.ws)},
+            )
+        ).scalar_one()
+    assert later == 1  # lease 길이(3초) 이후로 재예약됐다
+
+    await asyncio.sleep(3.5)  # lease가 실제로 만료되길 기다린다(expire_leases를 부르지 않는다)
+    await h.make_jobs_due()  # 재예약 시각(lease + 1초)이 지났다
+    await h.work()
+
+    assert await h.status(run_id) == "succeeded"
+    assert len(h.world_diff().events_created) == 1
+    assert h.write_calls() == ["create_event"]  # 대조로 끝났고 재호출은 없다
+
+
+# ---------------------------------------------------------------- 승인 만료 확인 작업
+
+
+async def test_expiry_job_is_scheduled_with_approval_and_expires_it(make_harness: Make) -> None:
+    h = await make_harness(move_script("만료되었습니다."))
+    run_id, _ = await _until_waiting(h)
+
+    async with h.db.workspace_session(h.ws) as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT j.scheduled_at = a.expires_at, j.args FROM procrastinate_jobs j,"
+                    " approval a WHERE j.task_name = 'expire_approvals' AND a.run_id = :r"
+                    " AND j.args->>'run_id' = :rs"
+                ),
+                {"r": run_id, "rs": str(run_id)},
+            )
+        ).one()
+    assert row[0] is True  # 승인 만료 시각에 예약됐다
+    assert row[1] == {"run_id": str(run_id), "workspace_id": str(h.ws)}
+
+    # 테스트 시계가 실제 시각보다 과거라 예약 작업이 이미 한 번 실행됐다(만료 전이라 변화 없음).
+    # 만료 시각이 된 상황을 만들려고 시계를 옮기고 확인 작업을 다시 등록한다.
+    h.clock.advance(timedelta(minutes=16))
+    from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
+
+    async with h.db.workspace_session(h.ws) as s:
+        await defer_at(
+            s,
+            h.worker_app,
+            task_name=EXPIRE_APPROVALS,
+            workspace_id=h.ws,
+            run_id=run_id,
+            at=h.clock.now(),
+        )
+    await h.work()  # 아무도 결정하지 않았다. 확인 작업이 만료를 반영해 run을 끝낸다.
+
+    assert await h.status(run_id) == "succeeded"
+    assert await h.count("SELECT count(*) FROM approval WHERE status = 'expired'") == 1
+    assert h.write_calls() == []
+    assert h.world_diff().is_empty
+
+
+async def test_expiry_job_before_expiry_does_nothing(make_harness: Make) -> None:
+    h = await make_harness(move_script())
+    run_id, approval_id = await _until_waiting(h)
+    await h.make_jobs_due()
+    await h.work()  # 만료 전에 도착한 확인 작업
+    assert await h.status(run_id) == "waiting_approval"
+    assert await h.count("SELECT count(*) FROM approval WHERE status = 'pending'") == 1
+    assert (await h.decide(approval_id, "approve")).status_code == 200
+
+
+# ---------------------------------------------------------------- 다른 run의 기록
+
+
+async def test_tool_call_of_another_run_is_not_executed(make_harness: Make, owner_url: str) -> None:
+    from orbit.records.runs import create_run
+
+    h = await make_harness(move_script())
+    run_id, approval_id = await _until_waiting(h)
+    conversation_id = uuid.UUID((await h.run_row(run_id))["conversation_id"])
+    async with h.db.workspace_session(h.ws) as s:
+        other = await create_run(
+            s,
+            workspace_id=h.ws,
+            conversation_id=conversation_id,
+            pattern="p0",
+            config_fingerprint="fp",
+            clock=h.clock,
+            ids=h.deps.ids,
+        )
+    assert (await h.decide(approval_id, "approve")).status_code == 200
+    engine = create_engine(owner_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.workspace_id', :ws, true)"), {"ws": str(h.ws)}
+            )
+            changed = conn.execute(
+                text("UPDATE tool_call SET run_id = :o WHERE run_id = :r"),
+                {"o": other.id, "r": run_id},
+            ).rowcount
+            assert changed == 1
+    finally:
+        engine.dispose()
+    await h.work()
+
+    assert await h.status(run_id) == "failed"
+    assert (await h.run_row(run_id))["error_kind"] == "run_mismatch"
+    assert h.write_calls() == []
+    assert await h.count("SELECT count(*) FROM execution") == 0

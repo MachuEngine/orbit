@@ -259,6 +259,7 @@ async def build_harness(
     *,
     plan: dict[str, Any] | None = None,
     approval_ttl: timedelta = timedelta(minutes=15),
+    lease_seconds: float = 300.0,
 ) -> AsyncIterator[Harness]:
     ws = workspaces.create()
     async with async_db.workspace_session(ws) as s:  # 다른 테스트가 남긴 대기 작업을 치운다
@@ -282,7 +283,7 @@ async def build_harness(
         tz=TZ,
         checkpoint_conninfo=conninfo,
         approval_ttl=approval_ttl,
-        lease_seconds=300.0,
+        lease_seconds=lease_seconds,
     )
     worker_app = build_worker_app(app_url, deps)
     settings = Settings(database_url=SecretStr(app_url), env="dev")

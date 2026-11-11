@@ -11,9 +11,11 @@ from orbit.runflow.write_tools import run_tool_specs
 PATTERN = "write-v0"
 
 
-def config_fingerprint() -> str:
+def config_fingerprint(model_id: str | None = None) -> str:
+    """`model_id`는 고정 모델 ID(D9-3). 없거나 비어 있으면 "unset"으로 넣는다."""
     payload = {
         "pattern": PATTERN,
+        "model_id": model_id or "unset",
         "prompt_version": PROMPT_VERSION,
         "temperature": TEMPERATURE,
         "tools": [asdict(spec) for spec in run_tool_specs()],

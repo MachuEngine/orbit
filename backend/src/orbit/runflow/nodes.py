@@ -45,6 +45,7 @@ from orbit.records.runs import (
     transition_run,
 )
 from orbit.runflow.deps import RunDeps
+from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
 from orbit.runflow.prompt import build_system_prompt
 from orbit.runflow.repo import get_approval_by_tool_call, get_tool_call, lock_run
 from orbit.runflow.state import RunState, validate_state
@@ -414,6 +415,18 @@ class RunNodes:
                 ids=d.ids,
                 ttl=d.approval_ttl,
             )
+            if created and d.jobs is not None:
+                # 만료 시각에 확인 작업을 예약한다. 승인 행과 같은 트랜잭션이고, run 잠금 뒤라
+                # 잠금 순서(run -> approval)를 지킨다. 워크스페이스 밖에서 만료분을 훑을 수 없어
+                # (RLS) 주기 훑기 대신 승인마다 예약한다.
+                await defer_at(
+                    s,
+                    d.jobs,
+                    task_name=EXPIRE_APPROVALS,
+                    workspace_id=ws,
+                    run_id=run_id,
+                    at=approval.expires_at,
+                )
             if created:
                 await append_event(
                     s,
@@ -457,6 +470,8 @@ class RunNodes:
             rows = await list_messages(s, workspace_id=ws, run_id=run_id)
             if tool_call is None or approval is None:
                 pass  # 아래에서 실패로 끝낸다
+            elif tool_call.run_id != run_id or approval.run_id != run_id:
+                pass  # 다른 run의 기록이다. 아래에서 외부 호출 없이 실패로 끝낸다
             elif Transcript(tuple(rows)).tool_result_for_orbit_call(str(tool_call_id)) is not None:
                 return again  # 이미 처리했다(재실행)
             elif approval.status == "pending":
@@ -465,6 +480,8 @@ class RunNodes:
                 await self._transition(s, ws, run_id, "running")
         if tool_call is None or approval is None:
             return await self._fail(ws, run_id, "approval_missing")
+        if tool_call.run_id != run_id or approval.run_id != run_id:
+            return await self._fail(ws, run_id, "run_mismatch")
 
         llm_id = _llm_call_id(Transcript(tuple(rows)), step, tool_call_id, run_id)
         if approval.status in ("rejected", "expired"):

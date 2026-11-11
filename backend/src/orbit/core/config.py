@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     database_url: SecretStr
     migration_database_url: SecretStr | None = None
     env: Literal["dev", "prod"] = "prod"
+    llm_model_id: str | None = None  # 설정 지문용. 비어 있으면 지문에 "unset"으로 들어간다
     sim_snapshot_path: str | None = None
     sim_account_id: str = "acct-alice"
     user_timezone: str = "Asia/Seoul"
