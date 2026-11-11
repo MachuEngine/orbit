@@ -5,6 +5,7 @@
 - 조회는 `auth_session_lookup` 함수(마이그레이션 0004) 하나로만 한다. 발급·폐기는
   워크스페이스 세션을 거친다(RLS).
 - 토큰 원문은 로그·예외에 넣지 않는다.
+- Google 로그인 흐름은 `orbit.auth.google`, 사용자 조회·생성은 `orbit.auth.users`다(ADR-0016).
 """
 
 from orbit.auth.sessions import (

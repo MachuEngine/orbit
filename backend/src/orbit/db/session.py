@@ -12,13 +12,16 @@
   `InvalidRequestError`(closed transaction inside context manager)로 실패한다. 설정 없는 새
   트랜잭션이 열리지 않으므로 데이터가 보이지 않는다(SQLAlchemy 2.1.8에서 확인, 통합 테스트로 고정).
   나눠서 커밋해야 하면 `workspace_session`을 새로 연다.
-- 워크스페이스 없이 DB에 닿는 경로는 `ping()`과 `unscoped_auth_session_lookup()`뿐이다.
-  새 경로가 필요하면 이름에 `unscoped`를 넣는다.
+- 워크스페이스 없이 DB에 닿는 경로는 `ping()`, `unscoped_auth_session_lookup()`,
+  `unscoped_auth_session_profile()`, `unscoped_login_upsert_user()`뿐이다. `ping()` 말고는 모두
+  `SECURITY DEFINER` 함수 호출만 한다(마이그레이션 0004·0005). 새 경로가 필요하면 이름에
+  `unscoped`를 넣는다.
 """
 
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Engine, create_engine, text
@@ -98,6 +101,51 @@ class AsyncDatabase:
             ).first()
             await conn.rollback()
         return None if row is None else tuple(row)
+
+    async def unscoped_auth_session_profile(self, token_hash: str) -> tuple[Any, ...] | None:
+        """토큰 해시의 세션에 묶인 사용자의 (user_id, email, display_name). 본인 정보만 나온다.
+
+        `auth_session_profile` 함수(SECURITY DEFINER, 마이그레이션 0005)만 호출한다.
+        """
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT * FROM auth_session_profile(:h)"), {"h": token_hash}
+                )
+            ).first()
+            await conn.rollback()
+        return None if row is None else tuple(row)
+
+    async def unscoped_login_upsert_user(
+        self,
+        *,
+        google_sub: str,
+        email: str,
+        display_name: str,
+        user_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        now: datetime,
+    ) -> tuple[Any, ...]:
+        """로그인한 Google 사용자를 만들거나 갱신한다. 반환: (user_id, workspace_id, created).
+
+        `login_upsert_user` 함수(SECURITY DEFINER, 마이그레이션 0005)만 호출한다. 처음이면 개인
+        워크스페이스와 owner 멤버십을 같은 트랜잭션에서 만든다. 인증을 마친 로그인 경로에서만 쓴다.
+        """
+        async with self._engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT * FROM login_upsert_user(:sub, :email, :name, :uid, :ws, :now)"),
+                    {
+                        "sub": google_sub,
+                        "email": email,
+                        "name": display_name,
+                        "uid": user_id,
+                        "ws": workspace_id,
+                        "now": now,
+                    },
+                )
+            ).one()
+        return tuple(row)
 
     async def dispose(self) -> None:
         await self._engine.dispose()

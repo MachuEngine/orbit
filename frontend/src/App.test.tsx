@@ -21,11 +21,27 @@ function stubApi(handler: Handler) {
   return fetchMock;
 }
 
-const signedOut = { authenticated: false, workspace_id: null, expires_at: null };
-const signedIn = { authenticated: true, workspace_id: "w1", expires_at: "2026-11-12T00:00:00Z" };
+const methods = { dev_login: true, google_login: true };
+const signedOut = {
+  authenticated: false,
+  workspace_id: null,
+  expires_at: null,
+  display_name: null,
+  email: null,
+  ...methods,
+};
+const signedIn = {
+  authenticated: true,
+  workspace_id: "w1",
+  expires_at: "2026-11-12T00:00:00Z",
+  display_name: "앨리스 테스트",
+  email: "alice@example.test",
+  ...methods,
+};
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  window.history.replaceState(null, "", "/");
 });
 
 describe("로그인 화면", () => {
@@ -35,6 +51,59 @@ describe("로그인 화면", () => {
     expect(await screen.findByRole("button", { name: "개발용 로그인" })).toBeEnabled();
     expect(screen.getByRole("img", { name: PRODUCT_NAME })).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeEmptyDOMElement();
+  });
+
+  it("Google로 로그인은 서버 시작 주소로 가는 일반 링크다", async () => {
+    stubApi(() => json(signedOut));
+    render(<App />);
+    const link = await screen.findByRole("link", { name: "Google로 로그인" });
+    expect(link).toHaveAttribute("href", "/api/auth/google/start");
+  });
+
+  it("서버가 개발용 로그인을 열지 않았으면 그 버튼을 보이지 않는다", async () => {
+    stubApi(() => json({ ...signedOut, dev_login: false }));
+    render(<App />);
+    expect(await screen.findByRole("link", { name: "Google로 로그인" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "개발용 로그인" })).toBeNull();
+  });
+
+  it("Google 로그인이 닫혀 있으면 링크를 보이지 않는다", async () => {
+    stubApi(() => json({ ...signedOut, google_login: false }));
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "개발용 로그인" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Google로 로그인" })).toBeNull();
+  });
+
+  it("로그인 수단이 하나도 없으면 설정 확인을 안내한다", async () => {
+    stubApi(() => json({ ...signedOut, dev_login: false, google_login: false }));
+    render(<App />);
+    expect(await screen.findByText(/사용할 수 있는 로그인 방법이 없습니다/)).toBeInTheDocument();
+  });
+
+  it("login_error가 있으면 문구를 알리고 주소에서 지운다", async () => {
+    window.history.replaceState(null, "", "/?login_error=not_allowed");
+    stubApi(() => json(signedOut));
+    render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("허용된 계정으로 로그인해 주세요");
+    expect(window.location.search).toBe("");
+    expect(screen.getByRole("link", { name: "Google로 로그인" })).toBeInTheDocument();
+  });
+
+  it("모르는 login_error 값은 일반 문구로 보이고 값을 화면에 옮기지 않는다", async () => {
+    window.history.replaceState(null, "", "/?login_error=%3Cb%3Ex%3C%2Fb%3E");
+    stubApi(() => json(signedOut));
+    render(<App />);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("로그인하지 못했습니다");
+    expect(alert).not.toHaveTextContent("<b>");
+  });
+
+  it("이미 로그인한 상태면 login_error를 보이지 않는다", async () => {
+    window.history.replaceState(null, "", "/?login_error=state");
+    stubApi(() => json(signedIn));
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "로그아웃" })).toBeInTheDocument();
+    expect(screen.queryByText(/로그인 정보를 확인하지 못했습니다/)).toBeNull();
   });
 
   it("로그인에 실패하면 다음 행동을 알리고 다시 누를 수 있다", async () => {

@@ -52,6 +52,7 @@ async def issue_session(
     clock: Clock,
     ids: Uuid7Generator,
     ttl_seconds: float,
+    user_id: uuid.UUID | None = None,
 ) -> IssuedSession:
     token = secrets.token_urlsafe(32)
     csrf_token = secrets.token_urlsafe(32)
@@ -61,12 +62,13 @@ async def issue_session(
     async with db.workspace_session(workspace_id) as s:
         await s.execute(
             text(
-                "INSERT INTO auth_session (id, workspace_id, token_hash, csrf_token_hash,"
-                " created_at, expires_at) VALUES (:id, :ws, :th, :ch, :now, :exp)"
+                "INSERT INTO auth_session (id, workspace_id, user_id, token_hash, csrf_token_hash,"
+                " created_at, expires_at) VALUES (:id, :ws, :uid, :th, :ch, :now, :exp)"
             ),
             {
                 "id": session_id,
                 "ws": workspace_id,
+                "uid": user_id,
                 "th": hash_token(token),
                 "ch": hash_token(csrf_token),
                 "now": now,
