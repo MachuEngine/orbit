@@ -170,7 +170,8 @@ def test_message_and_workspace_policies(
 def _no_unscoped_visibility_sync(s: Session) -> str:
     try:
         count = s.execute(COUNT_CONV).scalar_one()
-    except InvalidRequestError:
+    except InvalidRequestError as exc:
+        assert "closed transaction" in str(exc)
         return "raised"
     assert count == 0, "블록 안 commit/rollback 뒤에 설정 없이 데이터가 보였다"
     return "zero"
@@ -203,8 +204,8 @@ async def test_manual_commit_or_rollback_inside_block_never_exposes_rows_async(
             await getattr(s, action)()
             try:
                 count = (await s.execute(COUNT_CONV)).scalar_one()
-            except InvalidRequestError:
-                pass
+            except InvalidRequestError as exc:
+                assert "closed transaction" in str(exc)
             else:
                 assert count == 0, "블록 안 commit/rollback 뒤에 설정 없이 데이터가 보였다"
         async with db.workspace_session(ws) as s:

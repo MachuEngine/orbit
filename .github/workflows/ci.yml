@@ -56,7 +56,9 @@ jobs:
 
       # 서비스 컨테이너에는 파일을 마운트할 수 없어 같은 init SQL을 psql로 실행한다.
       - name: Create DB roles
-        run: psql "postgresql://postgres:ci_superuser_pw@localhost:5432/orbit" -f backend/db/init/00_roles.sql
+        run: psql "postgresql://postgres@localhost:5432/orbit" -f backend/db/init/00_roles.sql
+        env:
+          PGPASSWORD: ${{ env.ORBIT_PG_SUPERUSER_PASSWORD }}
 
       - name: Run migrations
         run: uv run --directory backend alembic upgrade head
