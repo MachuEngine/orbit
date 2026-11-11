@@ -1,6 +1,11 @@
 """Sim 캘린더 커넥터 (ADR-0008 3절). 계정 하나에 묶이며 모든 공개 메서드는 `SimRuntime`을 거친다.
 
 판단 기록:
+- `query`: Sim은 제목·설명·장소에 대한 대소문자 무시 부분 문자열 일치다. 계약은 "제목의
+  완전한 단어를 대소문자 무관하게 찾는다"까지만 보장한다(Google `q`는 단어 단위 전문 검색).
+  부분 문자열·여러 단어·필드 범위는 Sim 고유 동작이므로 호출자가 의존하면 안 된다.
+- 취소된 일정에도 `update_event`를 허용한다(의도한 동작). status는 `cancelled`로 유지되고
+  version·`updated_at`은 바뀐다.
 - `list_events`는 겹침 기준이다. `time_min <= start < time_max`만 보면 기간 직전에 시작해
   기간 안에서 끝나는 일정이 빠진다. Google `events.list`도 겹침 기준이다. 길이 0인 일정은
   `time_min <= start < time_max`일 때 포함한다.

@@ -165,3 +165,55 @@ async def test_naive_datetime_rejected(world: SimWorld) -> None:
 def test_unknown_account_fails_fast(world: SimWorld) -> None:
     with pytest.raises(KeyError):
         SimCalendarConnector(world, "acct-nobody")
+
+
+async def test_query_is_case_insensitive_substring_over_title_description_location(
+    world: SimWorld,
+) -> None:
+    conn = _conn(world)
+    await conn.create_event(
+        MAIN,
+        NEW_ID,
+        EventDraft(
+            title="Quarterly Review",
+            start=datetime(2026, 11, 20, 8, tzinfo=UTC),
+            end=datetime(2026, 11, 20, 9, tzinfo=UTC),
+        ),
+    )
+
+    async def ids(q: str) -> list[str]:
+        return [e.id for e in await conn.list_events(MAIN, LO, HI, query=q)]
+
+    assert await ids("QUARTER") == [NEW_ID]  # 부분 문자열, 대소문자 무시
+    assert await ids("quarterly review") == [NEW_ID]  # 여러 단어는 구절 그대로 일치
+    assert await ids("회의실 a") == ["evalice001"]  # 장소
+    assert await ids("합성 일정") == ["evalice001"]  # 설명
+    assert await ids("없는검색어") == []
+
+
+async def test_update_cancelled_event_is_allowed_and_stays_cancelled(world: SimWorld) -> None:
+    conn = _conn(world)
+    ev = await conn.get_event(MAIN, "evalice001")
+    cancelled = await conn.cancel_event(MAIN, "evalice001", if_match=ev.version)
+    updated = await conn.update_event(
+        MAIN, "evalice001", EventPatch(title="취소 후 수정"), if_match=cancelled.version
+    )
+    assert updated.status == "cancelled"
+    assert updated.title == "취소 후 수정"
+    assert updated.version != cancelled.version
+
+
+async def test_update_result_unknown_then_reconcile_by_stale_if_match(world: SimWorld) -> None:
+    conn = _conn(world, {"tool": "update_event", "nth_call": 1, "error": "result_unknown"})
+    before = await conn.get_event(MAIN, "evalice001")
+    patch = EventPatch(title="대조 대상")
+    with pytest.raises(ResultUnknown):
+        await conn.update_event(MAIN, "evalice001", patch, if_match=before.version)
+    # 재호출하지 않고 현재 상태를 읽어 대조한다: 적용됐으므로 version이 바뀌어 있다.
+    current = await conn.get_event(MAIN, "evalice001")
+    assert current.version != before.version
+    assert current.title == "대조 대상"
+    # 같은 if_match로 다시 보내면 낡은 버전이라 거절된다(중복 적용 방지).
+    with pytest.raises(PreconditionFailed):
+        await conn.update_event(MAIN, "evalice001", patch, if_match=before.version)
+    assert (await conn.get_event(MAIN, "evalice001")) == current
