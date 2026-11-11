@@ -13,6 +13,28 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITLEAKS_VERSION: 8.18.4
+      UV_VERSION: 0.11.28
+      # CI 전용 합성 비밀번호. 서비스 컨테이너는 이 job 안에서만 열린다.
+      ORBIT_PG_SUPERUSER_PASSWORD: ci_superuser_pw
+      ORBIT_OWNER_PASSWORD: ci_owner_pw
+      ORBIT_APP_PASSWORD: ci_app_pw
+      # 설정 객체는 두 URL을 함께 읽으므로 job 전체에 둔다(마이그레이션 단계도 ORBIT_DATABASE_URL을 요구한다).
+      ORBIT_DATABASE_URL: postgresql+psycopg://orbit_app:ci_app_pw@localhost:5432/orbit
+      ORBIT_MIGRATION_DATABASE_URL: postgresql+psycopg://orbit_owner:ci_owner_pw@localhost:5432/orbit
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg17
+        env:
+          POSTGRES_DB: orbit
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_superuser_pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d orbit"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,8 +49,26 @@ jobs:
           gitleaks version
 
       # 프로젝트 언어 런타임 설치 단계는 이 아래에 추가한다 (병합 파일).
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Sync backend dependencies
+        run: uv sync --directory backend --frozen
+
+      # 서비스 컨테이너에는 파일을 마운트할 수 없어 같은 init SQL을 psql로 실행한다.
+      - name: Create DB roles
+        run: psql "postgresql://postgres@localhost:5432/orbit" -f backend/db/init/00_roles.sql
+        env:
+          PGPASSWORD: ${{ env.ORBIT_PG_SUPERUSER_PASSWORD }}
+
+      - name: Run migrations
+        run: uv run --directory backend alembic upgrade head
 
       - name: Run checks
         run: bash scripts/check.sh
         env:
           CI: "true"
+          ORBIT_TEST_DATABASE_URL: postgresql+psycopg://orbit_app:ci_app_pw@localhost:5432/orbit_test
+          ORBIT_TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://orbit_owner:ci_owner_pw@localhost:5432/orbit_test

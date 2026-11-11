@@ -1,0 +1,20 @@
+# 개발용 PostgreSQL. 포트 55440 (스파이크 55432·55433과 겹치지 않는다).
+# 사용: docker compose -f backend/compose.yml up -d --wait
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_DB: orbit
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${ORBIT_PG_SUPERUSER_PASSWORD:-orbit_dev_superuser_only}
+      ORBIT_OWNER_PASSWORD: ${ORBIT_OWNER_PASSWORD:-orbit_dev_owner_only}
+      ORBIT_APP_PASSWORD: ${ORBIT_APP_PASSWORD:-orbit_dev_app_only}
+    ports:
+      - "127.0.0.1:55440:5432"
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d orbit"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

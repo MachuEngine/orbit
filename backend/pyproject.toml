@@ -1,0 +1,58 @@
+[project]
+name = "orbit-backend"
+version = "0.0.0"
+description = "Orbit 백엔드"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.20.1",
+    "fastapi>=0.162.4",
+    "psycopg[binary,pool]==3.3.8",
+    "pydantic-settings>=2.16.2",
+    "sqlalchemy[asyncio]==2.1.8",
+    "uvicorn>=0.54.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orbit"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["migrations/versions/__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "S", "DTZ"]
+
+[tool.ruff.lint.per-file-ignores]
+# 테스트는 assert와 고정 합성 비밀번호를 쓴다.
+"tests/**" = ["S101", "S105", "S106"]
+# 시계 구현만 실제 시각을 읽는다.
+"src/orbit/core/clock.py" = ["DTZ"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests", "migrations"]
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["integration: 실제 PostgreSQL이 필요한 통합 테스트"]
