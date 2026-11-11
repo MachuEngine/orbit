@@ -20,7 +20,7 @@ from procrastinate.retry import BaseRetryStrategy, RetryDecision
 from orbit.records.errors import InvalidJobArgs
 from orbit.records.jobs import make_procrastinate_app, recover_stalled_jobs, validate_job_args
 from orbit.runflow.deps import RunDeps
-from orbit.runflow.graph import advance_run
+from orbit.runflow.graph import advance_run, expire_if_due
 from orbit.runflow.jobs import EXECUTE_RUN, EXPIRE_APPROVALS, RECOVER_STALLED, RESUME_RUN
 from orbit.runflow.nodes import ExecutionNotSettled
 
@@ -96,8 +96,16 @@ def build_worker_app(
 
     @app.task(name=EXPIRE_APPROVALS, retry=retry)
     async def expire_approvals(run_id: str, workspace_id: str) -> None:
-        # 만료 시각에 도착한다. 승인이 아직 pending이고 만료됐으면 expired로 바꾸고 run을 이어간다.
-        await _handle(EXPIRE_APPROVALS, run_id=run_id, workspace_id=workspace_id)
+        # 만료 시각에 도착한다. 만료된 pending 승인만 expired로 바꾸고 resume_run을 등록한다.
+        # 그 밖의 경우(이미 결정됨, 진행 중, 종료)에는 그래프를 구동하지 않는다.
+        try:
+            args = validate_job_args({"run_id": run_id, "workspace_id": workspace_id})
+        except InvalidJobArgs:
+            return
+        changed = await expire_if_due(
+            deps, uuid.UUID(args["workspace_id"]), uuid.UUID(args["run_id"])
+        )
+        logger.info("%s: run %s -> %s", EXPIRE_APPROVALS, args["run_id"], changed)
 
     @app.periodic(cron="* * * * *")
     @app.task(name=RECOVER_STALLED, queueing_lock=RECOVER_STALLED)

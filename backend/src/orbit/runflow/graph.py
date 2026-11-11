@@ -17,8 +17,10 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from orbit.records.approvals import expire_approval
+from orbit.records.jobs import defer_job
 from orbit.records.runs import TERMINAL_RUN_STATUSES, get_run
 from orbit.runflow.deps import RunDeps
+from orbit.runflow.jobs import RESUME_RUN
 from orbit.runflow.nodes import RunNodes
 from orbit.runflow.repo import latest_approval_for_run, lock_run
 from orbit.runflow.state import RunState, validate_state
@@ -106,3 +108,33 @@ async def _approval_decided(deps: RunDeps, workspace_id: uuid.UUID, run_id: uuid
                 s, workspace_id=workspace_id, approval_id=approval.id, clock=deps.clock
             )
         return False
+
+
+async def expire_if_due(deps: RunDeps, workspace_id: uuid.UUID, run_id: uuid.UUID) -> bool:
+    """만료 확인 작업의 본문. 그래프를 구동하지 않는다.
+
+    run 잠금 뒤 run이 `waiting_approval`이고 가장 최근 승인이 `pending`이며 만료 시각이 지났을 때만
+    승인을 `expired`로 바꾸고 `resume_run`을 같은 트랜잭션에 등록한다(run -> approval 순서).
+    그 밖에는 아무것도 하지 않는다. 바꿨으면 True.
+    """
+    if deps.jobs is None:
+        return False
+    async with deps.db.workspace_session(workspace_id) as s:
+        if await lock_run(s, workspace_id, run_id) != "waiting_approval":
+            return False
+        approval = await latest_approval_for_run(s, workspace_id, run_id)
+        if approval is None or approval.status != "pending":
+            return False
+        if deps.clock.now() < approval.expires_at:
+            return False
+        if not await expire_approval(
+            s, workspace_id=workspace_id, approval_id=approval.id, clock=deps.clock
+        ):
+            return False
+        await defer_job(
+            s,
+            deps.jobs,
+            task_name=RESUME_RUN,
+            args={"run_id": str(run_id), "workspace_id": str(workspace_id)},
+        )
+        return True

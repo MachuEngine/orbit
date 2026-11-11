@@ -598,3 +598,44 @@ async def test_tool_call_of_another_run_is_not_executed(make_harness: Make, owne
     assert (await h.run_row(run_id))["error_kind"] == "run_mismatch"
     assert h.write_calls() == []
     assert await h.count("SELECT count(*) FROM execution") == 0
+
+
+async def test_expiry_job_is_noop_for_decided_or_finished_runs(make_harness: Make) -> None:
+    from orbit.runflow.graph import expire_if_due
+    from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
+
+    h = await make_harness(move_script())
+    run_id, approval_id = await _until_waiting(h)
+    assert (await h.decide(approval_id, "approve")).status_code == 200
+    h.clock.advance(timedelta(minutes=16))  # 승인 뒤 만료 시각이 지났다
+    requests = len(h.llm.requests)
+
+    # 이미 승인됐지만 아직 재개 전인 run: 만료로 바꾸지 않고 작업도 더 등록하지 않는다.
+    assert await expire_if_due(h.deps, h.ws, run_id) is False
+    assert await h.count("SELECT count(*) FROM approval WHERE status = 'approved'") == 1
+    assert len(await h.jobs(RESUME_RUN)) == 1
+    assert len(h.llm.requests) == requests
+
+    await h.work()
+    assert await h.status(run_id) == "succeeded"
+    requests = len(h.llm.requests)
+    jobs_before = len(await h.jobs())
+
+    # 종료된 run에 만료 작업이 도착해도 그래프를 구동하지 않는다.
+    async with h.db.workspace_session(h.ws) as s:
+        await defer_at(
+            s,
+            h.worker_app,
+            task_name=EXPIRE_APPROVALS,
+            workspace_id=h.ws,
+            run_id=run_id,
+            at=h.clock.now(),
+        )
+    await h.work()
+    assert len(h.llm.requests) == requests
+    assert len(await h.jobs()) == jobs_before + 1  # 작업만 늘었고 resume_run은 없다
+    assert len(await h.jobs(RESUME_RUN)) == 1
+    assert (
+        h.write_calls() == []
+    )  # 재개 때 이미 만료 시각이 지나 실행기가 거절했다(만료 작업과 무관)
+    assert await h.status(run_id) == "succeeded"
