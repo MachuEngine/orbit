@@ -44,7 +44,7 @@ from orbit.records.runs import (
     list_messages,
     transition_run,
 )
-from orbit.runflow.deps import RunDeps
+from orbit.runflow.deps import NoConnection, RunDeps
 from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
 from orbit.runflow.prompt import build_system_prompt
 from orbit.runflow.repo import get_approval_by_tool_call, get_tool_call, lock_run
@@ -261,7 +261,10 @@ class RunNodes:
                     await self._transition(s, ws, run_id, "succeeded")
             return self._out({"next_node": "done"})
 
-        calendar, mail = d.resolver.connectors_for(ws)
+        try:
+            calendar, mail = await d.resolver.connectors_for(ws)
+        except NoConnection:
+            return await self._fail(ws, run_id, "no_connection")
         workset = transcript.workset()
         pending = await self._run_calls(
             ws, run_id, step, calls, transcript, workset, calendar, mail
@@ -507,7 +510,10 @@ class RunNodes:
             )
             return await self._fail(ws, run_id, "hash_mismatch")
 
-        calendar, mail = d.resolver.connectors_for(ws)
+        try:
+            calendar, mail = await d.resolver.connectors_for(ws)
+        except NoConnection:
+            return await self._fail(ws, run_id, "no_connection")
         store = ActionsStoreAdapter(SqlExecutionStore(d.db, ws, clock=d.clock, ids=d.ids))
         view = ApprovalView(
             id=approval.id,

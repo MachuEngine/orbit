@@ -3,6 +3,7 @@ import { executionResultText } from "../approvals/logic";
 import type { ChatMessage, ExecutionOutcome } from "../runs/reducer";
 import { Icon, type IconName } from "../ui/Icon";
 import type { ComposerStatus } from "../composer/useComposer";
+import { Markdown } from "./Markdown";
 
 function resultIcon(status: ExecutionOutcome["status"]): { icon: IconName; tone: string } {
   switch (status) {
@@ -44,7 +45,7 @@ export function MessageList({
       {messages.map((message) => (
         <li key={message.id} className={`message message-${message.role}`}>
           <span className="visually-hidden">{message.role === "user" ? "나" : PRODUCT_NAME}</span>
-          <p>{message.text}</p>
+          {message.role === "assistant" ? <Markdown text={message.text} /> : <p>{message.text}</p>}
         </li>
       ))}
       {outgoing !== null && (

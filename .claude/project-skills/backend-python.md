@@ -21,7 +21,7 @@
 
 ## 2. DB와 격리 (ADR-0004)
 - 사용자 데이터 접근은 `orbit.db.session`의 `SyncDatabase`/`AsyncDatabase.workspace_session`만 거친다.
-- 워크스페이스 없이 DB에 닿는 경로는 `ping()`과 `unscoped_auth_session_lookup()`뿐이다. 새 경로가 필요하면 이름에 `unscoped`를 넣고 리뷰에서 근거를 설명한다.
+- 워크스페이스 없이 DB에 닿는 경로는 `ping()`, `unscoped_auth_session_lookup()`, `unscoped_auth_session_profile()`, `unscoped_login_upsert_user()`뿐이다(뒤의 셋은 `SECURITY DEFINER` 함수 경유, ADR-0013·0016). 새 경로가 필요하면 이름에 `unscoped`를 넣고 리뷰에서 근거를 설명한다.
 - 새 사용자 데이터 테이블: `workspace_id`, 정책 `NULLIF(current_setting('app.workspace_id', true), '')::uuid`(`USING`+`WITH CHECK`), `FORCE ROW LEVEL SECURITY`, `orbit_app` 권한, 격리 테스트(`tests/integration/test_rls.py` 형식).
 - 하위 테이블은 `(workspace_id, 부모 id)` 복합 FK + `ON DELETE CASCADE`로 다른 워크스페이스 부모를 가리킬 수 없게 한다.
 - 벡터 검색은 같은 SQL 안에서 워크스페이스로 거르고, 트랜잭션 범위로 `hnsw.iterative_scan`을 켠다.

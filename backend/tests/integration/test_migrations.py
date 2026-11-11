@@ -17,7 +17,8 @@ def _tables(owner_url: str) -> set[str]:
                     " OR tablename LIKE 'procrastinate\\_%' ESCAPE '\\'"
                     " OR tablename IN ('run', 'run_event', 'run_message', 'tool_call',"
                     " 'approval', 'execution', 'checkpoints', 'checkpoint_blobs',"
-                    " 'checkpoint_writes', 'checkpoint_migrations', 'auth_session'))"
+                    " 'checkpoint_writes', 'checkpoint_migrations', 'auth_session',"
+                    " 'app_user', 'membership', 'connection'))"
                 )
             )
             return {r[0] for r in rows}
@@ -61,6 +62,9 @@ def test_upgrade_downgrade_upgrade(owner_url: str) -> None:
         "checkpoint_writes",
         "checkpoint_migrations",
         "auth_session",
+        "app_user",
+        "membership",
+        "connection",
         "procrastinate_jobs",
         "procrastinate_events",
         "procrastinate_workers",

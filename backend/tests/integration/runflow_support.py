@@ -118,7 +118,9 @@ class StubResolver:
     def __init__(self, calendar: CalendarConnector, mail: MailConnector) -> None:
         self._pair = (calendar, mail)
 
-    def connectors_for(self, workspace_id: uuid.UUID) -> tuple[CalendarConnector, MailConnector]:
+    async def connectors_for(
+        self, workspace_id: uuid.UUID
+    ) -> tuple[CalendarConnector, MailConnector]:
         return self._pair
 
 

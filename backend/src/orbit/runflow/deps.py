@@ -1,8 +1,8 @@
 """그래프·워커가 쓰는 주입 의존성 (ADR-0012 §4).
 
 시계·ID 생성기·LLM·커넥터는 모두 주입한다. 도메인 코드가 `datetime.now()`나 제공자 SDK를 직접
-부르지 않는다. 커넥터는 `ConnectorResolver`(워크스페이스 -> (캘린더, 메일))로 받는다. 6단계의
-Google Adapter도 이 Protocol로 연결한다.
+부르지 않는다. 커넥터는 `ConnectorResolver`(워크스페이스 -> (캘린더, 메일))로 받는다. Google 구현은
+`GoogleConnectorResolver`다(6B). 연결 조회가 DB를 거치므로 `connectors_for`는 비동기다.
 """
 
 import uuid
@@ -11,13 +11,20 @@ from datetime import timedelta, tzinfo
 from pathlib import Path
 from typing import Protocol
 
+import httpx
 import procrastinate
+from pydantic import SecretStr
 
+from orbit.connections import store as connection_store
 from orbit.connectors.contracts import CalendarConnector, MailConnector
+from orbit.connectors.google.calendar import GoogleCalendarConnector
+from orbit.connectors.google.gmail import GmailConnector
+from orbit.connectors.google.provider import ConnectionTokenProvider
 from orbit.connectors.sim.factory import build_sim_connectors
 from orbit.connectors.sim.world import SimWorld
 from orbit.core.clock import Clock
 from orbit.core.ids import Uuid7Generator
+from orbit.crypto.envelope import EnvelopeCipher
 from orbit.db.session import AsyncDatabase
 from orbit.llm.interface import LLM
 
@@ -25,10 +32,14 @@ DEFAULT_MAX_STEPS = 12  # 한 run의 LLM 호출 상한
 DEFAULT_LEASE_SECONDS = 300.0  # 커넥터 호출 타임아웃 x (1 + 재호출 1회)보다 길게(ADR-0012 §3)
 
 
-class ConnectorResolver(Protocol):
-    """워크스페이스의 커넥터를 돌려준다."""
+class NoConnection(Exception):
+    """워크스페이스에 활성 연결이 없다. 메시지에는 워크스페이스 ID만 담는다."""
 
-    def connectors_for(
+
+class ConnectorResolver(Protocol):
+    """워크스페이스의 커넥터를 돌려준다. 활성 연결이 없으면 `NoConnection`."""
+
+    async def connectors_for(
         self, workspace_id: uuid.UUID
     ) -> tuple[CalendarConnector, MailConnector]: ...
 
@@ -46,7 +57,9 @@ class SimConnectorResolver:
         self._clock = clock
         self._cache: dict[uuid.UUID, tuple[CalendarConnector, MailConnector]] = {}
 
-    def connectors_for(self, workspace_id: uuid.UUID) -> tuple[CalendarConnector, MailConnector]:
+    async def connectors_for(
+        self, workspace_id: uuid.UUID
+    ) -> tuple[CalendarConnector, MailConnector]:
         found = self._cache.get(workspace_id)
         if found is None:
             world = self._base.fork(self._base.seed, self._clock)
@@ -54,6 +67,76 @@ class SimConnectorResolver:
             found = (conns.calendar[self._account_id], conns.mail[self._account_id])
             self._cache[workspace_id] = found
         return found
+
+
+class GoogleConnectorResolver:
+    """워크스페이스의 활성 Google 연결로 Calendar·Gmail 커넥터를 만든다(ADR-0016 §4).
+
+    호출마다 활성 연결을 DB에서 확인한다(해제·오류 상태가 바로 반영된다). 같은 연결이면 커넥터와
+    메모리 액세스 토큰 캐시를 재사용하고, 연결이 바뀌면 이전 커넥터를 닫는다. 토큰 복호화는 토큰
+    공급자가 갱신할 때만 한다. 운영 `base_url`을 쓴다(`https://*.googleapis.com` 검증 통과).
+    """
+
+    def __init__(
+        self,
+        *,
+        db: AsyncDatabase,
+        cipher: EnvelopeCipher,
+        clock: Clock,
+        client_id: str,
+        client_secret: SecretStr,
+        token_url: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._db = db
+        self._cipher = cipher
+        self._clock = clock
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._token_url = token_url
+        self._transport = transport
+        self._cache: dict[uuid.UUID, tuple[uuid.UUID, GoogleCalendarConnector, GmailConnector]] = {}
+
+    async def connectors_for(
+        self, workspace_id: uuid.UUID
+    ) -> tuple[CalendarConnector, MailConnector]:
+        async with self._db.workspace_session(workspace_id) as s:
+            connection_id = await connection_store.find_active_id(s, workspace_id)
+        cached = self._cache.get(workspace_id)
+        if connection_id is None:
+            if cached is not None:
+                del self._cache[workspace_id]
+                await _close(cached[1], cached[2])
+            raise NoConnection(f"workspace_id={workspace_id}")
+        if cached is not None:
+            if cached[0] == connection_id:
+                return cached[1], cached[2]
+            await _close(cached[1], cached[2])
+        tokens = ConnectionTokenProvider(
+            db=self._db,
+            cipher=self._cipher,
+            clock=self._clock,
+            workspace_id=workspace_id,
+            connection_id=connection_id,
+            client_id=self._client_id,
+            client_secret=self._client_secret,
+            token_url=self._token_url,
+            transport=self._transport,
+        )
+        calendar = GoogleCalendarConnector(tokens)
+        mail = GmailConnector(tokens)
+        self._cache[workspace_id] = (connection_id, calendar, mail)
+        return calendar, mail
+
+    async def aclose(self) -> None:
+        cached, self._cache = list(self._cache.values()), {}
+        for _, calendar, mail in cached:
+            await _close(calendar, mail)
+
+
+async def _close(calendar: GoogleCalendarConnector, mail: GmailConnector) -> None:
+    await calendar.aclose()
+    await mail.aclose()
 
 
 @dataclass

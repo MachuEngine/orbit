@@ -4,8 +4,17 @@
 - `ORBIT_DATABASE_URL`: 앱 런타임용. `orbit_app` 역할(소유자 아님, NOBYPASSRLS)로 접속한다.
 - `ORBIT_MIGRATION_DATABASE_URL`: 마이그레이션용. `orbit_owner` 역할로 접속한다.
   앱 프로세스에는 설정하지 않는다.
-- `ORBIT_ENV`: `dev`일 때만 개발용 로그인(`POST /api/dev/login`)이 열린다(6단계 로그인 전까지).
-  기본값은 `prod`이고, `prod`로는 API 앱이 시작되지 않는다(로그인 구현 전이라 인증 수단이 없다).
+- `ORBIT_ENV`: `dev`일 때만 개발용 로그인(`POST /api/dev/login`)이 열린다. 기본값은 `prod`이고,
+  `prod`에서는 Google 로그인 설정이 모두 있어야 API 앱이 시작된다(ADR-0016 §1).
+- Google 로그인(ADR-0016): `ORBIT_GOOGLE_CLIENT_ID`, `ORBIT_GOOGLE_CLIENT_SECRET`,
+  `ORBIT_GOOGLE_REDIRECT_URI`(콜백 절대 주소), `ORBIT_SESSION_SIGNING_KEY`(또는
+  `ORBIT_SESSION_SIGNING_KEY_FILE`, 32바이트 이상), `ORBIT_LOGIN_ALLOWED_EMAILS`(쉼표 구분,
+  비어 있으면 아무도 로그인하지 못한다). Google 엔드포인트(`ORBIT_GOOGLE_AUTH_URL`,
+  `ORBIT_GOOGLE_TOKEN_URL`, `ORBIT_GOOGLE_JWKS_URL`)는 https만 허용하고 기본값은 Google 운영 주소다.
+- 계정 연결(ADR-0016 §2·§3): `ORBIT_GOOGLE_CONNECT_REDIRECT_URI`(연결 콜백 절대 주소, 없으면 로그인
+  주소의 `/api/auth/google/callback`을 `/api/connections/google/callback`으로 바꾼 값),
+  `ORBIT_DATA_KEY_FILE`(KEK 파일, 있으면 시작 때 읽는다), `ORBIT_CONNECTOR_MODE`(`sim`|`google`,
+  기본 sim. google이면 연결 설정이 모두 있어야 시작한다), `ORBIT_GOOGLE_REVOKE_URL`.
 - `ORBIT_DEV_WORKSPACE_ID`: 개발용 로그인이 세션을 발급할 워크스페이스. 없으면 로그인은 404다.
 - `ORBIT_SESSION_TTL_SECONDS`: 쿠키 세션 유효 시간. 기본 12시간.
 - `ORBIT_SIM_SNAPSHOT_PATH`, `ORBIT_SIM_ACCOUNT_ID`: 개발용 Sim 커넥터가 읽을 합성 스냅샷과 계정.
@@ -13,6 +22,7 @@
 """
 
 import uuid
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -33,6 +43,116 @@ class Settings(BaseSettings):
     user_timezone: str = "Asia/Seoul"
     approval_ttl_seconds: float = Field(default=900.0, gt=0)  # D5-5 후보값 15분
     sse_poll_interval_seconds: float = Field(default=0.25, gt=0)
+
+    # Google 로그인 (ADR-0016 §1)
+    google_client_id: str | None = None
+    google_client_secret: SecretStr | None = None
+    google_redirect_uri: str | None = None
+    session_signing_key: SecretStr | None = None
+    session_signing_key_file: str | None = None
+    login_allowed_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    google_auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    google_token_url: str = "https://oauth2.googleapis.com/token"  # noqa: S105 (주소이지 비밀이 아니다)
+    google_jwks_url: str = "https://www.googleapis.com/oauth2/v3/certs"
+    google_revoke_url: str = "https://oauth2.googleapis.com/revoke"
+
+    # 계정 연결 (ADR-0016 §2·§3)
+    google_connect_redirect_uri: str | None = None
+    data_key_file: str | None = None
+    connector_mode: Literal["sim", "google"] = "sim"
+
+    @field_validator(
+        "google_client_id",
+        "google_client_secret",
+        "google_redirect_uri",
+        "session_signing_key",
+        "session_signing_key_file",
+        "google_connect_redirect_uri",
+        "data_key_file",
+        mode="before",
+    )
+    @classmethod
+    def _blank_login_setting_is_unset(cls, value: object) -> object:
+        # `.env`에서 `KEY=`처럼 비워 둔 값은 설정하지 않은 것으로 본다.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("login_allowed_emails", mode="before")
+    @classmethod
+    def _split_allowed_emails(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [part.strip().lower() for part in value.split(",") if part.strip()]
+        if isinstance(value, list):
+            return [str(part).strip().lower() for part in value if str(part).strip()]
+        return value
+
+    @field_validator("google_auth_url", "google_token_url", "google_jwks_url", "google_revoke_url")
+    @classmethod
+    def _require_https_endpoint(cls, value: str) -> str:
+        if not value.startswith("https://"):
+            raise ValueError("Google 엔드포인트 주소는 https://만 허용한다")
+        return value
+
+    def signing_key(self) -> bytes | None:
+        """쿠키 서명 키. 환경 변수 값을 먼저 쓰고, 없으면 파일에서 읽는다. 없으면 None."""
+        if self.session_signing_key is not None:
+            return self.session_signing_key.get_secret_value().encode("utf-8")
+        if self.session_signing_key_file is not None:
+            try:
+                content = Path(self.session_signing_key_file).read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise RuntimeError(
+                    "ORBIT_SESSION_SIGNING_KEY_FILE을 읽을 수 없다 (파일 경로와 권한 확인)"
+                ) from exc
+            return content.encode("utf-8") if content else None
+        return None
+
+    def connect_redirect_uri(self) -> str | None:
+        """연결 콜백 주소. 따로 정하지 않았으면 로그인 콜백 주소에서 유도한다."""
+        if self.google_connect_redirect_uri:
+            return self.google_connect_redirect_uri
+        login = self.google_redirect_uri
+        suffix = "/api/auth/google/callback"
+        if login and login.endswith(suffix):
+            return login[: -len(suffix)] + "/api/connections/google/callback"
+        return None
+
+    def missing_connection_settings(self) -> list[str]:
+        """계정 연결에 빠진 설정의 환경 변수 이름. 비어 있으면 연결 흐름을 열 수 있다."""
+        missing: list[str] = []
+        if not self.google_client_id:
+            missing.append("ORBIT_GOOGLE_CLIENT_ID")
+        if self.google_client_secret is None:
+            missing.append("ORBIT_GOOGLE_CLIENT_SECRET")
+        if not self.connect_redirect_uri():
+            missing.append("ORBIT_GOOGLE_CONNECT_REDIRECT_URI")
+        key = self.signing_key()
+        if key is None or len(key) < 32:
+            missing.append("ORBIT_SESSION_SIGNING_KEY")
+        if not self.data_key_file:
+            missing.append("ORBIT_DATA_KEY_FILE")
+        return missing
+
+    def missing_google_login_settings(self) -> list[str]:
+        """Google 로그인에 빠진 설정의 환경 변수 이름. 비어 있으면 로그인을 열 수 있다."""
+        missing: list[str] = []
+        if not self.google_client_id:
+            missing.append("ORBIT_GOOGLE_CLIENT_ID")
+        if self.google_client_secret is None:
+            missing.append("ORBIT_GOOGLE_CLIENT_SECRET")
+        if not self.google_redirect_uri:
+            missing.append("ORBIT_GOOGLE_REDIRECT_URI")
+        elif self.env != "dev" and not self.google_redirect_uri.startswith("https://"):
+            missing.append("ORBIT_GOOGLE_REDIRECT_URI(https 주소여야 한다)")
+        key = self.signing_key()
+        if key is None:
+            missing.append("ORBIT_SESSION_SIGNING_KEY")
+        elif len(key) < 32:
+            missing.append("ORBIT_SESSION_SIGNING_KEY(32바이트 이상이어야 한다)")
+        if not self.login_allowed_emails:
+            missing.append("ORBIT_LOGIN_ALLOWED_EMAILS")
+        return missing
 
 
 def get_settings() -> Settings:

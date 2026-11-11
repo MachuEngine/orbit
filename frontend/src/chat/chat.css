@@ -15,6 +15,22 @@
   border-bottom: 1px solid var(--color-divider);
 }
 
+.chat-header-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.connection-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-divider);
+}
+
 .chat-logo {
   width: 6.25rem;
   height: 2.5rem;
@@ -76,6 +92,11 @@
 
 .message p {
   white-space: pre-wrap;
+}
+
+.message .md-list {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-5);
 }
 
 .message-user {

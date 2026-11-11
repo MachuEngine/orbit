@@ -28,6 +28,11 @@
   width: 100%;
 }
 
+/* 링크로 만든 버튼은 밑줄을 쓰지 않는다. */
+.login-card a.btn {
+  text-decoration: none;
+}
+
 .login-error {
   color: var(--color-error);
   font-size: var(--text-sm);

@@ -35,11 +35,19 @@ export const executionStatusSchema = z.enum([
 ]);
 export type ExecutionStatus = z.infer<typeof executionStatusSchema>;
 
-/** `GET /api/session`. 로그인하지 않았어도 200이고 `authenticated`가 false다. */
+/**
+ * `GET /api/session`. 로그인하지 않았어도 200이고 `authenticated`가 false다.
+ * `display_name`·`email`은 이 세션의 사용자 본인 정보이고, 개발용 세션에는 없다(null).
+ * `dev_login`·`google_login`은 서버가 열어 둔 로그인 수단이다.
+ */
 export const sessionSchema = z.object({
   authenticated: z.boolean(),
   workspace_id: z.string().nullable(),
   expires_at: z.string().nullable(),
+  display_name: z.string().nullable(),
+  email: z.string().nullable(),
+  dev_login: z.boolean(),
+  google_login: z.boolean(),
 });
 export type Session = z.infer<typeof sessionSchema>;
 
@@ -93,3 +101,32 @@ export const decisionResponseSchema = z.object({
   status: z.enum(["approved", "rejected"]),
 });
 export type DecisionResponse = z.infer<typeof decisionResponseSchema>;
+
+/** `GET /api/connections`. 토큰 관련 값은 응답에 없다. `mode`가 google일 때만 연결이 필요하다. */
+export const connectionSchema = z.object({
+  id: z.string(),
+  provider: z.string(),
+  status: z.enum(["pending", "active", "revoked", "error"]),
+  account_email: z.string(),
+  scopes: z.array(z.string()),
+  created_at: z.string(),
+});
+export type Connection = z.infer<typeof connectionSchema>;
+
+export const connectionsResponseSchema = z.object({
+  mode: z.enum(["sim", "google"]),
+  connect_available: z.boolean(),
+  connections: z.array(connectionSchema),
+});
+export type ConnectionsResponse = z.infer<typeof connectionsResponseSchema>;
+
+/** `POST /api/connections/google/start`. 화면이 이 주소로 직접 이동한다. */
+export const startConnectionResponseSchema = z.object({ authorization_url: z.string() });
+
+/** `DELETE /api/connections/{id}`. `provider_revoke`는 Google 쪽 철회 결과다. */
+export const disconnectResponseSchema = z.object({
+  id: z.string(),
+  status: z.literal("revoked"),
+  provider_revoke: z.enum(["revoked", "failed", "none"]),
+});
+export type DisconnectResponse = z.infer<typeof disconnectResponseSchema>;
