@@ -2,11 +2,11 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 
 import procrastinate
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from integration.records_support import RECORD_TABLES, new_clock, new_run, seed_all_tables
@@ -261,30 +261,20 @@ async def test_recover_stalled_jobs_returns_doing_job_to_todo(
 # run 삭제 전파 ----------------------------------------------------------------------------
 
 
-@pytest.fixture
-def checkpoint_tables(owner_url: str) -> Iterator[None]:
-    """LangGraph 체크포인트 테이블 모양(thread_id 열)을 흉내 낸다. 이미 있으면 건드리지 않는다."""
-    engine = create_engine(owner_url)
-    created: list[str] = []
-    try:
-        with engine.begin() as conn:
-            for table in CHECKPOINT_TABLES:
-                exists = conn.execute(
-                    text("SELECT to_regclass(:n) IS NOT NULL"), {"n": f"public.{table}"}
-                ).scalar_one()
-                if exists:
-                    continue
-                conn.execute(
-                    text(f"CREATE TABLE public.{table} (thread_id text NOT NULL, data text)")  # noqa: S608
-                )
-                conn.execute(text(f"GRANT SELECT, INSERT, DELETE ON public.{table} TO orbit_app"))
-                created.append(table)
-        yield
-    finally:
-        with engine.begin() as conn:
-            for table in created:
-                conn.execute(text(f"DROP TABLE IF EXISTS public.{table}"))
-        engine.dispose()
+_CHECKPOINT_INSERTS = {
+    "checkpoints": (
+        "INSERT INTO public.checkpoints (thread_id, checkpoint_ns, checkpoint_id, checkpoint)"
+        " VALUES (:t, '', 'c1', CAST('{}' AS jsonb))"
+    ),
+    "checkpoint_blobs": (
+        "INSERT INTO public.checkpoint_blobs (thread_id, checkpoint_ns, channel, version, type)"
+        " VALUES (:t, '', 'ch', '1', 'empty')"
+    ),
+    "checkpoint_writes": (
+        "INSERT INTO public.checkpoint_writes (thread_id, checkpoint_ns, checkpoint_id, task_id,"
+        " idx, channel, blob) VALUES (:t, '', 'c1', 'task', 0, 'ch', '\\x00')"
+    ),
+}
 
 
 async def _checkpoint_rows(db: AsyncDatabase, thread_id: uuid.UUID) -> int:
@@ -301,8 +291,9 @@ async def _checkpoint_rows(db: AsyncDatabase, thread_id: uuid.UUID) -> int:
 
 
 async def test_delete_run_removes_children_and_checkpoints(
-    async_db: AsyncDatabase, workspaces: WorkspaceFactory, checkpoint_tables: None
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
 ) -> None:
+    """마이그레이션 0003이 만든 실제 LangGraph 체크포인트 테이블 3개에서 thread_id 행을 지운다."""
     clock = new_clock()
     ids = Uuid7Generator(clock)
     a = await seed_all_tables(async_db, workspaces, clock, ids)
@@ -313,10 +304,7 @@ async def test_delete_run_removes_children_and_checkpoints(
     for run_id in (a.run_id, keep.run_id):
         async with async_db.workspace_session(a.workspace_id) as s:
             for table in CHECKPOINT_TABLES:
-                await s.execute(
-                    text(f"INSERT INTO public.{table} (thread_id, data) VALUES (:t, 'synthetic')"),  # noqa: S608
-                    {"t": str(run_id)},
-                )
+                await s.execute(text(_CHECKPOINT_INSERTS[table]), {"t": str(run_id)})
     assert await _checkpoint_rows(async_db, a.run_id) == len(CHECKPOINT_TABLES)
 
     # 다른 워크스페이스에서 지우려 하면 아무것도 지워지지 않는다(체크포인트 포함).
@@ -339,12 +327,19 @@ async def test_delete_run_removes_children_and_checkpoints(
             count = (await s.execute(text(f"SELECT count(*) FROM {table}"))).scalar_one()  # noqa: S608
             assert count == 1, table
     assert await _checkpoint_rows(async_db, keep.run_id) == len(CHECKPOINT_TABLES)
+    # 남겨 둔 run의 체크포인트는 워크스페이스 정리(CASCADE)로 지워지지 않으므로 직접 지운다.
+    async with async_db.workspace_session(keep.workspace_id) as s:
+        for table in CHECKPOINT_TABLES:
+            await s.execute(
+                text(f"DELETE FROM public.{table} WHERE thread_id = :t"),  # noqa: S608
+                {"t": str(keep.run_id)},
+            )
 
 
 async def test_delete_run_without_checkpoint_tables(
     async_db: AsyncDatabase, workspaces: WorkspaceFactory
 ) -> None:
-    """체크포인트 테이블이 없는 DB(LangGraph 설정 전)에서도 run 삭제가 동작한다."""
+    """체크포인트 행이 없는 run도 오류 없이 삭제된다."""
     clock = new_clock()
     ids = Uuid7Generator(clock)
     ws, run_id = await new_run(async_db, workspaces, clock, ids)

@@ -4,6 +4,8 @@
 """
 
 import re
+from collections.abc import Mapping
+from typing import Any
 
 _EVENT_HANDLE = re.compile(r"E[1-9][0-9]*")
 _MESSAGE_HANDLE = re.compile(r"M[1-9][0-9]*")
@@ -58,3 +60,25 @@ class WorkSet:
         if not _MESSAGE_HANDLE.fullmatch(h) or h not in self._message_by_handle:
             raise UnknownHandleError
         return self._message_by_handle[h]
+
+    def export(self) -> dict[str, Any]:
+        """핸들 -> 제공자 ID 매핑을 JSON dict로 내보낸다(서버 저장용이며 모델에 주지 않는다)."""
+        return {
+            "events": {h: list(key) for h, key in self._event_by_handle.items()},
+            "messages": dict(self._message_by_handle),
+        }
+
+    @classmethod
+    def restore(cls, data: Mapping[str, Any]) -> "WorkSet":
+        """`export` 결과로 작업 집합을 복원한다. 번호가 1부터 이어지지 않으면 `ValueError`."""
+        workset = cls()
+        for handle, ref in sorted(data.get("events", {}).items(), key=lambda kv: int(kv[0][1:])):
+            calendar_id, event_id = ref
+            if workset.event_handle(calendar_id, event_id) != handle:
+                raise ValueError("작업 집합 핸들 번호가 이어지지 않는다")
+        for handle, message_id in sorted(
+            data.get("messages", {}).items(), key=lambda kv: int(kv[0][1:])
+        ):
+            if workset.message_handle(message_id) != handle:
+                raise ValueError("작업 집합 핸들 번호가 이어지지 않는다")
+        return workset
