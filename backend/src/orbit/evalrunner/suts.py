@@ -70,12 +70,12 @@ class ScriptedToolSUT:
             )
             submitted = False
             for call in response.tool_calls:
-                episode.steps.consume()
                 if call.name == SUBMIT_ANSWER:  # 커넥터 호출이 아니다. 마지막 제출이 유효하다
                     structured = dict(call.arguments)
                     submitted = True
                     messages.append(Message(role="tool", content="ok", tool_call_id=call.id))
                     continue
+                episode.steps.consume()
                 try:
                     content = serialize_result(await dispatcher.call(call.name, call.arguments))
                 except (ConnectorError, ValueError) as exc:  # ValueError: 입력 위반, 인자 검증 실패
@@ -110,13 +110,16 @@ class AssistantV0SUT:
             clock=episode.clock,
             tz=ZoneInfo(self.TIME_ZONE),
             on_step=episode.steps.consume,
+            has_step_room=episode.steps.has_room,
             max_turns=self._max_turns,
             metadata={"task_id": episode.task.task_id},
         )
         text, structured = await assistant.run(
             [t.content for t in episode.task.turns if t.role == "user"]
         )
-        return EpisodeOutput(final_text=text, structured=structured)
+        return EpisodeOutput(
+            final_text=text, structured=structured, text_skipped=assistant.text_skipped
+        )
 
 
 SutFactory = Callable[[], SystemUnderTest]

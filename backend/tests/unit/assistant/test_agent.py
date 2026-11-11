@@ -95,7 +95,7 @@ async def test_on_step_counts_llm_and_tool_calls(make_connectors: Any) -> None:
     steps: list[str] = []
     assistant, _ = make_assistant(make_connectors, good_script(), steps=steps)
     await assistant.run(QUESTION)
-    assert len(steps) == 2 + 2  # LLM 2회 + 도구 호출(list_events, submit_answer) 2회
+    assert len(steps) == 2 + 1  # LLM 2회 + list_events 1회(submit_answer는 단계가 아니다)
 
 
 async def test_max_turns_stops_loop(make_connectors: Any) -> None:
@@ -155,7 +155,7 @@ async def test_submit_without_text_asks_final_text_without_tools(make_connectors
     assert text == "점심입니다." and structured is not None
     last = llm.requests[-1]
     assert last.tools == () and last.tool_choice == "none"
-    assert len(steps) == 3 + 2  # LLM 3회 + 도구 호출 2회 (최종 답 호출 포함)
+    assert len(steps) == 3 + 1  # LLM 3회(보충 호출 포함) + list_events 1회
 
 
 async def test_text_with_submit_needs_no_extra_call(make_connectors: Any) -> None:
@@ -174,3 +174,14 @@ def test_sut_version_reflects_prompt_and_temperature() -> None:
     from orbit.evalrunner.suts import create_sut
 
     assert create_sut("assistant_v0").version == f"0+{PROMPT_VERSION}+temp0"
+
+
+async def test_final_text_call_is_skipped_without_step_room(make_connectors: Any) -> None:
+    script: list[dict[str, Any]] = [
+        {"tool_calls": [tc("list_events", **DAY)]},
+        {"structured": {"kind": "event", "event": "E2"}},  # 텍스트 없음
+    ]
+    assistant, llm = make_assistant(make_connectors, script, has_step_room=lambda: False)
+    text, structured = await assistant.run(QUESTION)
+    assert text == "" and structured is not None  # 제출한 답은 남는다
+    assert len(llm.requests) == 2  # 보충 호출 없음

@@ -150,6 +150,7 @@ class EpisodeResult:
     providers: tuple[str, ...]
     model_mismatch: bool
     latency_ms: int
+    text_skipped: bool = False  # 최종 텍스트를 받지 못해 텍스트 지표가 없다
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -182,6 +183,7 @@ class EpisodeResult:
             },
             "model_mismatch": self.model_mismatch,
             "latency_ms": self.latency_ms,
+            "text_skipped": self.text_skipped,
         }
 
     def to_json_line(self) -> str:
@@ -211,6 +213,7 @@ async def run_episode(
     recorder = UsageRecorder()
     recording_llm = EpisodeRecordingLLM(llm, recorder)
     account = task.account_id
+    step_counter = StepCounter(budget, recorder, connectors.calls, monotonic=monotonic)
     episode = Episode(
         # 정답(gold)과 분할·태그는 러너만 가진다. SUT에는 아래 네 필드만 준다.
         task=SutTask(
@@ -225,7 +228,7 @@ async def run_episode(
         clock=ReadOnlyClock(clock),
         llm=recording_llm,
         budget=budget,
-        steps=StepCounter(budget, recorder, monotonic=monotonic),
+        steps=step_counter,
     )
 
     error_type: FailureType | None = None
@@ -255,12 +258,10 @@ async def run_episode(
 
     calls = connectors.calls.records
     usage = recorder.total_usage
-    tokens = usage.input_tokens + usage.output_tokens
-    if error_type is None:  # SUT가 `consume()`을 건너뛰어도 호출 기록으로 다시 검사한다
-        if len(recorder.records) + len(calls) > budget.max_steps:
-            error_type, detail = "budget_exceeded", "steps"
-        elif tokens > budget.max_tokens:
-            error_type, detail = "budget_exceeded", "tokens"
+    if error_type is None:  # SUT가 `consume()`을 건너뛰어도 관찰한 호출 수로 다시 검사한다
+        over = step_counter.verify()
+        if over is not None:
+            error_type, detail = "budget_exceeded", over
 
     score = score_episode(
         task.gold,
@@ -293,6 +294,7 @@ async def run_episode(
             k: (v if k in ("forbidden_tools", "state_diff") else None)
             for k, v in score.checks.items()
         }
+    text_skipped = output is not None and output.text_skipped
     return EpisodeResult(
         experiment_id=experiment_id,
         config=config,
@@ -307,7 +309,7 @@ async def run_episode(
         state_diff_match=score.state_diff_match,
         checks=checks,
         unscored=score.unscored,
-        text_fact_recall=None if error_type is not None else score.text_fact_recall,
+        text_fact_recall=None if error_type is not None or text_skipped else score.text_fact_recall,
         answer_ids=answer_ids(output.structured) if output is not None else None,
         trajectory=tuple(c.tool for c in calls),
         llm_calls=len(recorder.records),
@@ -318,6 +320,7 @@ async def run_episode(
         providers=providers,
         model_mismatch=mismatch,
         latency_ms=latency_ms,
+        text_skipped=text_skipped,
     )
 
 

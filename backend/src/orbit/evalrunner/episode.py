@@ -12,16 +12,20 @@ from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from orbit.connectors.contracts import CalendarConnector, MailConnector
+from orbit.connectors.sim.calls import CallLog
 from orbit.core.clock import Clock
 from orbit.llm.interface import LLM, RecordingLLM, UsageRecord, UsageRecorder
 from orbit.llm.types import LLMRequest, LLMResponse
+
+STEP_DEFINITION = "llm_calls+connector_calls/v1"
 
 
 @dataclass(frozen=True)
 class Budget:
     """에피소드 상한. 하나라도 넘으면 `budget_exceeded`로 중단한다."""
 
-    max_steps: int = 50  # 도구 호출 + LLM 호출
+    # 단계 = 러너가 관찰한 LLM 호출 수 + 커넥터 호출 수. 평가 대상이 보고한 횟수는 세지 않는다.
+    max_steps: int = 50
     max_tokens: int = 200_000  # 입력 + 출력 토큰
     max_seconds: float = 120.0  # 벽시계 시간
 
@@ -34,6 +38,7 @@ class Budget:
             "max_steps": self.max_steps,
             "max_tokens": self.max_tokens,
             "max_seconds": self.max_seconds,
+            "step_definition": STEP_DEFINITION,  # 단계 정의가 바뀌면 설정 지문이 달라진다
         }
 
 
@@ -46,33 +51,63 @@ class BudgetExceeded(Exception):  # noqa: N818  도메인 용어
 
 
 class StepCounter:
-    """평가 대상이 도구 호출·LLM 호출마다 `consume()`을 부른다. 상한을 넘기면 예외를 던진다.
+    """단계 한도 검사기. 단계는 러너가 관찰한 값으로만 센다.
 
-    평가 대상이 부르지 않아도 러너가 에피소드 뒤에 호출 기록으로 단계·토큰을 다시 검사한다.
+    단계 = LLM 호출 수(`UsageRecorder`) + 커넥터 호출 수(Sim 호출 기록). 평가 대상이 보고한
+    횟수는 세지 않는다. 도구 하나가 커넥터 호출을 여러 개 만들 수 있고(예: 모든 캘린더 조회),
+    그 호출은 모두 단계로 센다.
+
+    - `consume()`: 다음 동작 1단계를 더해도 한도 이내인지 검사한다. 넘으면 `BudgetExceeded`.
+      상태를 바꾸지 않으므로 평가 대상이 동작 직전에 불러야 한다.
+    - `has_room()`: `consume()`과 같은 검사를 예외 없이 한다.
+    LLM 재시도(`LLMResponse.retries`)는 단계가 아니다. 재시도에서 쓴 토큰은 토큰 예산에만 들어간다.
+
+    - `verify()`: 에피소드 뒤에 러너가 쓴다. 이미 쓴 단계·토큰이 한도를 넘었는지 본다.
     """
 
     def __init__(
         self,
         budget: Budget,
         recorder: UsageRecorder,
+        calls: CallLog,
         *,
         monotonic: Callable[[], float] = time.perf_counter,
     ) -> None:
         self._budget = budget
         self._recorder = recorder
+        self._calls = calls
         self._monotonic = monotonic
         self._started = monotonic()
-        self.steps = 0
 
-    def consume(self) -> None:
-        if self.steps + 1 > self._budget.max_steps:
-            raise BudgetExceeded("steps")
+    @property
+    def steps(self) -> int:
+        """지금까지 쓴 단계: LLM 호출 + 커넥터 호출."""
+        return len(self._recorder.records) + len(self._calls.records)
+
+    def _violation(
+        self, extra: int, *, check_time: bool
+    ) -> Literal["steps", "tokens", "time"] | None:
+        if self.steps + extra > self._budget.max_steps:
+            return "steps"
         usage = self._recorder.total_usage
         if usage.input_tokens + usage.output_tokens > self._budget.max_tokens:
-            raise BudgetExceeded("tokens")
-        if self._monotonic() - self._started > self._budget.max_seconds:
-            raise BudgetExceeded("time")
-        self.steps += 1
+            return "tokens"
+        if check_time and self._monotonic() - self._started > self._budget.max_seconds:
+            return "time"
+        return None
+
+    def has_room(self) -> bool:
+        return self._violation(1, check_time=True) is None
+
+    def consume(self) -> None:
+        reason = self._violation(1, check_time=True)
+        if reason is not None:
+            raise BudgetExceeded(reason)
+
+    def verify(self) -> Literal["steps", "tokens"] | None:
+        """에피소드 뒤 재검사. 시간은 러너의 타임아웃이 따로 막는다."""
+        reason = self._violation(0, check_time=False)
+        return reason if reason in ("steps", "tokens") else None
 
 
 @dataclass(frozen=True)
@@ -160,6 +195,8 @@ class Episode:
 class EpisodeOutput:
     final_text: str
     structured: dict[str, Any] | None = None
+    # 단계 여유가 없어 최종 텍스트를 받지 못했다. 이때 텍스트 지표는 기록하지 않는다.
+    text_skipped: bool = False
 
 
 class SystemUnderTest(Protocol):
