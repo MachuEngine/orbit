@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "seed": 1,
+  "accounts": {
+    "acct-alice": {
+      "email": "alice@example.com",
+      "calendars": [
+        {"id": "cal-alice-main", "name": "앨리스 기본", "time_zone": "Asia/Seoul", "primary": true},
+        {"id": "cal-alice-team", "name": "앨리스 팀", "time_zone": "Asia/Seoul", "primary": false}
+      ],
+      "events": [
+        {
+          "id": "evalice001", "calendar_id": "cal-alice-main", "title": "주간 회의",
+          "description": "합성 일정", "location": "회의실 A",
+          "start": "2026-11-12T01:00:00+00:00", "end": "2026-11-12T02:00:00+00:00",
+          "all_day": false,
+          "attendees": [{"email": "bob@example.org", "name": "밥", "response_status": "needs_action"}],
+          "organizer": {"email": "alice@example.com", "name": "앨리스", "response_status": "accepted"},
+          "status": "confirmed", "version": "v-e1", "updated_at": "2026-11-01T00:00:00+00:00"
+        },
+        {
+          "id": "evalice002", "calendar_id": "cal-alice-main", "title": "점심",
+          "description": "", "location": "",
+          "start": "2026-11-12T03:00:00+00:00", "end": "2026-11-12T04:00:00+00:00",
+          "all_day": false, "attendees": [],
+          "organizer": {"email": "alice@example.com", "name": "앨리스", "response_status": "accepted"},
+          "status": "confirmed", "version": "v-e2", "updated_at": "2026-11-01T00:00:00+00:00"
+        },
+        {
+          "id": "evalice003", "calendar_id": "cal-alice-team", "title": "팀 회고",
+          "description": "합성 일정", "location": "회의실 B",
+          "start": "2026-11-13T05:00:00+00:00", "end": "2026-11-13T06:00:00+00:00",
+          "all_day": false, "attendees": [],
+          "organizer": {"email": "alice@example.com", "name": "앨리스", "response_status": "accepted"},
+          "status": "confirmed", "version": "v-e3", "updated_at": "2026-11-01T00:00:00+00:00"
+        }
+      ],
+      "messages": [
+        {
+          "id": "msg-a-001", "thread_id": "thr-a-001",
+          "from": {"email": "bob@example.org", "name": "밥"},
+          "to": [{"email": "alice@example.com", "name": "앨리스"}], "cc": [],
+          "subject": "프로젝트 일정 문의",
+          "body_text": "안녕하세요 앨리스님, 다음 주 일정을 조율하고 싶습니다. 합성 본문입니다.",
+          "snippet": "안녕하세요 앨리스님, 다음 주 일정을 조율하고 싶습니다.",
+          "sent_at": "2026-11-05T09:00:00+00:00", "labels": ["INBOX"],
+          "attachments": [], "headers": {}
+        },
+        {
+          "id": "msg-a-002", "thread_id": "thr-a-001",
+          "from": {"email": "alice@example.com", "name": "앨리스"},
+          "to": [{"email": "bob@example.org", "name": "밥"}], "cc": [],
+          "subject": "Re: 프로젝트 일정 문의",
+          "body_text": "화요일 오전이 좋습니다. 합성 본문입니다.",
+          "snippet": "화요일 오전이 좋습니다.",
+          "sent_at": "2026-11-05T10:00:00+00:00", "labels": ["SENT"],
+          "attachments": [], "headers": {}
+        },
+        {
+          "id": "msg-a-003", "thread_id": "thr-a-002",
+          "from": {"email": "bob@example.org", "name": "밥"},
+          "to": [{"email": "alice@example.com", "name": "앨리스"}], "cc": [],
+          "subject": "분기 보고서 첨부",
+          "body_text": "보고서를 첨부합니다. 합성 본문입니다.",
+          "snippet": "보고서를 첨부합니다.",
+          "sent_at": "2026-11-06T09:00:00+00:00", "labels": ["INBOX"],
+          "attachments": [
+            {"attachment_id": "att-001", "filename": "report.pdf", "mime_type": "application/pdf", "size_bytes": 12345}
+          ],
+          "headers": {}
+        }
+      ],
+      "threads": [
+        {"thread_id": "thr-a-001", "message_ids": ["msg-a-001", "msg-a-002"]},
+        {"thread_id": "thr-a-002", "message_ids": ["msg-a-003"]}
+      ],
+      "drafts": [
+        {
+          "draft_id": "drf-a-001", "message_id": "msg-a-d01", "thread_id": "thr-a-001",
+          "spec": {
+            "to": [{"email": "bob@example.org", "name": "밥"}], "cc": [],
+            "subject": "Re: 프로젝트 일정 문의", "body_text": "초안 합성 본문입니다.",
+            "reply_to_message_id": "msg-a-001", "execution_id": null
+          }
+        }
+      ]
+    },
+    "acct-bob": {
+      "email": "bob@example.org",
+      "calendars": [
+        {"id": "cal-bob-main", "name": "밥 기본", "time_zone": "UTC", "primary": true}
+      ],
+      "events": [
+        {
+          "id": "evbob00001", "calendar_id": "cal-bob-main", "title": "치과",
+          "description": "", "location": "",
+          "start": "2026-11-12T06:00:00+00:00", "end": "2026-11-12T07:00:00+00:00",
+          "all_day": false, "attendees": [],
+          "organizer": {"email": "bob@example.org", "name": "밥", "response_status": "accepted"},
+          "status": "confirmed", "version": "v-b1", "updated_at": "2026-11-01T00:00:00+00:00"
+        }
+      ],
+      "messages": [
+        {
+          "id": "msg-b-001", "thread_id": "thr-b-001",
+          "from": {"email": "alice@example.com", "name": "앨리스"},
+          "to": [{"email": "bob@example.org", "name": "밥"}], "cc": [],
+          "subject": "프로젝트 일정 문의",
+          "body_text": "안녕하세요 밥님. 합성 본문입니다.",
+          "snippet": "안녕하세요 밥님.",
+          "sent_at": "2026-11-05T08:00:00+00:00", "labels": ["SENT"],
+          "attachments": [], "headers": {}
+        }
+      ],
+      "threads": [{"thread_id": "thr-b-001", "message_ids": ["msg-b-001"]}],
+      "drafts": []
+    }
+  }
+}

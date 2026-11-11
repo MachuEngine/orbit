@@ -61,6 +61,8 @@
 4. 평가 러너 v0: JSONL 결과, 설정 지문, 반복 실행, 신뢰구간, 예산 상한
 5. 모델 파일럿 → 고정 모델 ADR
 
+진행 메모(3c, 브랜치 `stage-3c/evalrunner`): `orbit.evalrunner` v0 구현. 러너·채점·통계·CLI·기준 SUT(`scripted_tool`, `noop`)와 `ScriptedLLM` 기반 결정성 테스트까지 완료. 과제 형식을 읽는 경계는 `evalrunner/task_source.py` 한 모듈이고, 3b(`orbit.evaldata.schema`)와 통합할 때 이 모듈의 파싱 부분을 교체한다. `expected_changes`가 비어 있지 않은 과제는 v0에서 채점하지 않고 `unscored`로 기록한다.
+
 완료 조건: 같은 설정으로 다시 돌리면 같은 범위의 결과가 나온다. 모델이 고정된다.
 
 ### 4단계. Run 실행과 승인 (쓰기 경로)

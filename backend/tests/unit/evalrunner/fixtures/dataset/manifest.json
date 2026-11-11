@@ -1,0 +1,5 @@
+{
+  "name": "mini-eval",
+  "version": "0.1.0",
+  "note": "러너 테스트용 합성 데이터셋. world.json은 tests/fixtures/sim/minimal_world.json의 복사본이다."
+}
