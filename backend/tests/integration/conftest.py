@@ -3,10 +3,19 @@
 from collections.abc import Iterator
 
 import pytest
+from alembic import command
 from sqlalchemy import Engine, create_engine
 
-from integration.support import WorkspaceFactory
+from integration.support import WorkspaceFactory, alembic_config, require_test_database
 from orbit.db.session import SyncDatabase
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_test_database(app_url: str, owner_url: str) -> None:
+    """통합 테스트 시작 전에 테스트 DB를 head로 맞춘다(개발 DB는 건드리지 않는다)."""
+    require_test_database(app_url)
+    require_test_database(owner_url)
+    command.upgrade(alembic_config(owner_url), "head")
 
 
 @pytest.fixture

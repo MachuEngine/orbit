@@ -7,8 +7,11 @@
 규칙
 - 엔진·연결은 `SyncDatabase`/`AsyncDatabase` 안에 숨긴다. 앱 코드는 아래 메서드만 쓴다.
 - 세션 범위 `SET`, `set_config(..., false)`를 쓰지 않는다.
-- 블록 안에서 `session.commit()`을 직접 부르지 않는다. 부르면 트랜잭션이 끝나고 다음 문장은
-  워크스페이스 설정 없이 새 트랜잭션에서 실행되어 RLS가 0행으로 막는다(안전하게 실패한다).
+- 블록 안에서 `session.commit()`·`session.rollback()`을 직접 부르지 않는다. 부르면 그 시점에
+  트랜잭션이 끝나고(commit은 그때까지의 변경을 커밋한다), 이어지는 `session.execute(...)`는
+  `InvalidRequestError`(closed transaction inside context manager)로 실패한다. 설정 없는 새
+  트랜잭션이 열리지 않으므로 데이터가 보이지 않는다(SQLAlchemy 2.1.8에서 확인, 통합 테스트로 고정).
+  나눠서 커밋해야 하면 `workspace_session`을 새로 연다.
 - 워크스페이스 없이 DB에 닿는 경로는 `ping()`뿐이다. 새 경로가 필요하면 이름에 `unscoped`를 넣는다.
 """
 

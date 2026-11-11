@@ -1,19 +1,9 @@
-"""마이그레이션 upgrade → downgrade → upgrade. 소유자 역할로 실행한다."""
-
-from pathlib import Path
+"""마이그레이션 upgrade → downgrade → upgrade. 소유자 역할로 테스트 전용 DB에서 실행한다."""
 
 from alembic import command
-from alembic.config import Config
 from sqlalchemy import create_engine, text
 
-BACKEND = Path(__file__).resolve().parents[2]
-
-
-def _config(owner_url: str) -> Config:
-    cfg = Config(str(BACKEND / "alembic.ini"))
-    cfg.set_main_option("script_location", str(BACKEND / "migrations"))
-    cfg.attributes["url"] = owner_url
-    return cfg
+from integration.support import alembic_config, require_test_database
 
 
 def _tables(owner_url: str) -> set[str]:
@@ -32,22 +22,29 @@ def _tables(owner_url: str) -> set[str]:
 
 
 def test_upgrade_downgrade_upgrade(owner_url: str) -> None:
-    cfg = _config(owner_url)
+    require_test_database(owner_url)  # downgrade가 개발 DB에 실행되는 것을 막는다
+    cfg = alembic_config(owner_url)
     expected = {"workspace", "conversation", "message"}
 
-    command.upgrade(cfg, "head")
-    assert _tables(owner_url) == expected
-
-    command.downgrade(cfg, "base")
-    assert _tables(owner_url) == set()
-
-    command.upgrade(cfg, "head")
-    assert _tables(owner_url) == expected
-
-    engine = create_engine(owner_url)
     try:
-        with engine.connect() as conn:
-            ext = conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).first()
-            assert ext is not None
+        command.upgrade(cfg, "head")
+        assert _tables(owner_url) == expected
+
+        command.downgrade(cfg, "base")
+        assert _tables(owner_url) == set()
+
+        command.upgrade(cfg, "head")
+        assert _tables(owner_url) == expected
+
+        engine = create_engine(owner_url)
+        try:
+            with engine.connect() as conn:
+                ext = conn.execute(
+                    text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+                ).first()
+                assert ext is not None
+        finally:
+            engine.dispose()
     finally:
-        engine.dispose()
+        # 중간에 실패해도 다른 테스트를 위해 head 상태로 되돌린다.
+        command.upgrade(cfg, "head")

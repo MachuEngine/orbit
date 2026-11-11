@@ -29,7 +29,18 @@ SELECT 'CREATE ROLE orbit_app LOGIN'
 ALTER ROLE orbit_owner LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'owner_pw';
 ALTER ROLE orbit_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'app_pw';
 
--- 마이그레이션이 public 스키마에 객체를 만든다. 확장은 슈퍼유저가 미리 만들어 둔다.
+-- 통합 테스트 전용 DB. 마이그레이션 테스트가 스키마를 내렸다 올리므로 개발 DB(orbit)와 분리한다.
+SELECT 'CREATE DATABASE orbit_test OWNER orbit_owner'
+ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'orbit_test') \gexec
+
+-- 두 DB 모두 마이그레이션이 public 스키마에 객체를 만든다. 확장은 슈퍼유저가 미리 만들어 둔다.
+\connect orbit
+GRANT CREATE, USAGE ON SCHEMA public TO orbit_owner;
+GRANT USAGE ON SCHEMA public TO orbit_app;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+CREATE EXTENSION IF NOT EXISTS vector;
+
+\connect orbit_test
 GRANT CREATE, USAGE ON SCHEMA public TO orbit_owner;
 GRANT USAGE ON SCHEMA public TO orbit_app;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;

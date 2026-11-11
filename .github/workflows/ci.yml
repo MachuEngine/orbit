@@ -69,5 +69,5 @@ jobs:
           CI: "true"
           ORBIT_DATABASE_URL: postgresql+psycopg://orbit_app:ci_app_pw@localhost:5432/orbit
           ORBIT_MIGRATION_DATABASE_URL: postgresql+psycopg://orbit_owner:ci_owner_pw@localhost:5432/orbit
-          ORBIT_TEST_DATABASE_URL: postgresql+psycopg://orbit_app:ci_app_pw@localhost:5432/orbit
-          ORBIT_TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://orbit_owner:ci_owner_pw@localhost:5432/orbit
+          ORBIT_TEST_DATABASE_URL: postgresql+psycopg://orbit_app:ci_app_pw@localhost:5432/orbit_test
+          ORBIT_TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://orbit_owner:ci_owner_pw@localhost:5432/orbit_test

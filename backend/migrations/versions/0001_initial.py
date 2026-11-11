@@ -72,6 +72,8 @@ def upgrade() -> None:
         _enable_rls(table, "workspace_id = " + _SETTING)
 
     op.execute("GRANT USAGE ON SCHEMA public TO orbit_app")
+    # 주의: orbit_app이 INSERT할 수 있어 현재 설정값과 같은 id의 workspace를 스스로 만들 수 있다.
+    # workspace 생성은 인증된 가입 경로에서만 하고, 설정값(workspace_id)은 서버가 정한다.
     op.execute("GRANT SELECT, INSERT, DELETE ON workspace TO orbit_app")
     op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON conversation, message TO orbit_app")
 

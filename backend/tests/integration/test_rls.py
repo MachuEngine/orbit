@@ -6,7 +6,8 @@ import uuid
 
 import pytest
 from sqlalchemy import Engine, create_engine, text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, InvalidRequestError
+from sqlalchemy.orm import Session
 
 from integration.support import (
     CLOCK,
@@ -94,27 +95,131 @@ def test_workspace_a_cannot_write_or_touch_b(
         dele = s.execute(text("DELETE FROM conversation WHERE id = :id"), {"id": b_conv})
         assert dele.rowcount == 0  # type: ignore[attr-defined]
 
-        # 다른 워크스페이스 대화에 메시지를 붙일 수도 없다(RLS + 복합 FK).
-        with pytest.raises(DBAPIError), s.begin_nested():
-            s.execute(
-                INSERT_MESSAGE,
-                {
-                    "id": IDS.next(),
-                    "ws": a,
-                    "conv": b_conv,
-                    "content": "synthetic",
-                    "at": CLOCK.now(),
-                },
-            )
+        # 다른 워크스페이스 대화에 메시지를 붙일 수 없다. workspace_id가 A라서 RLS는 통과하지만
+        # 복합 FK (conversation_id, workspace_id)가 막는다(sqlstate 23503).
+        with pytest.raises(DBAPIError) as fk_info, s.begin_nested():
+            s.execute(INSERT_MESSAGE, _message(a, b_conv))
+        assert getattr(fk_info.value.orig, "sqlstate", None) == "23503"
 
     # B의 데이터는 그대로다.
     with sync_db.workspace_session(b) as s:
         assert s.execute(COUNT_CONV).scalar_one() == 1
 
 
+def _message(ws: uuid.UUID, conv: uuid.UUID) -> dict[str, object]:
+    return {"id": IDS.next(), "ws": ws, "conv": conv, "content": "synthetic", "at": CLOCK.now()}
+
+
+COUNT_MSG = text("SELECT count(*) FROM message")
+COUNT_WS = text("SELECT count(*) FROM workspace")
+
+
+def test_message_and_workspace_policies(
+    workspaces: WorkspaceFactory, sync_db: SyncDatabase
+) -> None:
+    a = workspaces.create(conversations=1)
+    b = workspaces.create(conversations=1)
+    with sync_db.workspace_session(b) as s:
+        b_conv = s.execute(text("SELECT id FROM conversation")).scalar_one()
+        s.execute(INSERT_MESSAGE, _message(b, b_conv))
+
+    with sync_db.workspace_session(a) as s:
+        a_conv = s.execute(text("SELECT id FROM conversation")).scalar_one()
+
+        # 대조군: 같은 워크스페이스의 메시지는 삽입하고 조회할 수 있다.
+        s.execute(INSERT_MESSAGE, _message(a, a_conv))
+        assert s.execute(COUNT_MSG).scalar_one() == 1
+        assert s.execute(text("SELECT DISTINCT workspace_id FROM message")).scalar_one() == a
+
+        # B의 message는 보이지 않는다.
+        assert (
+            s.execute(
+                text("SELECT count(*) FROM message WHERE workspace_id = :b"), {"b": b}
+            ).scalar_one()
+            == 0
+        )
+
+        # workspace_id = B로 message 삽입: WITH CHECK 거부.
+        with pytest.raises(DBAPIError) as info, s.begin_nested():
+            s.execute(INSERT_MESSAGE, _message(b, b_conv))
+        _assert_rls_violation(info.value)
+
+        # workspace 정책: 자기 행만 보이고, B id로는 삽입할 수 없다.
+        assert s.execute(COUNT_WS).scalar_one() == 1
+        assert s.execute(text("SELECT id FROM workspace")).scalar_one() == a
+        with pytest.raises(DBAPIError) as ws_info, s.begin_nested():
+            s.execute(
+                text("INSERT INTO workspace (id, created_at) VALUES (:id, :at)"),
+                {"id": b, "at": CLOCK.now()},
+            )
+        _assert_rls_violation(ws_info.value)
+
+    with sync_db.workspace_session(b) as s:
+        assert s.execute(COUNT_MSG).scalar_one() == 1
+
+
+# (b-2) 블록 안에서 commit/rollback을 직접 부른 경우 ------------------------------------
+#
+# 실제 동작(SQLAlchemy 2.1.8): `workspace_session`이 `session.begin()` 컨텍스트 안에 있어서
+#   - commit(): 그 시점까지의 변경을 커밋한다(호출 자체는 성공한다).
+#   - 이후 session.execute(...): InvalidRequestError ("Can't operate on closed transaction
+#     inside context manager")로 실패한다. 설정 없는 새 트랜잭션이 열리지 않는다.
+# 어느 경우든 워크스페이스 설정 없이 데이터가 보이면 안 된다.
+
+
+def _no_unscoped_visibility_sync(s: Session) -> str:
+    try:
+        count = s.execute(COUNT_CONV).scalar_one()
+    except InvalidRequestError:
+        return "raised"
+    assert count == 0, "블록 안 commit/rollback 뒤에 설정 없이 데이터가 보였다"
+    return "zero"
+
+
+@pytest.mark.parametrize("action", ["commit", "rollback"])
+def test_manual_commit_or_rollback_inside_block_never_exposes_rows(
+    action: str, workspaces: WorkspaceFactory, sync_db: SyncDatabase
+) -> None:
+    ws = workspaces.create(conversations=2)
+    with sync_db.workspace_session(ws) as s:
+        assert s.execute(COUNT_CONV).scalar_one() == 2
+        getattr(s, action)()
+        outcome = _no_unscoped_visibility_sync(s)
+    assert outcome in {"raised", "zero"}
+    # 블록을 정상 종료해도 다음 요청에는 설정이 남지 않는다.
+    with sync_db.workspace_session(ws) as s:
+        assert s.execute(COUNT_CONV).scalar_one() == 2
+
+
+@pytest.mark.parametrize("action", ["commit", "rollback"])
+async def test_manual_commit_or_rollback_inside_block_never_exposes_rows_async(
+    action: str, app_url: str, workspaces: WorkspaceFactory
+) -> None:
+    ws = workspaces.create(conversations=2)
+    db = AsyncDatabase.from_url(app_url)
+    try:
+        async with db.workspace_session(ws) as s:
+            assert (await s.execute(COUNT_CONV)).scalar_one() == 2
+            await getattr(s, action)()
+            try:
+                count = (await s.execute(COUNT_CONV)).scalar_one()
+            except InvalidRequestError:
+                pass
+            else:
+                assert count == 0, "블록 안 commit/rollback 뒤에 설정 없이 데이터가 보였다"
+        async with db.workspace_session(ws) as s:
+            assert (await s.execute(COUNT_CONV)).scalar_one() == 2
+    finally:
+        await db.dispose()
+
+
 # (c) 풀 재사용 ------------------------------------------------------------------
 
 
+# 블록이 끝나는 세 가지 방식. 풀 크기 1이라 다음 요청이 같은 연결(pid)을 받는다.
+#   commit:    블록을 정상 종료한다(헬퍼가 커밋).
+#   rollback:  블록 안에서 s.rollback()을 직접 부른 뒤 정상 종료한다.
+#   exception: 블록 안에서 예외가 나 헬퍼가 롤백한다.
 @pytest.mark.parametrize("ending", ["commit", "rollback", "exception"])
 def test_pool_size_one_next_request_sees_zero_rows(
     ending: str, app_url: str, workspaces: WorkspaceFactory
@@ -131,7 +236,8 @@ def test_pool_size_one_next_request_sees_zero_rows(
                 pid_in_scope = s.execute(text("SELECT pg_backend_pid()")).scalar_one()
                 assert s.execute(COUNT_CONV).scalar_one() == 2
                 if ending == "rollback":
-                    s.rollback()  # 이후 문장은 설정 없는 새 트랜잭션이다
+                    # 블록 안에서 직접 rollback한 뒤 정상 종료하는 경우다(커밋·롤백 후 연결 반납).
+                    s.rollback()
                 elif ending == "exception":
                     raise RuntimeError("synthetic failure")
         except RuntimeError:

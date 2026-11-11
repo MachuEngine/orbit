@@ -10,7 +10,7 @@ services:
       ORBIT_OWNER_PASSWORD: ${ORBIT_OWNER_PASSWORD:-orbit_dev_owner_only}
       ORBIT_APP_PASSWORD: ${ORBIT_APP_PASSWORD:-orbit_dev_app_only}
     ports:
-      - "55440:5432"
+      - "127.0.0.1:55440:5432"
     volumes:
       - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
