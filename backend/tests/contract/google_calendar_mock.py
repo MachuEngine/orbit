@@ -4,7 +4,7 @@
 - `calendarList.list`, `events.list`(겹침 기준, `q` 단어 일치, `showDeleted`, 페이지 나눔),
   `events.get`,
   `events.insert`(클라이언트 지정 `id`, 중복 409), `events.patch`(`If-Match` 불일치 412, null은
-  필드 삭제).
+  필드 삭제, 참석자 배열은 통째 교체되고 응답 상태를 보존하지 않는다).
 - etag는 쓰기마다 바뀐다. 취소는 `status=cancelled`로 남고 `get`은 200, `list`는 `showDeleted`일
   때만 낸다.
 - 모르는 캘린더·일정 404. 잘못된 일정 ID·빈 시간 범위 400. 토큰이 없으면 401.
@@ -188,6 +188,7 @@ class GoogleCalendarMock:
             return _error(409, "duplicate")
         raw = {"status": "confirmed", **body}
         raw["organizer"] = {"email": "owner@example.com"}
+        _normalize_attendees(raw)
         if not _valid_range(raw):
             return _error(400, "timeRangeEmpty")
         self._touch(raw)
@@ -206,12 +207,22 @@ class GoogleCalendarMock:
                 merged.pop(key, None)
             else:
                 merged[key] = value
+        _normalize_attendees(merged)
         if not _valid_range(merged):
             return _error(400, "timeRangeEmpty")
         raw.clear()
         raw.update(merged)
         self._touch(raw)
         return httpx.Response(200, json=raw)
+
+
+def _normalize_attendees(raw: dict[str, Any]) -> None:
+    """실제 Google처럼 배열을 보낸 그대로 저장한다. 상태를 안 보낸 참석자는 needsAction이다."""
+    if "attendees" in raw:
+        raw["attendees"] = [
+            {**a, "responseStatus": a.get("responseStatus", "needsAction")}
+            for a in raw["attendees"]
+        ]
 
 
 def _valid_range(raw: dict[str, Any]) -> bool:

@@ -40,7 +40,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, date, datetime, time
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -174,12 +174,31 @@ def _event_from_google(calendar_id: str, raw: Mapping[str, Any]) -> CalendarEven
     )
 
 
-def _attendees_body(attendees: tuple[Attendee, ...]) -> list[dict[str, str]]:
+def _written(calendar_id: str, data: Mapping[str, Any], op: str) -> CalendarEvent:
+    """쓰기 성공 응답의 변환. 쓰기는 이미 적용됐으므로 변환 실패는 모두 `ResultUnknown`이다."""
+    try:
+        return _event_from_google(calendar_id, data)
+    except Exception:
+        raise ResultUnknown(f"Google Calendar {op} 응답을 해석하지 못했다") from None
+
+
+_STATUS_TO_GOOGLE = {v: k for k, v in _STATUS_FROM_GOOGLE.items()}
+
+
+def _attendees_body(
+    attendees: tuple[Attendee, ...], current: tuple[Attendee, ...] = ()
+) -> list[dict[str, str]]:
+    """참석자 배열. PATCH는 배열을 통째로 교체하므로, 현재 일정에 있던 같은 이메일 참석자의
+    응답 상태는 그대로 실어 보낸다(새 참석자는 상태를 생략한다)."""
+    known = {a.email.casefold(): a for a in current}
     body: list[dict[str, str]] = []
     for a in attendees:
         item = {"email": a.email}
         if a.name:
             item["displayName"] = a.name
+        prior = known.get(a.email.casefold())
+        if prior is not None:
+            item["responseStatus"] = _STATUS_TO_GOOGLE[prior.response_status]
         body.append(item)
     return body
 
@@ -241,6 +260,8 @@ def _http_error(
         return PreconditionFailed(note)
     if status == 400 and query:
         return InvalidQuery(note)
+    if status == 408 and write:
+        return ResultUnknown(note)
     if status >= 500:
         return ResultUnknown(note) if write else TransientError(note)
     return ConnectorError(note)
@@ -248,13 +269,22 @@ def _http_error(
 
 # ---------------------------------------------------------------- 커넥터
 
+
+def _check_base_url(base_url: str) -> None:
+    parts = urlsplit(base_url)
+    host = parts.hostname or ""
+    if parts.scheme != "https" or not host.endswith(".googleapis.com"):
+        raise ValueError("base_url은 https://*.googleapis.com 이어야 한다")
+
+
 Sleep = Callable[[float], Awaitable[None]]
 
 
 class GoogleCalendarConnector:
     """계정 하나에 묶인 `CalendarConnector` 구현. 토큰은 `AccessTokenProvider`에서 받는다.
 
-    `client`를 주입하면 `base_url`은 쓰지 않는다(그 클라이언트의 `base_url`을 따른다).
+    `base_url`은 `https://*.googleapis.com`만 허용한다. 테스트에서만 `allow_test_base_url=True`로
+    풀 수 있고, `client` 주입도 그때만 가능하다(그 클라이언트의 `base_url`을 따른다).
     """
 
     def __init__(
@@ -263,10 +293,17 @@ class GoogleCalendarConnector:
         *,
         base_url: str = DEFAULT_BASE_URL,
         client: httpx.AsyncClient | None = None,
+        allow_test_base_url: bool = False,
         timeout_s: float = 15.0,
         read_retries: int = 2,
         sleep: Sleep = asyncio.sleep,
     ) -> None:
+        # 액세스 토큰을 실어 보내는 곳이므로 Google 호스트만 허용한다. 테스트만 명시적으로 푼다.
+        # 클라이언트를 주입하면 그 클라이언트의 주소를 검사할 수 없으므로 같은 명시가 필요하다.
+        if not allow_test_base_url:
+            if client is not None:
+                raise ValueError("client 주입은 allow_test_base_url=True일 때만 쓸 수 있다")
+            _check_base_url(base_url)
         self._tokens = tokens
         self._client = client or httpx.AsyncClient(base_url=base_url, timeout=timeout_s)
         self._owns_client = client is None
@@ -469,7 +506,7 @@ class GoogleCalendarConnector:
             body=body,
             creating=True,
         )
-        return _event_from_google(calendar_id, data)
+        return _written(calendar_id, data, "create_event")
 
     async def update_event(
         self, calendar_id: str, event_id: str, patch: EventPatch, *, if_match: str
@@ -481,12 +518,14 @@ class GoogleCalendarConnector:
             body["description"] = patch.description
         if patch.location is not None:
             body["location"] = patch.location
-        if patch.attendees is not None:
-            body["attendees"] = _attendees_body(patch.attendees)
-        if patch.start is not None or patch.end is not None or patch.all_day is not None:
+        touches_time = patch.start is not None or patch.end is not None or patch.all_day is not None
+        if touches_time or patch.attendees is not None:
             current = await self.get_event(calendar_id, event_id)
             if current.version != if_match:
                 raise PreconditionFailed("Google Calendar update_event 실패: etag가 다르다")
+            if patch.attendees is not None:
+                body["attendees"] = _attendees_body(patch.attendees, current.attendees)
+        if touches_time:
             start = patch.start if patch.start is not None else current.start
             end = patch.end if patch.end is not None else current.end
             all_day = patch.all_day if patch.all_day is not None else current.all_day
@@ -502,7 +541,7 @@ class GoogleCalendarConnector:
             body=body,
             if_match=if_match,
         )
-        return _event_from_google(calendar_id, data)
+        return _written(calendar_id, data, "update_event")
 
     async def cancel_event(
         self, calendar_id: str, event_id: str, *, if_match: str
@@ -516,4 +555,4 @@ class GoogleCalendarConnector:
             body={"status": "cancelled"},
             if_match=if_match,
         )
-        return _event_from_google(calendar_id, data)
+        return _written(calendar_id, data, "cancel_event")

@@ -71,3 +71,7 @@
 - `events.list`가 `timeMin`/`timeMax`를 겹침 기준으로 처리하는지, 길이 0인 일정의 포함 여부.
 - 오류 본문의 `reason` 값(`rateLimitExceeded`, `userRateLimitExceeded`, `insufficientPermissions`)이
   어댑터의 매핑표와 같은지. 한도 초과를 일부러 만들기 어려우면 문서 기준으로만 둔다고 기록한다.
+- 참석자 패치(`EventPatch.attendees`)가 배열을 통째로 교체하는지, 기존 참석자의 `responseStatus`를
+  함께 보내면 보존되고 생략하면 `needsAction`으로 돌아가는지. 어댑터는 현재 일정을 읽어 같은 이메일
+  참석자의 상태를 실어 보낸다(새 참석자는 생략). 이메일 대소문자 차이와 별칭 주소에서 보존이 되는지도 본다.
+- 쓰기 중 HTTP 408이 나는 경우가 있는지(어댑터는 `ResultUnknown`으로 낸다).

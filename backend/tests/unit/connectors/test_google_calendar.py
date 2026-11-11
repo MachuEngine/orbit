@@ -10,6 +10,7 @@ import pytest
 
 from orbit.connectors.contracts import (
     AlreadyExists,
+    Attendee,
     ConnectorError,
     EventDraft,
     EventPatch,
@@ -68,7 +69,9 @@ def make(
         sleeps.append(delay)
 
     client = httpx.AsyncClient(base_url="https://gcal.test/v3", transport=httpx.MockTransport(rec))
-    conn = GoogleCalendarConnector(tokens or Tokens(), client=client, sleep=fake_sleep)
+    conn = GoogleCalendarConnector(
+        tokens or Tokens(), client=client, sleep=fake_sleep, allow_test_base_url=True
+    )
     return conn, rec, sleeps
 
 
@@ -523,3 +526,109 @@ async def test_invalid_arguments_raise_value_error_without_request() -> None:
     with pytest.raises(ValueError, match="일정 ID"):
         await conn.create_event(CAL, "BAD", draft())
     assert rec.requests == []
+
+
+# ---------------------------------------------------------------- 리뷰 지적 회귀
+
+
+@pytest.mark.parametrize(("name", "call"), WRITES, ids=[w[0] for w in WRITES])
+async def test_every_write_sends_send_updates_none(
+    name: str, call: Callable[[GoogleCalendarConnector], Any]
+) -> None:
+    conn, rec, _ = make(lambda r: httpx.Response(200, json=event_json()))
+    await call(conn)
+    writes = [r for r in rec.requests if r.method in ("POST", "PATCH")]
+    assert len(writes) == 1
+    assert writes[0].url.params["sendUpdates"] == "none"
+
+
+BAD_SUCCESS_BODIES: list[dict[str, Any]] = [
+    {"id": EV, "etag": '"e"', "status": "confirmed"},  # 시각 없음
+    {"etag": '"e"', "start": {"dateTime": "2026-11-20T08:00:00Z"}},  # id 없음
+    event_json(start={"dateTime": "not-a-time"}),
+    event_json(updated="garbage"),
+    event_json(end={"dateTime": "2026-11-20T07:00:00Z"}),  # end < start
+]
+
+
+@pytest.mark.parametrize("bad", range(len(BAD_SUCCESS_BODIES)))
+@pytest.mark.parametrize(("name", "call"), WRITES, ids=[w[0] for w in WRITES])
+async def test_write_success_with_unparseable_body_is_result_unknown(
+    name: str, call: Callable[[GoogleCalendarConnector], Any], bad: int
+) -> None:
+    body = BAD_SUCCESS_BODIES[bad]
+    conn, rec, _ = make(lambda r: httpx.Response(200, json=body))
+    with pytest.raises(ResultUnknown):
+        await call(conn)
+    assert len(rec.requests) == 1
+
+
+@pytest.mark.parametrize(("name", "call"), WRITES, ids=[w[0] for w in WRITES])
+async def test_write_408_is_result_unknown(
+    name: str, call: Callable[[GoogleCalendarConnector], Any]
+) -> None:
+    conn, rec, _ = make(lambda r: error_response(408, "requestTimeout"))
+    with pytest.raises(ResultUnknown):
+        await call(conn)
+    assert len(rec.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://www.googleapis.com/calendar/v3", "https://calendar-json.googleapis.com/v3"],
+)
+def test_base_url_accepts_google_hosts(url: str) -> None:
+    GoogleCalendarConnector(Tokens(), base_url=url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://www.googleapis.com/calendar/v3",
+        "https://evil.example.com/calendar/v3",
+        "https://googleapis.com.evil.example/v3",
+        "https://evilgoogleapis.com/v3",
+        "https://www.googleapis.com@evil.example/v3",
+        "ftp://www.googleapis.com/v3",
+        "",
+    ],
+)
+def test_base_url_rejects_other_hosts(url: str) -> None:
+    with pytest.raises(ValueError, match="googleapis"):
+        GoogleCalendarConnector(Tokens(), base_url=url)
+
+
+def test_base_url_exception_needs_explicit_test_flag() -> None:
+    GoogleCalendarConnector(Tokens(), base_url="https://gcal.test/v3", allow_test_base_url=True)
+    client = httpx.AsyncClient(base_url="https://evil.example.com")
+    with pytest.raises(ValueError):
+        GoogleCalendarConnector(Tokens(), client=client)
+
+
+async def test_attendee_patch_preserves_status_of_existing_and_omits_new() -> None:
+    current = event_json(
+        attendees=[
+            {"email": "b@example.org", "displayName": "밥", "responseStatus": "accepted"},
+            {"email": "c@example.org", "responseStatus": "declined"},
+        ]
+    )
+    conn, rec, _ = make(lambda r: httpx.Response(200, json=current))
+    patch = EventPatch(
+        attendees=(Attendee(email="B@Example.org", name="밥"), Attendee(email="new@example.org"))
+    )
+    await conn.update_event(CAL, EV, patch, if_match='"e1"')
+    assert [r.method for r in rec.requests] == ["GET", "PATCH"]
+    sent = json.loads(rec.requests[1].content)["attendees"]
+    assert sent == [
+        {"email": "B@Example.org", "displayName": "밥", "responseStatus": "accepted"},
+        {"email": "new@example.org"},
+    ]
+
+
+async def test_attendee_patch_stale_etag_fails_before_patch() -> None:
+    conn, rec, _ = make(lambda r: httpx.Response(200, json=event_json()))
+    with pytest.raises(PreconditionFailed):
+        await conn.update_event(
+            CAL, EV, EventPatch(attendees=(Attendee(email="a@example.org"),)), if_match='"old"'
+        )
+    assert [r.method for r in rec.requests] == ["GET"]

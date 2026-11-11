@@ -38,7 +38,9 @@ class StaticTokens:
 def _mock_factory(world: SimWorld, account_id: str) -> GoogleCalendarConnector:
     mock = GoogleCalendarMock.from_account(world.account(account_id), world.clock.now())
     client = httpx.AsyncClient(base_url=MOCK_BASE_URL, transport=mock_transport(mock))
-    return GoogleCalendarConnector(StaticTokens("mock-token"), client=client)
+    return GoogleCalendarConnector(
+        StaticTokens("mock-token"), client=client, allow_test_base_url=True
+    )
 
 
 def _live_factory(world: SimWorld, account_id: str) -> GoogleCalendarConnector:
