@@ -22,4 +22,8 @@ class ApprovalNotApproved(RecordsError):
 
 
 class InvalidJobArgs(RecordsError):
-    """작업 인자가 `run_id` 문자열 하나가 아니다."""
+    """작업 인자가 `run_id`·`workspace_id` UUID 문자열 두 개가 아니다."""
+
+
+class RunHasActiveExecution(RecordsError):
+    """`pending`·`unknown` 실행이 남은 run은 지울 수 없다(결과가 확정되지 않은 외부 쓰기)."""

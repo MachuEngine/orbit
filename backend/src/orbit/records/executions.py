@@ -9,7 +9,9 @@ Protocol 자체는 4B가 `orbit.actions`에 정의한다. 여기서는 같은 �
   새 행이면 호출자(owner)에게 lease(소유권)를 준다. 기존 행이면 소유권을 바꾸지 않는다.
 - `claim`: 기존 행에 재진입할 때 lease를 얻는다(조건부 갱신). 얻지 못하면 False.
 - `record_ref`, `finish`: lease 소유자이고 lease가 유효하며 상태가 `pending`·`unknown`일 때만
-  반영한다. 아니면 예외 없이 False. 최종 상태(`succeeded`·`failed`·`needs_user`)면 lease를 비운다.
+  반영한다. 아니면 예외 없이 False. `finish`는 어떤 상태로 끝나도 lease를 비운다.
+- lease 시각은 주입 `Clock`이 아니라 DB `clock_timestamp()`로 부여·비교한다(프로세스 사이 시계
+  어긋남과 무관하게 한 시계로 판단). `updated_at` 같은 도메인 시각은 주입 `Clock`을 쓴다.
 """
 
 import json
@@ -64,7 +66,7 @@ class SqlExecutionStore:
         self._ids = ids
 
     async def begin(
-        self, approval_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime
+        self, approval_id: uuid.UUID, owner: uuid.UUID, lease_seconds: float
     ) -> tuple[ExecutionRecord, bool]:
         async with self._db.workspace_session(self._ws) as s:
             now = self._clock.now()
@@ -73,7 +75,8 @@ class SqlExecutionStore:
                     text(
                         "INSERT INTO execution (id, workspace_id, approval_id, status,"
                         " lease_owner, lease_expires_at, created_at, updated_at)"
-                        " SELECT :id, workspace_id, id, 'pending', :owner, :until, :now, :now"
+                        " SELECT :id, workspace_id, id, 'pending', :owner,"
+                        " clock_timestamp() + make_interval(secs => :lease), :now, :now"
                         " FROM approval"
                         " WHERE id = :approval AND workspace_id = :ws AND status = 'approved'"
                         " ON CONFLICT (approval_id) DO NOTHING"
@@ -83,7 +86,7 @@ class SqlExecutionStore:
                     {
                         "id": self._ids.next(),
                         "owner": owner,
-                        "until": lease_until,
+                        "lease": lease_seconds,
                         "now": now,
                         "approval": approval_id,
                         "ws": self._ws,
@@ -98,23 +101,24 @@ class SqlExecutionStore:
                 raise ApprovalNotApproved(f"approved 상태의 approval이 아니다: {approval_id}")
             return existing, False
 
-    async def claim(self, execution_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime) -> bool:
+    async def claim(self, execution_id: uuid.UUID, owner: uuid.UUID, lease_seconds: float) -> bool:
         """lease가 없거나 만료됐거나 이미 내 것이면 lease를 얻는다(`pending`·`unknown`만)."""
         async with self._db.workspace_session(self._ws) as s:
             now = self._clock.now()
             updated = (
                 await s.execute(
                     text(
-                        "UPDATE execution SET lease_owner = :owner, lease_expires_at = :until,"
+                        "UPDATE execution SET lease_owner = :owner,"
+                        " lease_expires_at = clock_timestamp() + make_interval(secs => :lease),"
                         " updated_at = :now"
                         " WHERE id = :id AND workspace_id = :ws"
                         " AND status = ANY(CAST(:open AS text[]))"
-                        " AND (lease_owner IS NULL OR lease_expires_at <= :now"
+                        " AND (lease_owner IS NULL OR lease_expires_at <= clock_timestamp()"
                         " OR lease_owner = :owner) RETURNING id"
                     ),
                     {
                         "owner": owner,
-                        "until": lease_until,
+                        "lease": lease_seconds,
                         "now": now,
                         "id": execution_id,
                         "ws": self._ws,
@@ -136,7 +140,8 @@ class SqlExecutionStore:
                         "UPDATE execution SET external_ref = CAST(:ref AS jsonb), updated_at = :now"
                         " WHERE id = :id AND workspace_id = :ws"
                         " AND status = ANY(CAST(:open AS text[]))"
-                        " AND lease_owner = :owner AND lease_expires_at > :now RETURNING id"
+                        " AND lease_owner = :owner AND lease_expires_at > clock_timestamp()"
+                        " RETURNING id"
                     ),
                     {
                         "ref": json.dumps(external_ref, ensure_ascii=False, sort_keys=True),
@@ -160,12 +165,11 @@ class SqlExecutionStore:
     ) -> bool:
         """유효한 lease 소유자의 `pending`·`unknown` 행에 상태를 기록한다. 반영되면 True.
 
-        `external_ref`가 None이면 기존 값을 유지한다. 최종 상태(`unknown`이 아닌 값)가 되면 lease를
-        비운다. `unknown`은 대조 대기라 lease를 유지한다.
+        `external_ref`가 None이면 기존 값을 유지한다. `pending`이 아닌 어떤 상태로 끝나도
+        lease를 비운다(`unknown`이면 다음 재진입이 바로 `claim`할 수 있다).
         """
         if status not in EXECUTION_STATUSES - {"pending"}:
             raise ValueError(f"finish에 쓸 수 없는 상태: {status}")
-        final = status != "unknown"
         async with self._db.workspace_session(self._ws) as s:
             now = self._clock.now()
             updated = (
@@ -174,13 +178,11 @@ class SqlExecutionStore:
                         "UPDATE execution SET status = :status,"
                         " external_ref = COALESCE(CAST(:ref AS jsonb), external_ref),"
                         " error_kind = :ek, updated_at = :now,"
-                        " lease_owner = CASE WHEN CAST(:final AS boolean)"
-                        " THEN NULL ELSE lease_owner END,"
-                        " lease_expires_at = CASE WHEN CAST(:final AS boolean)"
-                        " THEN NULL ELSE lease_expires_at END"
+                        " lease_owner = NULL, lease_expires_at = NULL"
                         " WHERE id = :id AND workspace_id = :ws"
                         " AND status = ANY(CAST(:open AS text[]))"
-                        " AND lease_owner = :owner AND lease_expires_at > :now RETURNING id"
+                        " AND lease_owner = :owner AND lease_expires_at > clock_timestamp()"
+                        " RETURNING id"
                     ),
                     {
                         "status": status,
@@ -189,7 +191,6 @@ class SqlExecutionStore:
                         else json.dumps(external_ref, ensure_ascii=False, sort_keys=True),
                         "ek": error_kind,
                         "now": now,
-                        "final": final,
                         "id": execution_id,
                         "ws": self._ws,
                         "open": _OPEN_STATUSES,

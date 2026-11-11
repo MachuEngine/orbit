@@ -4,7 +4,8 @@
   별도 연결로 등록하지 않는다. 롤백하면 도메인 행과 작업이 함께 사라진다.
 - `queueing_lock`을 쓰면 SAVEPOINT 안에서 등록하고 `AlreadyEnqueued`를 처리한다. SAVEPOINT는
   `begin_nested()` 안에서 `session.connection()`을 먼저 불러야 실제로 발행된다.
-- 작업 인자는 `{"run_id": "<uuid 문자열>"}` 하나뿐이다. 본문·주소·이름을 실을 수 없다.
+- 작업 인자는 `{"run_id", "workspace_id"}`(둘 다 필수, UUID 문자열)뿐이다. 워커가 RLS 아래에서
+  run을 읽으려면 워크스페이스를 알아야 한다. ID만이라 본문·주소·이름을 실을 수 없다(ADR-0006).
 - 작업 큐 쪽 시각(heartbeat 등)은 Procrastinate가 DB `now()`로 기록한다. 도메인 시각이 아니다.
 """
 
@@ -18,10 +19,9 @@ from procrastinate import exceptions as procrastinate_exceptions
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orbit.core.clock import Clock
 from orbit.records.errors import InvalidJobArgs
 
-_ALLOWED_ARG_KEYS = frozenset({"run_id"})
+_ALLOWED_ARG_KEYS = frozenset({"run_id", "workspace_id"})
 
 
 def make_procrastinate_app(database_url: str) -> procrastinate.App:
@@ -34,21 +34,24 @@ def make_procrastinate_app(database_url: str) -> procrastinate.App:
 
 
 def validate_job_args(args: Mapping[str, object]) -> dict[str, str]:
-    """작업 인자가 `run_id`(UUID 문자열) 하나뿐인지 검사한다. 어긋나면 `InvalidJobArgs`.
+    """작업 인자가 `run_id`와 `workspace_id`(둘 다 UUID 문자열) 두 개뿐인지 검사한다.
 
-    예외 메시지에는 키 이름만 담고 값은 담지 않는다.
+    어긋나면 `InvalidJobArgs`. 예외 메시지에는 키 이름만 담고 값은 담지 않는다.
     """
     extra = set(args) - _ALLOWED_ARG_KEYS
     if extra:
         raise InvalidJobArgs(f"허용되지 않은 작업 인자 키: {sorted(extra)}")
-    run_id = args.get("run_id")
-    if not isinstance(run_id, str):
-        raise InvalidJobArgs("작업 인자 run_id는 UUID 문자열이어야 한다")
-    try:
-        uuid.UUID(run_id)
-    except ValueError:
-        raise InvalidJobArgs("작업 인자 run_id는 UUID 문자열이어야 한다") from None
-    return {"run_id": run_id}
+    result: dict[str, str] = {}
+    for key in sorted(_ALLOWED_ARG_KEYS):
+        value = args.get(key)
+        if not isinstance(value, str):
+            raise InvalidJobArgs(f"작업 인자 {key}는 UUID 문자열이어야 한다")
+        try:
+            uuid.UUID(value)
+        except ValueError:
+            raise InvalidJobArgs(f"작업 인자 {key}는 UUID 문자열이어야 한다") from None
+        result[key] = value
+    return result
 
 
 async def defer_job(
@@ -96,7 +99,6 @@ async def recover_stalled_jobs(
     app: procrastinate.App,
     *,
     seconds_since_heartbeat: float,
-    clock: Clock,
     queue: str | None = None,
     retry_at: datetime | None = None,
 ) -> list[int]:
@@ -104,9 +106,8 @@ async def recover_stalled_jobs(
 
     Procrastinate는 멈춘 작업을 자동 복구하지 않는다(ADR-0005 조건 2). 되돌린 작업은 처음부터 다시
     실행되므로 처리기는 멱등해야 한다(외부 쓰기는 execution 선기록). 주기 작업 등록은 4C가 한다.
-    `retry_at`을 주지 않으면 주입한 `Clock`의 현재 시각으로 즉시 재시도한다.
+    `retry_at`을 주지 않으면(None) 즉시 재시도한다(Procrastinate가 DB 시각으로 처리).
     """
-    at = retry_at if retry_at is not None else clock.now()
     async with app.open_async():
         jobs = list(
             await app.job_manager.get_stalled_jobs(
@@ -114,5 +115,5 @@ async def recover_stalled_jobs(
             )
         )
         for job in jobs:
-            await app.job_manager.retry_job(job, retry_at=at)
+            await app.job_manager.retry_job(job, retry_at=retry_at)
     return [job.id for job in jobs if job.id is not None]

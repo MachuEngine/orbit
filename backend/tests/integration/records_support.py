@@ -2,7 +2,7 @@
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from sqlalchemy import text
 
@@ -14,7 +14,7 @@ from orbit.records.approvals import create_tool_call_with_approval, decide_appro
 from orbit.records.executions import SqlExecutionStore
 from orbit.records.runs import append_event, append_message, create_run
 
-LEASE = timedelta(minutes=5)
+LEASE_SECONDS = 300.0
 RECORD_TABLES = ("run", "run_event", "run_message", "tool_call", "approval", "execution")
 
 
@@ -66,6 +66,7 @@ async def seed_all_tables(
     workspaces: WorkspaceFactory,
     clock: FixedClock,
     ids: Uuid7Generator,
+    lease_seconds: float = LEASE_SECONDS,
 ) -> Seeded:
     """새 워크스페이스에 6개 테이블 모두 행이 있는 run 트리를 만든다(승인됨, 실행 기록 pending)."""
     ws = workspaces.create(conversations=1)
@@ -114,6 +115,6 @@ async def seed_all_tables(
         )
     owner = ids.next()
     store = SqlExecutionStore(db, ws, clock=clock, ids=ids)
-    record, created = await store.begin(approval.id, owner, clock.now() + LEASE)
+    record, created = await store.begin(approval.id, owner, lease_seconds)
     assert created
     return Seeded(ws, conv, run.id, tool_call_id, approval.id, record.id, owner)

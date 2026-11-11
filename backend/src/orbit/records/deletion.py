@@ -15,11 +15,31 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from orbit.records.errors import RunHasActiveExecution
+
 CHECKPOINT_TABLES = ("checkpoint_writes", "checkpoint_blobs", "checkpoints")
 
 
 async def delete_run(session: AsyncSession, *, workspace_id: uuid.UUID, run_id: uuid.UUID) -> bool:
-    """run과 하위 행, 체크포인트를 지운다. 이 워크스페이스에 run이 있었으면 True."""
+    """run과 하위 행, 체크포인트, 대기 중(`todo`) 작업을 같은 트랜잭션에서 지운다.
+
+    이 워크스페이스에 run이 있었으면 True. `pending`·`unknown` 실행이 있으면 아무것도 지우지 않고
+    `RunHasActiveExecution`을 낸다(외부 쓰기 결과가 확정되기 전에 기록을 없애지 않는다).
+    Procrastinate 작업은 args의 `run_id`가 같은 `todo` 작업만 지운다(`doing`은 건드리지 않는다).
+    """
+    active = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM execution e JOIN approval a"
+                " ON a.id = e.approval_id AND a.workspace_id = e.workspace_id"
+                " WHERE a.run_id = :id AND e.workspace_id = :ws"
+                " AND e.status IN ('pending', 'unknown') LIMIT 1"
+            ),
+            {"id": run_id, "ws": workspace_id},
+        )
+    ).first()
+    if active is not None:
+        raise RunHasActiveExecution(f"run {run_id}에 끝나지 않은 실행이 있다")
     deleted = (
         await session.execute(
             text("DELETE FROM run WHERE id = :id AND workspace_id = :ws RETURNING id"),
@@ -29,6 +49,10 @@ async def delete_run(session: AsyncSession, *, workspace_id: uuid.UUID, run_id: 
     if deleted is None:
         # 다른 워크스페이스의 run_id로 체크포인트를 지우지 못하게, run을 지운 경우에만 진행한다.
         return False
+    await session.execute(
+        text("DELETE FROM procrastinate_jobs WHERE status = 'todo' AND args->>'run_id' = :rid"),
+        {"rid": str(run_id)},
+    )
     for table in CHECKPOINT_TABLES:
         exists = (
             await session.execute(

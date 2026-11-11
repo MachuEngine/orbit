@@ -2,13 +2,13 @@
 
 import asyncio
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 from sqlalchemy import text
 
-from integration.records_support import LEASE, new_clock, new_run, seed_all_tables
+from integration.records_support import LEASE_SECONDS, new_clock, new_run, seed_all_tables
 from integration.support import WorkspaceFactory
 from orbit.core.ids import Uuid7Generator
 from orbit.db.session import AsyncDatabase
@@ -408,9 +408,7 @@ async def test_execution_store_begin_is_single_row_under_concurrency(
     store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
     owners = [ids.next() for _ in range(CONCURRENCY)]
 
-    results = await asyncio.gather(
-        *(store.begin(approval_id, o, clock.now() + LEASE) for o in owners)
-    )
+    results = await asyncio.gather(*(store.begin(approval_id, o, LEASE_SECONDS) for o in owners))
     assert sum(created for _, created in results) == 1
     assert len({rec.id for rec, _ in results}) == 1
     # 새 행을 만든 호출자만 소유권을 갖는다. 기존 행을 본 호출은 소유권을 바꾸지 못한다.
@@ -431,7 +429,7 @@ async def test_execution_store_requires_approved_approval(
     ws, run_id = await new_run(async_db, workspaces, clock, ids)
     _, approval_id, _ = await _create_call(async_db, ws, run_id, ids.next(), ids, clock)
     store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
-    until = clock.now() + LEASE
+    until = LEASE_SECONDS
 
     with pytest.raises(ApprovalNotApproved):  # pending
         await store.begin(approval_id, ids.next(), until)
@@ -454,26 +452,33 @@ async def test_execution_store_lifecycle_with_lease(
     seeded = await seed_all_tables(async_db, workspaces, clock, ids)
     ws, owner = seeded.workspace_id, seeded.owner
     store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
-    until = clock.now() + LEASE
 
     rec = await store.get(seeded.approval_id)
     assert rec is not None and rec.id == seeded.execution_id
     assert (rec.status, rec.external_ref, rec.error_kind) == ("pending", None, None)
-    assert (rec.lease_owner, rec.lease_expires_at) == (owner, until)
+    assert rec.lease_owner == owner and rec.lease_expires_at is not None
     # 기존 행에 begin해도 소유권은 바뀌지 않는다.
-    again, created = await store.begin(seeded.approval_id, ids.next(), until + LEASE)
+    again, created = await store.begin(seeded.approval_id, ids.next(), 2 * LEASE_SECONDS)
     assert (again, created) == (rec, False)
 
     assert await store.record_ref(rec.id, owner, {"draft_id": "d-1"})
     got = await store.get(seeded.approval_id)
     assert got is not None and got.external_ref == {"draft_id": "d-1"}
 
-    # 결과 불명 -> 대조 후 성공. unknown은 lease를 유지하고, ref는 통째로 바뀐다.
+    # 결과 불명 -> unknown은 lease를 비워 다음 재진입이 바로 claim할 수 있다.
     assert await store.finish(rec.id, owner, "unknown", None, None)
     unknown = await store.get(seeded.approval_id)
-    assert unknown is not None and (unknown.status, unknown.lease_owner) == ("unknown", owner)
-    assert await store.record_ref(rec.id, owner, {"draft_id": "d-1", "thread_id": "t-1"})
-    assert await store.finish(rec.id, owner, "succeeded", None, None)
+    assert unknown is not None
+    assert (unknown.status, unknown.lease_owner, unknown.lease_expires_at) == (
+        "unknown",
+        None,
+        None,
+    )
+    assert not await store.record_ref(rec.id, owner, {"x": 1})  # 이전 소유자는 더 쓸 수 없다
+    second = ids.next()
+    assert await store.claim(rec.id, second, LEASE_SECONDS)  # 즉시 claim 가능
+    assert await store.record_ref(rec.id, second, {"draft_id": "d-1", "thread_id": "t-1"})
+    assert await store.finish(rec.id, second, "succeeded", None, None)
     done = await store.get(seeded.approval_id)
     assert done is not None
     assert (done.status, done.external_ref, done.error_kind) == (
@@ -481,16 +486,16 @@ async def test_execution_store_lifecycle_with_lease(
         {"draft_id": "d-1", "thread_id": "t-1"},
         None,
     )
-    assert (done.lease_owner, done.lease_expires_at) == (None, None)  # 최종 상태는 lease를 비운다
+    assert (done.lease_owner, done.lease_expires_at) == (None, None)
 
     # 끝난 행은 어떤 쓰기도 반영되지 않는다.
-    assert not await store.finish(rec.id, owner, "succeeded", None, None)
-    assert not await store.finish(rec.id, owner, "failed", None, "NotFound")
-    assert not await store.record_ref(rec.id, owner, {"draft_id": "other"})
-    assert not await store.claim(rec.id, owner, until)
-    assert not await store.finish(ids.next(), owner, "failed", None, "NotFound")
+    assert not await store.finish(rec.id, second, "succeeded", None, None)
+    assert not await store.finish(rec.id, second, "failed", None, "NotFound")
+    assert not await store.record_ref(rec.id, second, {"draft_id": "other"})
+    assert not await store.claim(rec.id, second, LEASE_SECONDS)
+    assert not await store.finish(ids.next(), second, "failed", None, "NotFound")
     with pytest.raises(ValueError):
-        await store.finish(rec.id, owner, "pending", None, None)
+        await store.finish(rec.id, second, "pending", None, None)
     assert await store.get(seeded.approval_id) == done
 
 
@@ -513,52 +518,49 @@ async def test_concurrent_claim_only_one_succeeds(
 ) -> None:
     clock = new_clock()
     ids = Uuid7Generator(clock)
-    seeded = await seed_all_tables(async_db, workspaces, clock, ids)
+    # 짧은 lease(DB 시계 기준)가 만료된 뒤 여러 실행자가 동시에 claim한다.
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids, lease_seconds=0.1)
     store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
-    # 처음 소유자의 lease가 만료된 뒤 여러 실행자가 동시에 claim한다.
-    clock.advance(LEASE)
+    await asyncio.sleep(0.3)
     owners = [ids.next() for _ in range(CONCURRENCY)]
-    until = clock.now() + LEASE
-    results = await asyncio.gather(*(store.claim(seeded.execution_id, o, until) for o in owners))
+    results = await asyncio.gather(
+        *(store.claim(seeded.execution_id, o, LEASE_SECONDS) for o in owners)
+    )
     assert sum(results) == 1
     rec = await store.get(seeded.approval_id)
     assert rec is not None
     assert rec.lease_owner == owners[results.index(True)]
 
 
-async def test_claim_rules_and_lease_expiry(
+async def test_lease_uses_db_clock_not_injected_clock(
     async_db: AsyncDatabase, workspaces: WorkspaceFactory
 ) -> None:
+    """주입 Clock을 움직여도 lease 판단은 그대로고, 실제(DB) 시간이 지나야 만료된다."""
     clock = new_clock()
     ids = Uuid7Generator(clock)
-    seeded = await seed_all_tables(async_db, workspaces, clock, ids)
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids, lease_seconds=0.5)
     store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
     first, other = seeded.owner, ids.next()
     eid = seeded.execution_id
 
-    # lease가 유효한 동안 다른 owner의 claim은 실패하고, 소유자는 연장할 수 있다.
-    assert not await store.claim(eid, other, clock.now() + LEASE)
-    assert await store.claim(eid, first, clock.now() + 2 * LEASE)
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None and rec.lease_expires_at is not None
+    # lease 만료 시각은 DB 시각 기준이라 주입 Clock(2026-03-01)과 무관하다.
+    assert rec.lease_expires_at > datetime.now(UTC)  # 아직 유효(0.5초 이내)
 
-    # 소유자가 아닌 record_ref/finish는 거부되고 기록은 그대로다.
+    # 주입 Clock을 1년 뒤로 옮겨도 유효한 lease는 그대로다.
+    clock.advance(timedelta(days=365))
+    assert not await store.claim(eid, other, LEASE_SECONDS)
     assert not await store.record_ref(eid, other, {"x": 1})
     assert not await store.finish(eid, other, "succeeded", None, None)
-    rec = await store.get(seeded.approval_id)
-    assert rec is not None and (rec.status, rec.external_ref, rec.lease_owner) == (
-        "pending",
-        None,
-        first,
-    )
 
-    # 만료 시각 정각부터 소유자의 쓰기도 거부된다(lease_expires_at > now).
-    clock.advance(2 * LEASE)
+    # 실제 시간이 지나 lease가 만료되면 소유자의 쓰기가 거부되고 다른 owner가 claim한다.
+    await asyncio.sleep(0.8)
     assert not await store.record_ref(eid, first, {"x": 1})
     assert not await store.finish(eid, first, "succeeded", None, None)
     rec = await store.get(seeded.approval_id)
     assert rec is not None and (rec.status, rec.external_ref) == ("pending", None)
-
-    # 만료 후에는 다른 owner가 claim하고, 이전 소유자는 쓸 수 없다.
-    assert await store.claim(eid, other, clock.now() + LEASE)
+    assert await store.claim(eid, other, LEASE_SECONDS)
     assert not await store.finish(eid, first, "succeeded", None, None)
     assert await store.record_ref(eid, other, {"draft_id": "d-2"})
     assert await store.finish(eid, other, "needs_user", None, None)
@@ -569,3 +571,24 @@ async def test_claim_rules_and_lease_expiry(
         {"draft_id": "d-2"},
         None,
     )
+
+
+async def test_claim_by_owner_extends_and_non_owner_is_rejected(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids)
+    store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
+    other, eid = ids.next(), seeded.execution_id
+    before = await store.get(seeded.approval_id)
+    assert before is not None and before.lease_expires_at is not None
+
+    assert not await store.claim(eid, other, LEASE_SECONDS)
+    assert not await store.record_ref(eid, other, {"x": 1})
+    assert not await store.finish(eid, other, "succeeded", None, None)
+    assert await store.claim(eid, seeded.owner, 2 * LEASE_SECONDS)  # 소유자는 연장
+    after = await store.get(seeded.approval_id)
+    assert after is not None and after.lease_expires_at is not None
+    assert after.lease_expires_at > before.lease_expires_at
+    assert (after.status, after.external_ref, after.lease_owner) == ("pending", None, seeded.owner)

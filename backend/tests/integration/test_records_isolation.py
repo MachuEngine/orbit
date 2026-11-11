@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from integration.records_support import LEASE, RECORD_TABLES, new_clock, seed_all_tables
+from integration.records_support import LEASE_SECONDS, RECORD_TABLES, new_clock, seed_all_tables
 from integration.support import WorkspaceFactory
 from orbit.core.ids import Uuid7Generator
 from orbit.db.session import AsyncDatabase
@@ -145,7 +145,7 @@ async def test_record_functions_do_not_cross_workspaces(
 
     store_b = SqlExecutionStore(async_db, ws_b, clock=clock, ids=ids)
     assert await store_b.get(a.approval_id) is None
-    assert not await store_b.claim(a.execution_id, b.owner, clock.now() + LEASE)
+    assert not await store_b.claim(a.execution_id, b.owner, LEASE_SECONDS)
     assert not await store_b.finish(a.execution_id, a.owner, "succeeded", None, None)
 
     # 데이터가 없는 다른 워크스페이스 설정으로 읽으면 6개 테이블 모두 0건이다.
