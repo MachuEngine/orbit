@@ -392,3 +392,25 @@ async def test_snapshot_rejects_sent_log_entry_without_message(world: SimWorld) 
     log[-1]["sent_message_id"] = "msg-ghost"
     with pytest.raises(SnapshotError):
         SimWorld.load(data, world.clock)
+
+
+async def test_returned_messages_do_not_alias_world_headers(world: SimWorld) -> None:
+    mail = connector(world)
+    alice = world.account("acct-alice")
+    draft = await mail.create_draft(spec())
+    sent = await mail.send_draft(draft.draft_id)
+    sent.headers["X-Tamper"] = "1"
+    assert alice.messages[sent.id].headers == {ORBIT_EXECUTION_HEADER: "exec-1"}
+
+    got = await mail.get_message(sent.id)
+    got.headers["X-Tamper"] = "2"
+    assert "X-Tamper" not in alice.messages[sent.id].headers
+
+    thread = await mail.get_thread(sent.thread_id)
+    for msg in thread.messages:
+        msg.headers["X-Tamper"] = "3"
+    assert all("X-Tamper" not in m.headers for m in alice.messages.values())
+
+    before = world.to_dict()
+    (await mail.get_message("msg-a-001")).headers["X-Tamper"] = "4"
+    assert world.to_dict() == before

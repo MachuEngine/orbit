@@ -29,7 +29,7 @@ NOW = datetime(2026, 11, 11, 9, 0, tzinfo=UTC)
 def test_errors_share_base() -> None:
     assert issubclass(NotFound, ConnectorError)
     assert issubclass(ResultUnknown, ConnectorError)
-    assert RateLimited(2.5).retry_after_s == 2.5
+    assert RateLimited(retry_after_s=2.5).retry_after_s == 2.5
 
 
 @pytest.mark.parametrize(

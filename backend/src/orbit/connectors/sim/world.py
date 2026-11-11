@@ -262,12 +262,15 @@ class SimWorld:
             raise KeyError(f"없는 계정: {account_id}") from None
 
     def fork(self, episode_seed: int) -> SimWorld:
-        """독립 복사본(깊은 복사)을 만든다. ID 생성기는 `episode_seed`로 새로 시작한다."""
+        """독립 복사본(깊은 복사)을 만든다. ID 생성기는 `episode_seed`로 새로 시작한다.
+
+        시계는 복사하지 않고 같은 `Clock` 객체를 공유한다(에피소드가 한 시계를 함께 움직인다).
+        """
         return SimWorld(episode_seed, copy.deepcopy(self._accounts), self.clock)
 
     def copy(self) -> SimWorld:
-        """ID 생성기 상태까지 그대로 복사한다. `diff`의 `before` 기준점으로 쓴다."""
-        return copy.deepcopy(self)
+        """ID 생성기 상태까지 그대로 복사한다. `diff`의 `before` 기준점. 시계는 공유한다."""
+        return copy.deepcopy(self, {id(self.clock): self.clock})
 
     def to_dict(self) -> dict[str, Any]:
         return {

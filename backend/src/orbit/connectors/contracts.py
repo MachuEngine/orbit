@@ -44,7 +44,7 @@ class PreconditionFailed(ConnectorError):
 class RateLimited(ConnectorError):
     """호출 한도 초과."""
 
-    def __init__(self, retry_after_s: float | None = None, message: str = "") -> None:
+    def __init__(self, *, retry_after_s: float | None = None, message: str = "") -> None:
         super().__init__(message)
         self.retry_after_s = retry_after_s
 
@@ -97,6 +97,12 @@ def _check_order(start: datetime | None, end: datetime | None) -> None:
 
 
 class CalendarEvent(_Model):
+    """일정. 종일 일정(`all_day=True`)의 `start`·`end`는 UTC 00:00이고 `end`는 배타적이다.
+
+    하루짜리 종일 일정은 `end = start + 1일`이다. v0 한계: 캘린더 `time_zone`은 종일 일정의
+    날짜 경계에 쓰지 않고 항상 UTC 날짜 경계로 본다.
+    """
+
     id: str
     calendar_id: str
     title: str
@@ -135,7 +141,11 @@ class EventDraft(_Model):
 
 
 class EventPatch(_Model):
-    """일정 부분 수정 입력. `None`이 아닌 필드만 바꾼다(`attendees=()`는 참석자를 비운다)."""
+    """일정 부분 수정 입력. `None`이 아닌 필드만 바꾼다(`attendees=()`는 참석자를 비운다).
+
+    패치 자체는 `start`·`end`가 둘 다 있을 때만 순서를 검사한다. 현재 일정에 병합한 결과가
+    `start < end`가 아니면(종일이면 날짜 기준) 구현체가 `ValueError`를 던지고 일정은 바뀌지 않는다.
+    """
 
     title: str | None = None
     description: str | None = None
@@ -244,6 +254,18 @@ class SearchPage(_Model):
 
 @runtime_checkable
 class CalendarConnector(Protocol):
+    """캘린더 계약 (ADR-0008 3절).
+
+    계약 오류(`ConnectorError` 계열) 말고 다음 입력 위반은 호출자 버그이므로 `ValueError`다.
+    장애 주입이나 재시도로 복구할 대상이 아니다.
+    - `create_event`의 `event_id`가 Google 규칙(`[a-v0-9]` 5~1024자)에 맞지 않는다.
+    - 종일 일정의 `start`·`end`가 UTC 00:00이 아니거나, 종일이 아닐 때 `start < end`가 아니다.
+    - `update_event`의 패치를 병합한 결과가 `start < end`가 아니다(상태·버전은 바뀌지 않는다).
+    - `list_events`의 `time_min`·`time_max`가 naive이거나 `time_min >= time_max`다.
+
+    종일 일정은 UTC 00:00 기준, `end` 배타적이다(`CalendarEvent` 참고, v0 한계).
+    """
+
     async def list_calendars(self) -> list[Calendar]: ...
 
     async def list_events(
@@ -273,6 +295,15 @@ class CalendarConnector(Protocol):
 
 @runtime_checkable
 class MailConnector(Protocol):
+    """메일 계약 (ADR-0008 4절).
+
+    검색 문법은 부분집합(ADR-0008 4절, D1-6)이다: `from:`, `to:`, `subject:`, `after:`·`before:`
+    (`YYYY/MM/DD`), `has:attachment`, `in:sent`·`in:inbox`·`in:drafts`, 일반 키워드, 큰따옴표 구문.
+    조건은 모두 AND다. **모든 구현체는 질의를 외부로 보내기 전에 이 부분집합을 직접 검증하고,
+    벗어나면 `InvalidQuery`를 던져야 한다.** 제공자가 우연히 받아 주는 `OR`·`-`·`label:` 같은
+    연산자를 통과시키면 Sim과 실제 어댑터의 동작이 갈라진다.
+    """
+
     async def search_messages(
         self, query: str, *, max_results: int = 20, page_token: str | None = None
     ) -> SearchPage: ...
@@ -289,6 +320,21 @@ class MailConnector(Protocol):
 
     async def delete_draft(self, draft_id: str) -> None: ...
 
+
+# ---------------------------------------------------------------- 도구 이름
+
+
+def _tool_names(protocol: type) -> frozenset[str]:
+    """Protocol이 직접 정의한 공개 메서드 이름(`FaultPlan` 규칙의 `tool`로 쓴다)."""
+    return frozenset(
+        name
+        for name, value in vars(protocol).items()
+        if not name.startswith("_") and callable(value)
+    )
+
+
+CALENDAR_TOOLS: frozenset[str] = _tool_names(CalendarConnector)
+MAIL_TOOLS: frozenset[str] = _tool_names(MailConnector)
 
 # ---------------------------------------------------------------- 클라이언트 지정 일정 ID
 

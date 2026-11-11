@@ -1,7 +1,7 @@
 import copy
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -248,3 +248,11 @@ def test_diff_draft_sent_and_message_added(world: SimWorld) -> None:
     assert len(d.messages_added) == 1
     assert d.messages_added[0].message["labels"] == ["INBOX"]
     assert "id" not in d.messages_added[0].message
+
+
+def test_fork_and_copy_share_the_same_clock(world: SimWorld, fixed_clock: FixedClock) -> None:
+    assert world.fork(7).clock is world.clock
+    assert world.copy().clock is world.clock
+    fixed_clock.advance(timedelta(minutes=5))
+    assert world.fork(7).clock.now() == world.clock.now()
+    assert world.copy().clock.now() == world.clock.now()

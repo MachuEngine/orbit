@@ -1,13 +1,18 @@
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from orbit.connectors.contracts import (
+    CALENDAR_TOOLS,
+    MAIL_TOOLS,
     AlreadyExists,
+    Attendee,
     ConnectorError,
     EventDraft,
+    EventPatch,
     NotFound,
     PermissionRevoked,
     PreconditionFailed,
@@ -186,3 +191,109 @@ def test_fault_plan_rejects_unknown_error_and_fields() -> None:
         plan({"tool": "t", "error": "transient", "nth": 1})
     with pytest.raises(ValidationError):
         plan({"tool": "t", "error": "transient", "nth_call": 0})
+
+
+async def test_match_normalizes_datetime_and_nested_models() -> None:
+    start = datetime(2026, 11, 12, 1, 0, tzinfo=UTC)
+    draft = EventDraft(title="A", start=start, end=datetime(2026, 11, 12, 2, 0, tzinfo=UTC))
+    # match에 datetime 객체를 써도 JSON 형태로 정규화돼 일치한다.
+    rt = SimRuntime(
+        plan({"tool": "create_event", "match": {"draft": {"start": start}}, "error": "not_found"})
+    )
+    with pytest.raises(NotFound):
+        await rt.run_tool("create_event", {"draft": draft}, lambda: "ok")
+    # 문자열은 pydantic JSON 표기(UTC는 Z)와 같아야 한다. 인자가 datetime이어도 일치한다.
+    rt2 = SimRuntime(
+        plan(
+            {
+                "tool": "list_events",
+                "match": {"time_min": "2026-11-12T01:00:00Z"},
+                "error": "not_found",
+            }
+        )
+    )
+    with pytest.raises(NotFound):
+        await rt2.run_tool("list_events", {"time_min": start}, lambda: "ok")
+    # 튜플 값은 리스트로 정규화된다.
+    patch = EventPatch(attendees=(Attendee(email="bob@example.org"),))
+    rt3 = SimRuntime(
+        plan(
+            {
+                "tool": "update_event",
+                "match": {
+                    "patch": {
+                        "attendees": [
+                            {
+                                "email": "bob@example.org",
+                                "name": None,
+                                "response_status": "needs_action",
+                            }
+                        ]
+                    }
+                },
+                "error": "not_found",
+            }
+        )
+    )
+    with pytest.raises(NotFound):
+        await rt3.run_tool("update_event", {"patch": patch}, lambda: "ok")
+    # 다른 시각이면 일치하지 않는다.
+    other = SimRuntime(
+        plan({"tool": "list_events", "match": {"time_min": start}, "error": "not_found"})
+    )
+    later = datetime(2026, 11, 12, 2, 0, tzinfo=UTC)
+    assert await other.run_tool("list_events", {"time_min": later}, lambda: "ok") == "ok"
+
+
+def test_bind_rejects_unknown_tool_for_dedicated_runtime() -> None:
+    rt = SimRuntime(plan({"tool": "create_evnt", "error": "transient"}))
+    with pytest.raises(ValueError, match="create_evnt"):
+        rt.bind(CALENDAR_TOOLS)
+    # 다른 커넥터의 도구도 전용 런타임에서는 거절한다(조용히 무시되는 규칙 방지).
+    with pytest.raises(ValueError, match="send_draft"):
+        SimRuntime(plan({"tool": "send_draft", "error": "transient"})).bind(CALENDAR_TOOLS)
+
+
+def test_shared_runtime_binds_both_and_check_bound_finds_orphans() -> None:
+    rt = SimRuntime(
+        plan(
+            {"tool": "create_event", "error": "transient"},
+            {"tool": "send_draft", "error": "transient"},
+        ),
+        shared=True,
+    )
+    rt.bind(CALENDAR_TOOLS)  # 메일 규칙이 있어도 바인딩 순서와 무관하게 통과한다
+    with pytest.raises(ValueError, match="send_draft"):
+        rt.check_bound()
+    rt.bind(MAIL_TOOLS)
+    rt.check_bound()
+    with pytest.raises(ValueError, match="oops"):
+        SimRuntime(plan({"tool": "oops", "error": "transient"}), shared=True).bind(CALENDAR_TOOLS)
+
+
+async def test_shared_fault_plan_matches_account_id_across_mail_and_calendar() -> None:
+    """4단계 대비: 한 FaultPlan이 메일·캘린더 도구를 함께 담고 account_id로 계정을 구분한다."""
+    from pathlib import Path
+
+    from orbit.connectors.sim.calendar import SimCalendarConnector
+    from orbit.connectors.sim.mail import SimMailConnector
+    from orbit.connectors.sim.world import SimWorld
+    from orbit.core.clock import FixedClock
+
+    fixture = Path(__file__).resolve().parents[2] / "fixtures" / "sim" / "minimal_world.json"
+    world = SimWorld.load(fixture, FixedClock(datetime(2026, 11, 11, 9, 0, tzinfo=UTC)))
+    rt = SimRuntime(
+        plan(
+            {"tool": "get_message", "match": {"account_id": "acct-bob"}, "error": "transient"},
+            {"tool": "get_event", "match": {"account_id": "acct-bob"}, "error": "transient"},
+        ),
+        shared=True,
+    )
+    alice_mail = SimMailConnector(world, "acct-alice", rt)
+    bob_mail = SimMailConnector(world, "acct-bob", rt)
+    alice_cal = SimCalendarConnector(world, "acct-alice", rt)
+    rt.check_bound()
+    assert (await alice_mail.get_message("msg-a-001")).id == "msg-a-001"
+    with pytest.raises(TransientError):
+        await bob_mail.get_message("msg-b-001")
+    assert (await alice_cal.get_event("cal-alice-main", "evalice001")).id == "evalice001"
