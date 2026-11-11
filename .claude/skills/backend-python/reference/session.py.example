@@ -1,0 +1,91 @@
+"""backend/src/app/db/session.py 예시: 트랜잭션 범위 DB 세션 헬퍼.
+
+DB에 닿는 유일한 공개 경로다. 세션 하나가 트랜잭션 하나이며, 정상 종료하면 커밋, 예외가 나면
+롤백한다. 엔진은 `pool_reset_on_return` 기본값(rollback)을 그대로 쓴다.
+
+규칙
+- 엔진·연결은 `SyncDatabase`/`AsyncDatabase` 안에 숨긴다. 앱 코드는 아래 메서드만 쓴다.
+- 블록 안에서 `session.commit()`·`session.rollback()`을 직접 부르지 않는다. 부르면 그 시점에
+  트랜잭션이 끝나고, 이어지는 `session.execute(...)`는 실패한다. 나눠서 커밋하려면 세션을 새로 연다.
+- (RLS) 테넌트 데이터는 `tenant_session`으로만 접근한다. 트랜잭션 시작 직후
+  `set_config('app.tenant_id', :id, true)`(트랜잭션 범위)를 실행한다. 세션 범위 `SET`,
+  `set_config(..., false)`는 쓰지 않는다. RLS를 쓰지 않는 프로젝트는 `tenant_session`을 지운다.
+- 테넌트 없이 DB에 닿는 경로는 이름으로 드러낸다(`ping`, `unscoped_...`).
+"""
+
+import uuid
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
+
+from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.orm import Session
+
+_SET_TENANT = text("SELECT set_config('app.tenant_id', :tenant_id, true)")
+
+
+class SyncDatabase:
+    """동기 SQLAlchemy 접근. 엔진은 외부에 노출하지 않는다."""
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    @classmethod
+    def from_url(cls, url: str, *, pool_size: int = 5, max_overflow: int = 10) -> "SyncDatabase":
+        return cls(
+            create_engine(url, pool_size=pool_size, max_overflow=max_overflow, pool_pre_ping=True)
+        )
+
+    @contextmanager
+    def transaction(self) -> Iterator[Session]:
+        """테넌트 구분이 없는 데이터용 트랜잭션. 정상 종료는 커밋, 예외는 롤백한다."""
+        with Session(self._engine, expire_on_commit=False) as session, session.begin():
+            yield session
+
+    @contextmanager
+    def tenant_session(self, tenant_id: uuid.UUID) -> Iterator[Session]:
+        """테넌트 범위 트랜잭션(RLS). 정상 종료는 커밋, 예외는 롤백한다."""
+        with Session(self._engine, expire_on_commit=False) as session, session.begin():
+            session.execute(_SET_TENANT, {"tenant_id": str(tenant_id)})
+            yield session
+
+    def ping(self) -> None:
+        """사용자 데이터 없이 연결만 확인한다(헬스체크용)."""
+        with self._engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+
+    def dispose(self) -> None:
+        self._engine.dispose()
+
+
+class AsyncDatabase:
+    """비동기 SQLAlchemy 접근. 엔진은 외부에 노출하지 않는다."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+
+    @classmethod
+    def from_url(cls, url: str, *, pool_size: int = 5, max_overflow: int = 10) -> "AsyncDatabase":
+        return cls(
+            create_async_engine(
+                url, pool_size=pool_size, max_overflow=max_overflow, pool_pre_ping=True
+            )
+        )
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[AsyncSession]:
+        async with AsyncSession(self._engine, expire_on_commit=False) as session, session.begin():
+            yield session
+
+    @asynccontextmanager
+    async def tenant_session(self, tenant_id: uuid.UUID) -> AsyncIterator[AsyncSession]:
+        async with AsyncSession(self._engine, expire_on_commit=False) as session, session.begin():
+            await session.execute(_SET_TENANT, {"tenant_id": str(tenant_id)})
+            yield session
+
+    async def ping(self) -> None:
+        async with self._engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+
+    async def dispose(self) -> None:
+        await self._engine.dispose()

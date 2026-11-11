@@ -1,0 +1,53 @@
+# .github/workflows/ci.yml의 check job에 합칠 백엔드 부분 예시.
+# 아래 조각을 job의 같은 이름 키(env, services, steps) 아래로 옮긴다. steps는 "Run checks" 앞에 둔다.
+# 버전은 <버전> 자리에 고정 값을 쓴다. 비밀번호는 CI 전용 합성 값이며 서비스 컨테이너는 이 job 안에서만 열린다.
+
+env:
+  APP_PG_SUPERUSER_PASSWORD: ci_superuser_pw
+  APP_OWNER_PASSWORD: ci_owner_pw
+  APP_USER_PASSWORD: ci_user_pw
+  # 설정 객체가 두 URL을 함께 읽으면 마이그레이션 단계에도 앱 URL이 필요하므로 job 전체에 둔다.
+  APP_DATABASE_URL: postgresql+psycopg://app_user:ci_user_pw@localhost:5432/app
+  APP_MIGRATION_DATABASE_URL: postgresql+psycopg://app_owner:ci_owner_pw@localhost:5432/app
+
+services:
+  postgres:
+    image: pgvector/pgvector:<버전> # compose.yml과 같은 이미지
+    env:
+      POSTGRES_DB: app
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ci_superuser_pw
+    ports:
+      - 5432:5432
+    options: >-
+      --health-cmd "pg_isready -U postgres -d app"
+      --health-interval 2s
+      --health-timeout 3s
+      --health-retries 30
+
+steps:
+  - name: Install uv
+    uses: astral-sh/setup-uv@v6
+    with:
+      version: "<uv 버전>" # 로컬과 같은 uv 버전으로 고정한다
+
+  - name: Sync backend dependencies
+    run: uv sync --directory backend --frozen
+
+  # 서비스 컨테이너에는 파일을 마운트할 수 없어 같은 init SQL을 psql로 실행한다.
+  # psql은 job env의 APP_OWNER_PASSWORD·APP_USER_PASSWORD를 \getenv로 읽는다.
+  - name: Create DB roles
+    run: psql "postgresql://postgres@localhost:5432/app" -f backend/db/init/00_roles.sql
+    env:
+      PGPASSWORD: ci_superuser_pw
+
+  - name: Run migrations
+    run: uv run --directory backend alembic upgrade head
+
+  # 기존 "Run checks" 단계에 통합 테스트용 URL을 더한다. CI=true라 URL이 빠지면 테스트가 실패한다.
+  - name: Run checks
+    run: bash scripts/check.sh
+    env:
+      CI: "true"
+      APP_TEST_DATABASE_URL: postgresql+psycopg://app_user:ci_user_pw@localhost:5432/app_test
+      APP_TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://app_owner:ci_owner_pw@localhost:5432/app_test

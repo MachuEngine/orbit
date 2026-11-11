@@ -1,0 +1,46 @@
+-- backend/db/init/00_roles.sql 예시: DB 역할과 테스트 DB를 만든다.
+-- 개발용 compose(docker-entrypoint-initdb.d)와 CI(psql -f)가 같은 파일을 쓴다. 여러 번 실행해도 된다.
+-- 슈퍼유저로 대상 DB에 접속해 psql로 실행한다. \getenv는 PostgreSQL 15 이상 psql에서 동작한다.
+--
+--   app_owner: 스키마·테이블 소유자. 마이그레이션 전용.
+--   app_user:  앱 접속 역할. 소유자가 아니고 NOBYPASSRLS. RLS를 쓰지 않아도 권한을 나눠 두면 좋다.
+--
+-- 비밀번호는 환경 변수에서 읽고, 없으면 로컬 개발 전용 값을 쓴다. 운영에서는 반드시 환경 변수를 준다.
+
+\set ON_ERROR_STOP on
+
+\getenv owner_pw APP_OWNER_PASSWORD
+\if :{?owner_pw}
+\else
+  \set owner_pw app_dev_owner_only
+\endif
+\getenv user_pw APP_USER_PASSWORD
+\if :{?user_pw}
+\else
+  \set user_pw app_dev_user_only
+\endif
+
+SELECT 'CREATE ROLE app_owner LOGIN'
+ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_owner') \gexec
+SELECT 'CREATE ROLE app_user LOGIN'
+ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') \gexec
+
+ALTER ROLE app_owner LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'owner_pw';
+ALTER ROLE app_user LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'user_pw';
+
+-- 통합 테스트 전용 DB. 마이그레이션 테스트가 스키마를 내렸다 올리므로 개발 DB와 분리한다.
+SELECT 'CREATE DATABASE app_test OWNER app_owner'
+ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'app_test') \gexec
+
+-- 확장은 슈퍼유저가 미리 만든다(마이그레이션 역할은 슈퍼유저가 아니다). 필요 없으면 지운다.
+\connect app
+GRANT CREATE, USAGE ON SCHEMA public TO app_owner;
+GRANT USAGE ON SCHEMA public TO app_user;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+-- CREATE EXTENSION IF NOT EXISTS vector;
+
+\connect app_test
+GRANT CREATE, USAGE ON SCHEMA public TO app_owner;
+GRANT USAGE ON SCHEMA public TO app_user;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+-- CREATE EXTENSION IF NOT EXISTS vector;

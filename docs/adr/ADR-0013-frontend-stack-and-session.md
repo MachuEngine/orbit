@@ -16,7 +16,7 @@
 | 위치 | 저장소 루트 `frontend/` | |
 
 - 개발 환경에서는 Vite 개발 서버의 프록시로 `/api`를 FastAPI에 넘겨 **같은 출처(same origin)**로 쓴다. 운영에서도 웹과 API를 같은 도메인에 둔다.
-- 화면 스타일은 `docs/brand/tokens.css`의 토큰만 쓴다. 브랜드가 정해지기 전에는 화면 스타일을 만들지 않고, 데이터·상태 계층부터 만든다(`.claude/skills/frontend-design/reference/orbit.md` 2절).
+- 화면 스타일은 `docs/brand/tokens.css`의 토큰만 쓴다. 브랜드가 정해지기 전에는 화면 스타일을 만들지 않고, 데이터·상태 계층부터 만든다(`.claude/project-skills/frontend-design.md` 2절, 이전 경로 `.claude/skills/frontend-design/reference/orbit.md`).
 
 ### 2. 세션은 쿠키
 - 로그인하면 서버가 무작위 세션 토큰을 `HttpOnly`, `Secure`(개발 환경의 http는 예외), `SameSite=Lax`, `Path=/` 쿠키로 내린다. DB에는 토큰의 해시만 저장하고, 세션은 워크스페이스(6단계부터 사용자)에 묶이며 만료 시각을 가진다. 로그아웃·연결 해제 시 서버에서 즉시 무효화한다.

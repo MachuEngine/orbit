@@ -1,0 +1,27 @@
+# scripts/check.sh의 check_backend 함수 예시. 템플릿의 같은 이름 함수를 이것으로 바꾼다.
+# 환경 변수 접두사(APP_)와 backend/ 경로는 프로젝트에 맞게 바꾼다.
+
+check_backend() {
+  section "백엔드"
+  if [ ! -d backend ]; then
+    ok "backend/ 없음, 건너뛴다"
+    return
+  fi
+  if ! command -v uv >/dev/null 2>&1; then
+    fail "uv가 설치되어 있지 않다 (https://docs.astral.sh/uv/)"
+    return
+  fi
+  if [ -z "${APP_TEST_DATABASE_URL:-}" ] && [ "${CI:-}" != "true" ]; then
+    echo "  [안내] APP_TEST_DATABASE_URL이 없어 통합 테스트는 건너뛴다."
+    echo "         docker compose -f backend/compose.yml up -d --wait 후"
+    echo "         set -a; source backend/dev.env; set +a 로 환경을 맞추면 함께 실행된다."
+  fi
+  run_backend() {
+    local label="$1"; shift
+    if uv run --directory backend "$@"; then ok "$label"; else fail "$label"; fi
+  }
+  run_backend "ruff check" ruff check --no-fix .
+  run_backend "ruff format --check" ruff format --check .
+  run_backend "mypy" mypy
+  run_backend "pytest" pytest
+}

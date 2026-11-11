@@ -1,0 +1,24 @@
+# backend/compose.yml 예시: 개발용 PostgreSQL.
+# 사용: docker compose -f backend/compose.yml up -d --wait
+# 포트는 다른 프로젝트와 겹치지 않는 값을 고르고 127.0.0.1에만 연다.
+# pgvector가 필요 없으면 이미지를 postgres:<버전>으로 바꾼다.
+services:
+  postgres:
+    image: pgvector/pgvector:<버전>
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: postgres
+      # 아래 기본값은 로컬 개발 전용 값이다. 운영·공유 환경에서는 환경 변수로 반드시 바꾼다.
+      POSTGRES_PASSWORD: ${APP_PG_SUPERUSER_PASSWORD:-app_dev_superuser_only}
+      APP_OWNER_PASSWORD: ${APP_OWNER_PASSWORD:-app_dev_owner_only}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:-app_dev_user_only}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      # 처음 볼륨을 만들 때만 실행된다. 역할 SQL을 바꿨으면 down -v 후 다시 올린다.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

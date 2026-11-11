@@ -1,0 +1,25 @@
+"""backend/src/app/core/config.py 예시. 환경 변수 접두사는 `APP_`이다.
+
+비밀 값(DB 비밀번호가 든 URL, API 키)에는 기본값을 두지 않는다.
+- `APP_DATABASE_URL`: 앱 런타임용. 앱 역할(소유자 아님)로 접속한다.
+- `APP_MIGRATION_DATABASE_URL`: 마이그레이션용. 소유자 역할로 접속한다. 앱 프로세스에는 주지 않는다.
+- `APP_ENV`: 기본값은 `prod`다. 개발 전용 기능은 `dev`에서만 켠다.
+"""
+
+from typing import Literal
+
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="APP_", extra="ignore")
+
+    database_url: SecretStr
+    migration_database_url: SecretStr | None = None
+    env: Literal["dev", "prod"] = "prod"
+
+
+def get_settings() -> Settings:
+    """환경 변수에서 설정을 읽는다. 필수 값이 없으면 ValidationError가 난다."""
+    return Settings()

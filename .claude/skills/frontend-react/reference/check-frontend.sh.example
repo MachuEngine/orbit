@@ -1,0 +1,29 @@
+# scripts/check.sh의 check_frontend 함수 예시. 템플릿의 같은 이름 함수를 이것으로 바꾼다.
+
+check_frontend() {
+  section "프론트엔드"
+  if [ ! -d frontend ]; then
+    ok "frontend/ 없음, 건너뛴다"
+    return
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    fail "npm이 설치되어 있지 않다 (package.json engines의 Node 버전 이상)"
+    return
+  fi
+  # package-lock.json 기준으로 정확히 설치한다. node_modules가 lock보다 새로우면 건너뛴다.
+  if [ ! -d frontend/node_modules ] || [ frontend/package-lock.json -nt frontend/node_modules/.package-lock.json ]; then
+    if ! npm ci --prefix frontend; then
+      fail "npm ci"
+      return
+    fi
+  fi
+  run_frontend() {
+    local label="$1"; shift
+    if npm --prefix frontend run "$@"; then ok "$label"; else fail "$label"; fi
+  }
+  run_frontend "eslint" lint
+  run_frontend "prettier --check" format:check
+  run_frontend "tsc --noEmit" typecheck
+  # vitest는 기본이 감시 모드라 --run으로 한 번만 실행한다.
+  if npm --prefix frontend test -- --run; then ok "vitest"; else fail "vitest"; fi
+}

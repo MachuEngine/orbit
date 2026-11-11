@@ -1,0 +1,42 @@
+{
+  "name": "app-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=<Node 버전>"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "react": "<버전>",
+    "react-dom": "<버전>",
+    "zod": "<버전>"
+  },
+  "devDependencies": {
+    "@eslint/js": "<버전>",
+    "@testing-library/dom": "<버전>",
+    "@testing-library/jest-dom": "<버전>",
+    "@testing-library/react": "<버전>",
+    "@testing-library/user-event": "<버전>",
+    "@types/react": "<버전>",
+    "@types/react-dom": "<버전>",
+    "@vitejs/plugin-react": "<버전>",
+    "eslint": "<버전>",
+    "eslint-plugin-react-hooks": "<버전>",
+    "globals": "<버전>",
+    "jsdom": "<버전>",
+    "prettier": "<버전>",
+    "typescript": "<버전>",
+    "typescript-eslint": "<버전>",
+    "vite": "<버전>",
+    "vitest": "<버전>"
+  }
+}

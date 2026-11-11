@@ -1,0 +1,11 @@
+# .github/workflows/ci.yml의 check job에 합칠 프론트엔드 부분 예시. steps는 "Run checks" 앞에 둔다.
+# Node 버전은 package.json의 engines와 같은 값으로 고정한다(<Node 버전> 자리에 정확한 버전, 예: 22.x.y).
+
+steps:
+  - name: Set up Node
+    uses: actions/setup-node@v4
+    with:
+      node-version: "<Node 버전>"
+      cache: npm
+      cache-dependency-path: frontend/package-lock.json
+  # 의존성 설치는 scripts/check.sh가 npm ci로 한다.
