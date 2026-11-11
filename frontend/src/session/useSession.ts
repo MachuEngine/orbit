@@ -1,0 +1,55 @@
+import { useCallback, useEffect, useState } from "react";
+import { devLogin, getSession, logout } from "../api/endpoints";
+import { isApiError } from "../api/errors";
+
+export type SessionState =
+  | { phase: "loading" }
+  /** `loginFailed`는 방금 한 로그인 시도가 실패했다는 뜻이다. */
+  | { phase: "signed_out"; loginFailed?: boolean }
+  | { phase: "signed_in" }
+  | { phase: "error" };
+
+/** 세션 확인과 임시 로그인·로그아웃. 401이면 로그인이 필요한 상태로 본다. */
+export function useSession() {
+  const [state, setState] = useState<SessionState>({ phase: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    getSession().then(
+      (session) => {
+        if (!cancelled) setState({ phase: session.authenticated ? "signed_in" : "signed_out" });
+      },
+      (error: unknown) => {
+        if (cancelled) return;
+        setState(
+          isApiError(error) && error.kind === "unauthorized"
+            ? { phase: "signed_out" }
+            : { phase: "error" },
+        );
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const signIn = useCallback(async () => {
+    try {
+      await devLogin();
+      setState({ phase: "signed_in" });
+    } catch {
+      // 세션 확인은 됐으므로 서버 연결 오류 화면이 아니라 로그인 화면에서 실패를 알린다.
+      setState({ phase: "signed_out", loginFailed: true });
+    }
+  }, []);
+
+  const signOut = useCallback(async () => {
+    try {
+      await logout();
+    } finally {
+      setState({ phase: "signed_out" });
+    }
+  }, []);
+
+  return { state, signIn, signOut };
+}

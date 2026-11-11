@@ -127,6 +127,7 @@ def main() -> None:
     """
     from zoneinfo import ZoneInfo
 
+    from pydantic import ValidationError
     from sqlalchemy.engine import make_url
 
     from orbit.core.clock import SystemClock
@@ -139,13 +140,20 @@ def main() -> None:
     settings = get_settings()
     if settings.env != "dev" or settings.sim_snapshot_path is None:
         raise SystemExit("개발용 워커는 ORBIT_ENV=dev와 ORBIT_SIM_SNAPSHOT_PATH가 필요하다")
+    try:
+        llm_settings = get_llm_settings()
+    except ValidationError:
+        raise SystemExit(
+            "LLM 설정이 없어 워커를 시작하지 않는다. 필요한 환경 변수: ORBIT_LLM_MODEL_ID, "
+            "ORBIT_LLM_PROVIDER_ORDER, ORBIT_OPENROUTER_API_KEY (backend/dev.env 참고)"
+        ) from None
     url = settings.database_url.get_secret_value()
     clock = SystemClock()
     deps = RunDeps(
         db=AsyncDatabase.from_url(url),
         clock=clock,
         ids=Uuid7Generator(clock),
-        llm=OpenRouterLLM(get_llm_settings()),
+        llm=OpenRouterLLM(llm_settings),
         resolver=SimConnectorResolver(settings.sim_snapshot_path, settings.sim_account_id, clock),
         tz=ZoneInfo(settings.user_timezone),
         checkpoint_conninfo=make_url(url).set(drivername="postgresql").render_as_string(False),

@@ -1,0 +1,211 @@
+.chat {
+  display: flex;
+  flex-direction: column;
+  /* 모바일 주소창·가상 키보드로 높이가 바뀌어도 입력창이 가려지지 않게 동적 뷰포트를 쓴다. */
+  height: 100dvh;
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.chat-logo {
+  width: 6.25rem;
+  height: 2.5rem;
+  color: var(--color-text);
+}
+
+.chat-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: var(--measure-body);
+  margin: 0 auto;
+}
+
+.jump {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-3);
+  box-shadow: var(--shadow-md);
+}
+
+/* 메시지 */
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.messages-empty {
+  padding: var(--space-5) 0;
+  color: var(--color-text-muted);
+}
+
+.message {
+  max-width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-lg);
+}
+
+.message p {
+  white-space: pre-wrap;
+}
+
+.message-user {
+  align-self: flex-end;
+  max-width: 85%;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.message-assistant {
+  align-self: flex-start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+}
+
+.message-unsent {
+  position: relative;
+  margin-bottom: var(--space-4);
+}
+
+.message-meta {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.message-unsent[data-send-status="failed"] .message-meta {
+  color: var(--color-error);
+}
+
+/* 응답을 기다리는 동안 자리를 먼저 잡아 두어, 응답이 들어와도 아래 요소가 튀지 않는다. */
+.message-working {
+  min-height: var(--control-height);
+  display: flex;
+  align-items: center;
+}
+
+.dots {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.dots span {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-text-muted);
+  animation: dot var(--motion-base) var(--ease-standard) infinite alternate;
+}
+
+.dots span:nth-child(2) {
+  animation-delay: var(--motion-fast);
+}
+
+.dots span:nth-child(3) {
+  animation-delay: calc(var(--motion-fast) * 2);
+}
+
+@keyframes dot {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 아래쪽: 상태 + 입력창 */
+.chat-footer {
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-divider);
+}
+
+.status-bar {
+  /* 상태 문구가 생기고 사라져도 입력창 위치가 바뀌지 않도록 한 줄 높이를 잡아 둔다. */
+  min-height: calc(var(--space-5) + var(--space-1));
+}
+
+.status-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.status-line .icon {
+  margin-top: var(--space-1);
+}
+
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--control-height);
+  max-height: 40dvh;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  line-height: var(--leading-heading);
+  resize: none;
+  /* 지원하는 브라우저에서는 입력 길이에 맞춰 높이가 늘어난다. */
+  field-sizing: content;
+}
+
+.composer-input[aria-invalid="true"] {
+  border-color: var(--color-error);
+}
+
+.composer-hint {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.composer-error {
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-error);
+}
+
+.composer-error .btn {
+  margin-top: var(--space-2);
+}

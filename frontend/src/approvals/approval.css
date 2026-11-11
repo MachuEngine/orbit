@@ -1,0 +1,174 @@
+/* 승인 카드. 기준 모양은 docs/brand/preview/palettes.html의 .approval이다. */
+.approval {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.approval:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.approval-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.approval h2 {
+  font-size: var(--text-lg);
+}
+
+.approval-irreversible {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2) 0 var(--space-1);
+  border: 1px solid currentcolor;
+  border-radius: var(--radius-full);
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.approval-lead {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.approval-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-warning);
+  color: var(--color-warning);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.approval-alert .icon {
+  margin-top: var(--space-1);
+}
+
+.approval-details {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.approval-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.approval-row dt {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.approval-row dd {
+  margin: 0;
+}
+
+@media (min-width: 36rem) {
+  .approval-row {
+    grid-template-columns: 6em 1fr;
+    gap: var(--space-2);
+  }
+}
+
+.people {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.person-flagged {
+  padding-left: var(--space-2);
+  border-left: 3px solid var(--color-warning);
+}
+
+.person-tag {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.person-reason {
+  display: block;
+  color: var(--color-warning);
+  font-size: var(--text-sm);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2) 0 var(--space-1);
+  border: 1px solid currentcolor;
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.badge-warning {
+  color: var(--color-warning);
+}
+
+.longtext {
+  white-space: pre-wrap;
+}
+
+.longtext-excerpt {
+  color: var(--color-text-muted);
+}
+
+/* 전체 본문을 펼치면 같은 내용을 두 번 보여 주지 않는다. */
+.longtext-excerpt:has(+ details[open]) {
+  display: none;
+}
+
+.approval summary {
+  display: inline-block;
+  min-height: var(--control-height);
+  padding: var(--space-2) 0;
+  color: var(--color-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.approval-expiry {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* 상태·오류 알림 영역은 비어 있어도 남겨 두고, 비어 있을 때 생기는 간격만 뺀다. */
+.approval-states {
+  font-size: var(--text-sm);
+}
+
+.approval-states:not(:has(p)) {
+  margin-top: calc(-1 * var(--space-3));
+}
+
+.approval-states [role="alert"] {
+  color: var(--color-error);
+}

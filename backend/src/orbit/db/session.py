@@ -12,12 +12,14 @@
   `InvalidRequestError`(closed transaction inside context manager)로 실패한다. 설정 없는 새
   트랜잭션이 열리지 않으므로 데이터가 보이지 않는다(SQLAlchemy 2.1.8에서 확인, 통합 테스트로 고정).
   나눠서 커밋해야 하면 `workspace_session`을 새로 연다.
-- 워크스페이스 없이 DB에 닿는 경로는 `ping()`뿐이다. 새 경로가 필요하면 이름에 `unscoped`를 넣는다.
+- 워크스페이스 없이 DB에 닿는 경로는 `ping()`과 `unscoped_auth_session_lookup()`뿐이다.
+  새 경로가 필요하면 이름에 `unscoped`를 넣는다.
 """
 
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
+from typing import Any
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
@@ -83,6 +85,19 @@ class AsyncDatabase:
         """워크스페이스 없이 DB 연결만 확인한다(헬스체크용). 사용자 데이터를 읽지 않는다."""
         async with self._engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+
+    async def unscoped_auth_session_lookup(self, token_hash: str) -> tuple[Any, ...] | None:
+        """토큰 해시로 세션을 찾는다. 워크스페이스를 모르는 상태에서 쓰는 유일한 조회 경로다.
+
+        `auth_session_lookup` 함수(SECURITY DEFINER, 마이그레이션 0004)만 호출한다. 테이블을 직접
+        읽지 않는다. 반환 열: session_id, workspace_id, csrf_token_hash, expires_at, revoked_at.
+        """
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(text("SELECT * FROM auth_session_lookup(:h)"), {"h": token_hash})
+            ).first()
+            await conn.rollback()
+        return None if row is None else tuple(row)
 
     async def dispose(self) -> None:
         await self._engine.dispose()
