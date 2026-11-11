@@ -50,6 +50,8 @@
 
 완료 조건: Sim이 계약 테스트를 모두 통과하고, 같은 시드·스냅샷이면 결과가 같다.
 
+진행 메모 (2단계-A, 브랜치 `stage-2a/contracts-core`): 계약 타입·오류·Protocol(`orbit/connectors/contracts.py`), Sim 공통부(`sim/world.py`·`calls.py`·`faults.py`·`runtime.py`), 최소 스냅샷 픽스처, 계약 테스트 골격(`tests/contract/conftest.py`)을 만들었다. Sim 메일·캘린더 커넥터와 계약 테스트 본문은 다음 작업(병렬)이다.
+
 ### 3단계. 일정 조회 경로와 평가 기반
 1. 내부 LLM 인터페이스 + OpenRouter 구현 (고정 모델 ID, 토큰·비용 기록)
 2. 읽기 전용 일정 질의 경로: 작업 집합 핸들(E1, M3)과 Tool Calling
