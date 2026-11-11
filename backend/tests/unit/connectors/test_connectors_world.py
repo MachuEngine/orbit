@@ -256,3 +256,14 @@ def test_fork_and_copy_share_the_same_clock(world: SimWorld, fixed_clock: FixedC
     fixed_clock.advance(timedelta(minutes=5))
     assert world.fork(7).clock.now() == world.clock.now()
     assert world.copy().clock.now() == world.clock.now()
+
+
+def test_fork_accepts_own_clock_for_parallel_episodes(
+    world: SimWorld, fixed_clock: FixedClock
+) -> None:
+    own = FixedClock(datetime(2030, 1, 1, tzinfo=UTC))
+    fork = world.fork(3, clock=own)
+    assert fork.clock is own
+    own.advance(timedelta(hours=1))
+    assert world.clock.now() == fixed_clock.now()
+    assert fork.account("acct-alice").events == world.account("acct-alice").events

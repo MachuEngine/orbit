@@ -1,5 +1,6 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,8 +21,11 @@ from orbit.connectors.contracts import (
     ResultUnknown,
     TransientError,
 )
+from orbit.connectors.sim.factory import build_sim_connectors
 from orbit.connectors.sim.faults import FaultPlan
 from orbit.connectors.sim.runtime import SimRuntime
+from orbit.connectors.sim.world import SimWorld
+from orbit.core.clock import FixedClock
 
 
 def plan(*rules: dict[str, Any]) -> FaultPlan:
@@ -254,7 +258,7 @@ def test_bind_rejects_unknown_tool_for_dedicated_runtime() -> None:
         SimRuntime(plan({"tool": "send_draft", "error": "transient"})).bind(CALENDAR_TOOLS)
 
 
-def test_shared_runtime_binds_both_and_check_bound_finds_orphans() -> None:
+def test_shared_runtime_binds_both_and_seal_finds_orphans() -> None:
     rt = SimRuntime(
         plan(
             {"tool": "create_event", "error": "transient"},
@@ -264,36 +268,81 @@ def test_shared_runtime_binds_both_and_check_bound_finds_orphans() -> None:
     )
     rt.bind(CALENDAR_TOOLS)  # 메일 규칙이 있어도 바인딩 순서와 무관하게 통과한다
     with pytest.raises(ValueError, match="send_draft"):
-        rt.check_bound()
+        rt.seal()
+    assert not rt.sealed
     rt.bind(MAIL_TOOLS)
-    rt.check_bound()
+    rt.seal()
+    assert rt.sealed
+    with pytest.raises(RuntimeError, match="봉인"):
+        rt.bind(MAIL_TOOLS)
     with pytest.raises(ValueError, match="oops"):
         SimRuntime(plan({"tool": "oops", "error": "transient"}), shared=True).bind(CALENDAR_TOOLS)
 
 
-async def test_shared_fault_plan_matches_account_id_across_mail_and_calendar() -> None:
-    """4단계 대비: 한 FaultPlan이 메일·캘린더 도구를 함께 담고 account_id로 계정을 구분한다."""
-    from pathlib import Path
+async def test_shared_runtime_rejects_run_tool_before_seal() -> None:
+    rt = SimRuntime(shared=True)
+    rt.bind(CALENDAR_TOOLS)
+    with pytest.raises(RuntimeError, match="seal"):
+        await rt.run_tool("get_event", {}, lambda: "ok")
+    rt.seal()
+    assert await rt.run_tool("get_event", {}, lambda: "ok") == "ok"
+    # 전용 런타임은 바인딩 즉시(봉인 없이) 쓸 수 있다.
+    assert await SimRuntime().run_tool("get_event", {}, lambda: "ok") == "ok"
 
-    from orbit.connectors.sim.calendar import SimCalendarConnector
-    from orbit.connectors.sim.mail import SimMailConnector
-    from orbit.connectors.sim.world import SimWorld
-    from orbit.core.clock import FixedClock
 
-    fixture = Path(__file__).resolve().parents[2] / "fixtures" / "sim" / "minimal_world.json"
-    world = SimWorld.load(fixture, FixedClock(datetime(2026, 11, 11, 9, 0, tzinfo=UTC)))
+async def test_match_converts_offsets_to_utc() -> None:
+    kst = timezone(timedelta(hours=9))
     rt = SimRuntime(
+        plan(
+            {
+                "tool": "list_events",
+                "match": {"time_min": datetime(2026, 11, 12, 10, 0, tzinfo=kst)},
+                "error": "not_found",
+            }
+        )
+    )
+    with pytest.raises(NotFound):
+        await rt.run_tool(
+            "list_events", {"time_min": datetime(2026, 11, 12, 1, 0, tzinfo=UTC)}, lambda: "ok"
+        )
+
+
+def _world() -> SimWorld:
+    fixture = Path(__file__).resolve().parents[2] / "fixtures" / "sim" / "minimal_world.json"
+    return SimWorld.load(fixture, FixedClock(datetime(2026, 11, 11, 9, 0, tzinfo=UTC)))
+
+
+def test_factory_rejects_rule_belonging_to_no_connector() -> None:
+    with pytest.raises(ValueError, match="get_evnt"):
+        build_sim_connectors(
+            _world(), ["acct-alice"], plan({"tool": "get_evnt", "error": "transient"})
+        )
+    # 계정이 하나도 없으면 어떤 규칙도 적용될 수 없다.
+    with pytest.raises(ValueError, match="get_event"):
+        build_sim_connectors(_world(), [], plan({"tool": "get_event", "error": "transient"}))
+
+
+async def test_factory_injects_faults_per_account_across_mail_and_calendar() -> None:
+    """4단계 대비: 한 FaultPlan이 메일·캘린더 도구를 함께 담고 account_id로 계정을 구분한다."""
+    conns = build_sim_connectors(
+        _world(),
+        ["acct-alice", "acct-bob"],
         plan(
             {"tool": "get_message", "match": {"account_id": "acct-bob"}, "error": "transient"},
             {"tool": "get_event", "match": {"account_id": "acct-bob"}, "error": "transient"},
         ),
-        shared=True,
     )
-    alice_mail = SimMailConnector(world, "acct-alice", rt)
-    bob_mail = SimMailConnector(world, "acct-bob", rt)
-    alice_cal = SimCalendarConnector(world, "acct-alice", rt)
-    rt.check_bound()
-    assert (await alice_mail.get_message("msg-a-001")).id == "msg-a-001"
+    assert conns.runtime.sealed
+    assert (await conns.mail["acct-alice"].get_message("msg-a-001")).id == "msg-a-001"
     with pytest.raises(TransientError):
-        await bob_mail.get_message("msg-b-001")
-    assert (await alice_cal.get_event("cal-alice-main", "evalice001")).id == "evalice001"
+        await conns.mail["acct-bob"].get_message("msg-b-001")
+    with pytest.raises(TransientError):
+        await conns.calendar["acct-bob"].get_event("cal-bob-main", "evbob00001")
+    cal = conns.calendar["acct-alice"]
+    assert (await cal.get_event("cal-alice-main", "evalice001")).id == "evalice001"
+    assert [r.tool for r in conns.calls.records] == [
+        "get_message",
+        "get_message",
+        "get_event",
+        "get_event",
+    ]

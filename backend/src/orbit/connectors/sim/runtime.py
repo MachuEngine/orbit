@@ -25,6 +25,9 @@ class SimRuntime:
       `bind` 시점에는 규칙의 `tool`이 계약 전체(캘린더 ∪ 메일) 도구 이름이 아니면 `ValueError`다.
       바인딩 순서와 무관하게 하려고 개별 `bind`는 이 느슨한 검사만 하고, 모든 커넥터를 만든 뒤
       `check_bound()`를 부르면 어느 커넥터에도 속하지 않는 규칙을 `ValueError`로 알린다.
+      공유 런타임은 `seal()`로 봉인하기 전에는 `run_tool`을 거절하고(`RuntimeError`), 봉인 뒤에는
+      `bind`를 거절한다. `seal()`이 `check_bound()`를 수행하므로 검사 누락으로 규칙이 조용히
+      무시될 수 없다. 직접 만들지 말고 `build_sim_connectors`(sim/factory.py)를 쓴다.
     """
 
     def __init__(
@@ -34,9 +37,21 @@ class SimRuntime:
         self.calls = CallLog()
         self.shared = shared
         self._bound: set[str] = set()
+        self._sealed = False
+
+    @property
+    def sealed(self) -> bool:
+        return self._sealed
+
+    def seal(self) -> None:
+        """공유 런타임: `check_bound()`를 수행하고 봉인한다. 봉인 전에는 `run_tool`을 쓸 수 없다."""
+        self.check_bound()
+        self._sealed = True
 
     def bind(self, tools: frozenset[str]) -> None:
         """커넥터가 제공하는 도구 이름을 등록하고 규칙의 `tool`을 검증한다."""
+        if self._sealed:
+            raise RuntimeError("봉인된 런타임에는 커넥터를 더 바인딩할 수 없다")
         allowed = (CALENDAR_TOOLS | MAIL_TOOLS) if self.shared else tools
         for rule in self.faults.rules:
             if rule.tool not in allowed:
@@ -88,6 +103,8 @@ class SimRuntime:
         - `account_id`가 있으면 `FaultPlan`의 `match`에서 `account_id` 키로 비교할 수 있다
           (호출 기록의 인자에는 넣지 않는다). 런타임을 공유하는 커넥터를 계정별로 구분한다.
         """
+        if self.shared and not self._sealed:
+            raise RuntimeError("공유 런타임은 seal() 뒤에 써야 한다(build_sim_connectors 사용)")
         match_args = args if account_id is None else {**args, "account_id": account_id}
         rule = self.faults.check(tool, match_args)
         if rule is not None and rule.error != "result_unknown":
