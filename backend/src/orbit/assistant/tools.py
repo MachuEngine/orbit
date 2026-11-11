@@ -7,6 +7,7 @@
 """
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import Any
@@ -36,6 +37,8 @@ SUBMIT_ANSWER = "submit_answer"
 EXTERNAL_OPEN = "<external_content>"
 EXTERNAL_CLOSE = "</external_content>"
 MAX_EXTERNAL_CHARS = 4000
+MAX_FIELD_CHARS = 200  # 제목·이름·장소 같은 짧은 외부 문자열 필드의 상한
+_MARKER_START = re.compile(r"<(\s*/?\s*external_content)", re.IGNORECASE)
 MAX_SEARCH_RESULTS = 20
 DEFAULT_SEARCH_RESULTS = 10
 
@@ -148,11 +151,14 @@ def wrap_external(text: str) -> tuple[str, bool]:
     """본문을 데이터 표지로 감싼다. 상한을 넘으면 자르고 True를 함께 돌려준다."""
     truncated = len(text) > MAX_EXTERNAL_CHARS
     body = text[:MAX_EXTERNAL_CHARS]
-    # 본문 안의 표지 문자열로 표지를 일찍 닫지 못하게 한다.
-    body = body.replace("<external_content", "&lt;external_content").replace(
-        "</external_content", "&lt;/external_content"
-    )
+    # 본문 안의 표지 문자열(대소문자·공백 변형 포함)로 표지를 일찍 닫지 못하게 한다.
+    body = _MARKER_START.sub(r"&lt;\1", body)
     return f"{EXTERNAL_OPEN}{body}{EXTERNAL_CLOSE}", truncated
+
+
+def _short(text: str | None) -> str | None:
+    """짧은 외부 문자열 필드에 길이 상한을 건다."""
+    return None if text is None else text[:MAX_FIELD_CHARS]
 
 
 def _parse_aware(value: object) -> datetime:
@@ -170,7 +176,7 @@ def _parse_aware(value: object) -> datetime:
 def _person(p: Address | Attendee | None) -> dict[str, str | None] | None:
     if p is None:
         return None
-    return {"name": p.name, "email": p.email}
+    return {"name": _short(p.name), "email": _short(p.email)}
 
 
 def _error_kind(exc: Exception) -> str:
@@ -226,7 +232,7 @@ class ReadOnlyTools:
             if not isinstance(arguments, dict):
                 raise ToolInputError("invalid_arguments")
             return ToolOutcome(_dump(await handler(arguments)))
-        except (ToolInputError, UnknownHandleError, ConnectorError, ValueError, TypeError) as exc:
+        except (ToolInputError, UnknownHandleError, ConnectorError) as exc:
             return ToolOutcome(_dump({"error": _error_kind(exc)}), is_error=True)
 
     # ------------------------------------------------------------ 캘린더
@@ -241,11 +247,11 @@ class ReadOnlyTools:
             start, end = self._local(event.start), self._local(event.end)
         return {
             "handle": self.workset.event_handle(event.calendar_id, event.id),
-            "title": event.title,
+            "title": _short(event.title),
             "start": start,
             "end": end,
             "all_day": event.all_day,
-            "location": event.location,
+            "location": _short(event.location),
             "attendees": [_person(a) for a in event.attendees],
             "organizer": _person(event.organizer),
             "status": event.status,
@@ -301,7 +307,7 @@ class ReadOnlyTools:
             "messages": [
                 {
                     "handle": self.workset.message_handle(m.id),
-                    "subject": m.subject,
+                    "subject": _short(m.subject),
                     "from": _person(m.from_),
                     "date": self._local(m.sent_at),
                     "has_attachment": m.has_attachment,
@@ -319,7 +325,7 @@ class ReadOnlyTools:
         body, truncated = wrap_external(message.body_text)
         return {
             "handle": self.workset.message_handle(message.id),
-            "subject": message.subject,
+            "subject": _short(message.subject),
             "from": _person(message.from_),
             "to": [_person(a) for a in message.to],
             "cc": [_person(a) for a in message.cc],

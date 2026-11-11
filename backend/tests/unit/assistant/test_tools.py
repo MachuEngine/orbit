@@ -1,5 +1,8 @@
 import json
+import re
 from typing import Any
+
+import pytest
 
 from orbit.assistant.tools import (
     MAX_EXTERNAL_CHARS,
@@ -122,6 +125,51 @@ async def test_get_event_without_description_is_wrapped_and_not_truncated(
     out = await call(tools, "get_event", handle="E2")
     assert out["description"] == "<external_content></external_content>"
     assert out["description_truncated"] is False
+
+
+def test_closing_marker_variants_are_neutralized() -> None:
+    for variant in (
+        "</external_content>",
+        "</ EXTERNAL_content >",
+        "< / External_Content>",
+        "<EXTERNAL_CONTENT",
+    ):
+        wrapped, _ = wrap_external(f"앞 {variant} 뒤")
+        inner = wrapped[len("<external_content>") : -len("</external_content>")]
+        assert not re.search(r"<\s*/?\s*external_content", inner, re.IGNORECASE), variant
+
+
+async def test_short_fields_are_capped(make_connectors: Any) -> None:
+    from orbit.connectors.sim.factory import build_sim_connectors
+    from orbit.connectors.sim.world import SimWorld
+    from orbit.core.clock import FixedClock
+
+    from .conftest import ACCOUNT, NOW, TZ, world_snapshot
+
+    data = world_snapshot()
+    acct = data["accounts"][ACCOUNT]
+    acct["events"][0].update(title="제" * 500, location="장" * 500)
+    acct["events"][0]["organizer"]["name"] = "주" * 500
+    acct["events"][0]["attendees"][0]["name"] = "참" * 500
+    acct["messages"][0].update(subject="목" * 500)
+    acct["messages"][0]["from"]["name"] = "발" * 500
+    conn = build_sim_connectors(SimWorld.load(data, FixedClock(NOW)), [ACCOUNT])
+    t = ReadOnlyTools(calendar=conn.calendar[ACCOUNT], mail=conn.mail[ACCOUNT], tz=TZ)
+    ev = (await call(t, "list_events", **DAY))["events"][0]
+    assert len(ev["title"]) == len(ev["location"]) == 200
+    assert len(ev["organizer"]["name"]) == len(ev["attendees"][0]["name"]) == 200
+    found = (await call(t, "search_mail", query="from:bob@example.org"))["messages"]
+    assert any(len(m["subject"]) == 200 and len(m["from"]["name"]) == 200 for m in found)
+
+
+async def test_unexpected_errors_are_not_swallowed(tools: ReadOnlyTools) -> None:
+    class Boom:
+        async def list_calendars(self) -> Any:
+            raise ValueError("버그")
+
+    t = ReadOnlyTools(calendar=Boom(), mail=tools._mail, tz=tools._tz)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        await t.execute("list_events", DAY)
 
 
 def test_wrap_external_limit() -> None:

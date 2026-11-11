@@ -16,6 +16,7 @@ from orbit.llm.interface import LLM
 from orbit.llm.types import LLMRequest, Message
 
 DEFAULT_MAX_TURNS = 20
+TEMPERATURE = 0.0  # 재현성을 위해 명시한다(설정 지문에 반영)
 
 
 class ReadOnlyAssistant:
@@ -48,6 +49,20 @@ class ReadOnlyAssistant:
         if self._on_step is not None:
             self._on_step()
 
+    async def _final_text(self, messages: list[Message]) -> str:
+        self._step()
+        response = await self._llm.complete(
+            LLMRequest(
+                messages=tuple(messages),
+                purpose="system_under_test",
+                tools=(),
+                tool_choice="none",
+                temperature=TEMPERATURE,
+                metadata=dict(self._metadata),
+            )
+        )
+        return response.text or ""
+
     async def run(self, utterances: Sequence[str]) -> tuple[str, dict[str, Any] | None]:
         """`(final_text, structured)`를 돌려준다.
 
@@ -68,6 +83,7 @@ class ReadOnlyAssistant:
                     purpose="system_under_test",
                     tools=specs,
                     tool_choice="auto",
+                    temperature=TEMPERATURE,
                     metadata=dict(self._metadata),
                 )
             )
@@ -84,5 +100,8 @@ class ReadOnlyAssistant:
                     structured = outcome.structured  # 같은 응답의 마지막 유효 제출이 남는다
                 messages.append(Message(role="tool", content=outcome.content, tool_call_id=call.id))
             if structured is not None:
-                return response.text or "", structured
+                text = (response.text or "").strip()
+                if not text:  # 제출 응답에 문장이 없으면 도구 없이 한 번 더 받는다
+                    text = await self._final_text(messages)
+                return text, structured
         return "", None

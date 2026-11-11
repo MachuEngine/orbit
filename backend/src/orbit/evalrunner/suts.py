@@ -5,7 +5,7 @@ from collections.abc import Callable
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from orbit.assistant.agent import ReadOnlyAssistant
+from orbit.assistant.agent import TEMPERATURE, ReadOnlyAssistant
 from orbit.assistant.prompt import PROMPT_VERSION
 from orbit.connectors.contracts import ConnectorError
 from orbit.evalrunner.episode import Episode, EpisodeOutput, SystemUnderTest
@@ -96,7 +96,7 @@ class AssistantV0SUT:
     """
 
     name = "assistant_v0"
-    version = f"0+{PROMPT_VERSION}"
+    version = f"0+{PROMPT_VERSION}+temp{TEMPERATURE:g}"
     TIME_ZONE = "Asia/Seoul"
 
     def __init__(self, *, max_turns: int = 20) -> None:

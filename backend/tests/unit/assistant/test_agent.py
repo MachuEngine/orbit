@@ -131,6 +131,46 @@ def test_system_prompt_content() -> None:
     prompt = build_system_prompt(NOW, TZ)
     assert "2026-11-11T09:00:00+09:00" in prompt and "수요일" in prompt
     assert "2026-11-09" in prompt  # 이번 주 월요일
-    for needle in ("월요일", "cancelled", "external_content", "submit_answer", "event_set"):
+    for needle in (
+        "월요일",
+        "취소된 일정을 이미 제외",
+        "모든 텍스트 필드",
+        "external_content",
+        "submit_answer",
+        "event_set",
+    ):
         assert needle in prompt
     assert PROMPT_VERSION
+
+
+async def test_submit_without_text_asks_final_text_without_tools(make_connectors: Any) -> None:
+    script: list[dict[str, Any]] = [
+        {"tool_calls": [tc("list_events", **DAY)]},
+        {"structured": {"kind": "event", "event": "E2"}},  # 텍스트 없음
+        {"text": "점심입니다."},
+    ]
+    steps: list[str] = []
+    assistant, llm = make_assistant(make_connectors, script, steps=steps)
+    text, structured = await assistant.run(QUESTION)
+    assert text == "점심입니다." and structured is not None
+    last = llm.requests[-1]
+    assert last.tools == () and last.tool_choice == "none"
+    assert len(steps) == 3 + 2  # LLM 3회 + 도구 호출 2회 (최종 답 호출 포함)
+
+
+async def test_text_with_submit_needs_no_extra_call(make_connectors: Any) -> None:
+    assistant, llm = make_assistant(make_connectors, good_script())
+    await assistant.run(QUESTION)
+    assert len(llm.requests) == 2
+
+
+async def test_requests_pin_temperature_zero(make_connectors: Any) -> None:
+    assistant, llm = make_assistant(make_connectors, good_script())
+    await assistant.run(QUESTION)
+    assert all(r.temperature == 0 for r in llm.requests)
+
+
+def test_sut_version_reflects_prompt_and_temperature() -> None:
+    from orbit.evalrunner.suts import create_sut
+
+    assert create_sut("assistant_v0").version == f"0+{PROMPT_VERSION}+temp0"
