@@ -78,6 +78,36 @@ def test_scenario_in_both_splits_rejected(ds_copy: Path) -> None:
         load_dataset(ds_copy)
 
 
+def test_cluster_violations_rejected(ds_copy: Path) -> None:
+    def split_cluster(rows: list[dict[str, Any]]) -> None:
+        first = rows[0]
+        other = next(r for r in rows if r["scenario_id"] != first["scenario_id"])
+        other["cluster_id"] = first["cluster_id"]
+        other["split"] = "test" if first["split"] == "dev" else "dev"
+
+    _rewrite_tasks(ds_copy, split_cluster)
+    with pytest.raises(DatasetError, match="묶음 .* dev와 test에 모두"):
+        load_dataset(ds_copy)
+
+
+def test_evidence_sharing_tasks_must_share_cluster(ds_copy: Path) -> None:
+    def mutate(rows: list[dict[str, Any]]) -> None:
+        rows[0]["cluster_id"] = "c-forged"
+
+    _rewrite_tasks(ds_copy, mutate)
+    with pytest.raises(DatasetError, match="서로 다른 묶음"):
+        load_dataset(ds_copy)
+
+
+def test_cluster_id_is_required(ds_copy: Path) -> None:
+    def mutate(rows: list[dict[str, Any]]) -> None:
+        del rows[0]["cluster_id"]
+
+    _rewrite_tasks(ds_copy, mutate)
+    with pytest.raises(DatasetError, match="cluster_id"):
+        load_dataset(ds_copy)
+
+
 def test_duplicate_task_id_and_count_mismatch_rejected(ds_copy: Path) -> None:
     def mutate(rows: list[dict[str, Any]]) -> None:
         rows[1]["task_id"] = rows[0]["task_id"]

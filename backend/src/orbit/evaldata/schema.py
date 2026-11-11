@@ -108,6 +108,7 @@ class Gold(_Model):
 class Task(_Model):
     task_id: str
     scenario_id: str
+    cluster_id: str  # 근거를 공유하는 과제 묶음. 같은 묶음은 같은 split이다
     split: Literal["dev", "test"]
     as_of_time: AwareDatetime
     account_id: str

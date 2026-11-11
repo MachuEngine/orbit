@@ -1,6 +1,7 @@
 """생성기 산출물의 결정성, 규모, 분할, 합성 데이터 규칙."""
 
 import json
+import random
 import re
 from collections import Counter
 from datetime import date, datetime
@@ -9,9 +10,10 @@ from typing import Any
 
 from orbit.connectors.sim.world import SimWorld
 from orbit.core.clock import FixedClock
-from orbit.evaldata.dataset import Dataset, load_dataset
+from orbit.evaldata.dataset import Dataset, evidence_clusters, load_dataset
 from orbit.evaldata.generate import generate
 from orbit.evaldata.schema import Gold, Manifest, Task
+from orbit.evaldata.timeline import Builder
 from orbit.evaldata.timeutil import KST, kor_when, time_forms
 from orbit.evaldata.worldmodel import load_world_model
 
@@ -95,6 +97,7 @@ def test_task_contract_fields() -> None:
     assert list(Task.model_fields) == [
         "task_id",
         "scenario_id",
+        "cluster_id",
         "split",
         "as_of_time",
         "account_id",
@@ -304,6 +307,10 @@ def test_manifest_notes_state_limits(dataset_dir: Path) -> None:
     assert "test 봉인은 러너의 확인 플래그 수준" in notes
     assert "공개 저장소" in notes
     assert "선택되지 않은 시나리오" in notes
+    assert "배경 아티팩트" in notes
+    assert "도구 사용을 잰다" in notes
+    assert "12:00인 일정은 오후" in notes
+    assert re.search(r"분할 묶음.*\d+개\(dev \d+, test \d+\)", notes)
 
 
 def test_synthetic_data_only(dataset_dir: Path) -> None:
@@ -351,3 +358,75 @@ def test_manifest_json_is_valid(dataset_dir: Path) -> None:
         "counts",
         "notes",
     }
+
+
+def _rng() -> random.Random:
+    return random.Random(0)  # noqa: S311  재현성용 의사난수
+
+
+def test_cluster_ids(dataset_dir: Path) -> None:
+    ds = load_dataset(dataset_dir)
+    groups = evidence_clusters(ds.tasks)
+    assert len(groups) >= 6
+    for group in groups:
+        expected = "c-" + min(t.task_id for t in group)
+        assert {t.cluster_id for t in group} == {expected}
+        assert len({t.split for t in group}) == 1
+    # 묶음 수는 manifest.notes와 같다
+    m = re.search(r"(\d+)개\(dev (\d+), test (\d+)\)", ds.manifest.notes)
+    assert m is not None
+    per = Counter(g[0].split for g in groups)
+    assert (int(m[1]), int(m[2]), int(m[3])) == (len(groups), per["dev"], per["test"])
+
+
+def test_balance_per_split(dataset_dir: Path) -> None:
+    ds = load_dataset(dataset_dir)
+    for split in ("dev", "test"):
+        mine = [t for t in ds.tasks if t.split == split]
+        assert any(int(t.difficulty.get("homonym", 0)) == 1 for t in mine)
+        assert any(
+            t.tags[0] == "type:reschedule" and int(t.difficulty["schedule_changes"]) >= 2
+            for t in mine
+        )
+
+
+def test_person_split_matches_day_owner(dataset_dir: Path) -> None:
+    """비배경 인물이 참석하는 모든 일정의 날짜 소유 split은 그 인물의 split과 같다."""
+    ds = load_dataset(dataset_dir)
+    wm = load_world_model(WORLD_MODEL)
+    b = Builder(wm, _rng(), SEED)
+    by_email = {p.email: p for p in wm.people}
+    user_of = {u.account_id: u.key for u in wm.users}
+    checked = 0
+    for acct_id, acct in ds.world_dict["accounts"].items():
+        for e in acct["events"]:
+            day = datetime.fromisoformat(e["start"]).astimezone(KST).date()
+            for a in e["attendees"]:
+                person = by_email.get(a["email"])
+                if person is None or person.split == "background":
+                    continue
+                assert b.day_owner(user_of[acct_id], day) == person.split, e["id"]
+                checked += 1
+    assert checked > 0
+
+
+def test_day_owner_is_seeded_and_balanced() -> None:
+    wm = load_world_model(WORLD_MODEL)
+    a = Builder(wm, _rng(), 1)
+    b = Builder(wm, _rng(), 1)
+    c = Builder(wm, _rng(), 2)
+    owners = [[x.day_owner(u.key, d) for u in wm.users for d in x.days] for x in (a, b, c)]
+    assert owners[0] == owners[1] != owners[2]
+    dev = sum(1 for o in owners[0] if o == "dev")
+    assert 0.5 <= dev / len(owners[0]) <= 0.7
+
+
+def test_relative_date_expressions_cover_both_splits(dataset_dir: Path) -> None:
+    """강제는 아니다. 어느 split에 어떤 표현이 없는지 알 수 있게 실패 메시지로 드러낸다."""
+    ds = load_dataset(dataset_dir)
+    seen = {
+        (t.split, str(t.difficulty["relative_date"]).split(" ")[0])
+        for t in ds.tasks
+        if "relative_date" in t.difficulty
+    }
+    assert {s for s, _ in seen} == {"dev", "test"}

@@ -37,8 +37,9 @@ SCENARIO_FOR = {
 
 
 class Builder:
-    def __init__(self, wm: WorldModel, rng: random.Random) -> None:
+    def __init__(self, wm: WorldModel, rng: random.Random, seed: int = 0) -> None:
         self.wm = wm
+        self.resched_made: dict[str, int] = {}
         self.rng = rng
         self.events: list[EventRec] = []
         self.mails: list[MailRec] = []
@@ -59,6 +60,7 @@ class Builder:
             if (first + timedelta(days=i)).weekday() < 5
         ]
         self._day_index = {d: i for i, d in enumerate(self.days)}
+        self._day_owner = self._plan_days(seed)
         # 아직 과제가 쓰지 않은 칸을 우선 고르기 위한 기록 (정답 지문 중복을 줄인다)
         self.used_days: set[tuple[str, date]] = set()
         self.used_cells: set[tuple[str, int]] = set()
@@ -68,11 +70,27 @@ class Builder:
 
     def day_owner(self, user: str, day: date) -> str | None:
         """(사용자, 날짜)의 소유 split. 계획 범위 밖의 날은 None이다."""
-        i = self._day_index.get(day)
-        if i is None:
-            return None
-        u = [x.key for x in self.wm.users].index(user)
-        return "test" if (i + 2 * u) % 5 in (1, 3) else "dev"
+        return self._day_owner.get((user, day))
+
+    def _plan_days(self, seed: int) -> dict[tuple[str, date], str]:
+        """시드로 (사용자, 날짜)의 소유 split을 정한다. 주마다 test가 약 40%가 되게 섞는다.
+
+        주 안에 두 split이 모두 있어야 주 단위 칸(프로젝트 주)의 시나리오를 둘 다 만들 수 있다.
+        """
+        dev_ratio = self.wm.meta.dev_ratio
+        owner: dict[tuple[str, date], str] = {}
+        for user in self.wm.users:
+            rng = random.Random(f"{seed}:days:{user.key}")  # noqa: S311  재현성용 의사난수
+            weeks: dict[date, list[date]] = {}
+            for d in self.days:
+                weeks.setdefault(week_start(d), []).append(d)
+            for week_days in weeks.values():
+                shuffled = list(week_days)
+                rng.shuffle(shuffled)
+                n_test = max(1, round(len(shuffled) * (1 - dev_ratio)))
+                for i, d in enumerate(shuffled):
+                    owner[(user.key, d)] = "test" if i < n_test else "dev"
+        return owner
 
     def week_index(self, day: date) -> int:
         return (week_start(day) - week_start(self.wm.window.asof_start)).days // 7
@@ -432,7 +450,9 @@ def scn_reschedule(b: Builder, user: User, split: str) -> list[TaskSpec]:
     if not final_days:
         return []
     final_day = b.rng.choice(final_days)
-    changes = b.rng.choice([1, 1, 2])
+    # 변경 2회 과제가 양쪽 split에 모두 생기도록 split마다 두 번째 시나리오부터 3개에 1개꼴로 둔다.
+    made = b.resched_made.get(split, 0)
+    changes = 2 if made % 3 == 1 else 1
     dur = b.rng.choice([30, 60, 90])
     final = b.free_start(user.key, final_day, dur)
     if final is None:
@@ -510,6 +530,7 @@ def scn_reschedule(b: Builder, user: User, split: str) -> list[TaskSpec]:
         b.touch(ev, reply.sent_at)
     ev.start, ev.end = final, final + timedelta(minutes=dur)
     ev.changes = changes
+    b.resched_made[split] = made + 1
     return [TaskSpec("reschedule", sid, user.key, asof, {"event_id": ev.id})]
 
 

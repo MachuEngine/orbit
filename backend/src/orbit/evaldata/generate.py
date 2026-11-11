@@ -22,7 +22,12 @@ from pathlib import Path
 from typing import Any
 
 from orbit.evaldata import timeline
-from orbit.evaldata.dataset import Dataset, write_dataset
+from orbit.evaldata.dataset import (
+    Dataset,
+    cluster_id_of,
+    evidence_clusters,
+    write_dataset,
+)
 from orbit.evaldata.gold import TaskParts, build_parts
 from orbit.evaldata.records import EventRec, MailRec, TaskSpec
 from orbit.evaldata.schema import Counts, Manifest, SplitRatio, Task, Turn
@@ -50,7 +55,9 @@ NOTES = (
     "dev와 test는 정답 근거(일정·메일)를 공유하지 않는다. "
     "test 봉인은 러너의 확인 플래그 수준이며 공개 저장소라 정답은 누구나 읽을 수 있다. "
     "world의 일정 수에는 과제로 선택되지 않은 시나리오(목표 수 초과·무효로 버려진 것)의 "
-    "일정과 반복 일정이 포함된다."
+    "일정과 반복 일정이 포함된다. 반복 일정 안내 메일은 배경 아티팩트로 근거 태그에서 제외한다. "
+    "취소 제외·reschedule 과제는 캘린더가 최신 상태라 메일 이해보다 도구 사용을 잰다. "
+    "시작이 12:00인 일정은 오후로 분류한다."
 )
 
 
@@ -80,10 +87,6 @@ def git_sha(cwd: Path | None = None) -> str:
 
 def _rng(seed: int, label: str) -> random.Random:
     return random.Random(f"{seed}:{label}")  # noqa: S311  재현성용 의사난수
-
-
-def _refs(tags: list[str]) -> set[str]:
-    return {t for t in tags if t.startswith(("ref_event:", "ref_message:"))}
 
 
 def _fingerprint(spec: TaskSpec, parts: TaskParts) -> str:
@@ -128,7 +131,7 @@ def _evaluate(
         if fingerprint in seen:
             dropped["정답 지문 중복"] += 1
             continue
-        refs = _refs(parts.tags)
+        refs = {t for t in parts.tags if t.startswith(("ref_event:", "ref_message:"))}
         if any(owner.get(r, spec.split) != spec.split for r in refs):
             dropped["다른 split과 근거 공유"] += 1
             continue
@@ -163,29 +166,6 @@ def _build_specs(b: Builder, seed: int) -> tuple[list[TaskSpec], Counter[str]]:
         if all(n <= 0 for per in need.values() for n in per.values()):
             return [spec for key in sorted(kept) for spec, _ in kept[key]], dropped
     raise RuntimeError(f"목표 과제 수를 채우지 못했다: {need}")
-
-
-def _components(tasks: list[Task]) -> list[list[Task]]:
-    """근거(ref_event·ref_message)를 하나라도 공유하는 과제를 묶는다 (union-find)."""
-    parent = list(range(len(tasks)))
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    first: dict[str, int] = {}
-    for i, t in enumerate(tasks):
-        for ref in _refs(t.tags):
-            if ref in first:
-                parent[find(i)] = find(first[ref])
-            else:
-                first[ref] = i
-    groups: dict[int, list[Task]] = {}
-    for i, t in enumerate(tasks):
-        groups.setdefault(find(i), []).append(t)
-    return list(groups.values())
 
 
 def _contact(c: tuple[str, str]) -> dict[str, str]:
@@ -258,8 +238,21 @@ def _world_json(b: Builder, seed: int) -> dict[str, Any]:
     return {"schema_version": 1, "seed": seed, "accounts": accounts}
 
 
+def _check_balance(tasks: list[Task]) -> None:
+    """동명이인 과제와 변경 2회 이상 reschedule 과제가 dev와 test에 각각 1건 이상이어야 한다."""
+    for split in SPLITS:
+        mine = [t for t in tasks if t.split == split]
+        if not any(int(t.difficulty.get("homonym", 0)) == 1 for t in mine):
+            raise RuntimeError(f"{split}에 동명이인 과제가 없다")
+        if not any(
+            t.tags[0] == "type:reschedule" and int(t.difficulty["schedule_changes"]) >= 2
+            for t in mine
+        ):
+            raise RuntimeError(f"{split}에 일정 변경 2회 이상 reschedule 과제가 없다")
+
+
 def build_dataset(wm: WorldModel, seed: int, sha: str) -> tuple[Dataset, BuildStats]:
-    b = Builder(wm, _rng(seed, "timeline"))
+    b = Builder(wm, _rng(seed, "timeline"), seed)
     b.add_recurring()
     specs, dropped = _build_specs(b, seed)
     timeline.add_noise(b)
@@ -276,6 +269,7 @@ def build_dataset(wm: WorldModel, seed: int, sha: str) -> tuple[Dataset, BuildSt
             Task(
                 task_id=f"{TASK_PREFIX[spec.kind]}-{counters[spec.kind]:03d}",
                 scenario_id=spec.scenario_id,
+                cluster_id="",
                 split=spec.split,
                 as_of_time=spec.as_of,
                 account_id=wm.user(spec.user).account_id,
@@ -287,13 +281,17 @@ def build_dataset(wm: WorldModel, seed: int, sha: str) -> tuple[Dataset, BuildSt
         )
     tasks.sort(key=lambda t: t.task_id)
 
-    groups = _components(tasks)
+    groups = evidence_clusters(tasks)
     for group in groups:
         if len({t.split for t in group}) > 1:
             ids = ", ".join(t.task_id for t in group)
             raise RuntimeError(f"근거를 공유하는 과제 묶음이 dev와 test에 걸쳐 있다: {ids}")
     if len(groups) < 2 or {t.split for t in tasks} != set(SPLITS):
         raise RuntimeError("과제 묶음이 하나로 뭉쳐 dev/test 분할이 불가능하다")
+    cluster_of = {t.task_id: cluster_id_of(g) for g in groups for t in g}
+    tasks = [t.model_copy(update={"cluster_id": cluster_of[t.task_id]}) for t in tasks]
+    _check_balance(tasks)
+    clusters_per_split = Counter(g[0].split for g in groups)
 
     stats = BuildStats(dropped, len(groups))
     for t in tasks:
@@ -311,7 +309,10 @@ def build_dataset(wm: WorldModel, seed: int, sha: str) -> tuple[Dataset, BuildSt
         counts=Counts(
             users=len(wm.users), messages=len(b.mails), events=len(b.events), tasks=len(tasks)
         ),
-        notes=f"{NOTES} 분할 묶음(근거 공유 과제 연결 요소)은 {len(groups)}개다.",
+        notes=(
+            f"{NOTES} 분할 묶음(근거 공유 과제 연결 요소)은 {len(groups)}개"
+            f"(dev {clusters_per_split['dev']}, test {clusters_per_split['test']})다."
+        ),
     )
     return Dataset(manifest, world, tasks), stats
 

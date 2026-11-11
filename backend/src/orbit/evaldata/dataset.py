@@ -34,6 +34,38 @@ class Dataset:
     review: dict[str, ReviewEntry] = field(default_factory=dict)
 
 
+def evidence_refs(task: Task) -> set[str]:
+    return {t for t in task.tags if t.startswith(("ref_event:", "ref_message:"))}
+
+
+def evidence_clusters(tasks: list[Task]) -> list[list[Task]]:
+    """근거(ref_event·ref_message)를 하나라도 공유하는 과제를 묶는다 (union-find)."""
+    parent = list(range(len(tasks)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    first: dict[str, int] = {}
+    for i, t in enumerate(tasks):
+        for ref in evidence_refs(t):
+            if ref in first:
+                parent[find(i)] = find(first[ref])
+            else:
+                first[ref] = i
+    groups: dict[int, list[Task]] = {}
+    for i, t in enumerate(tasks):
+        groups.setdefault(find(i), []).append(t)
+    return list(groups.values())
+
+
+def cluster_id_of(group: list[Task]) -> str:
+    """묶음 안 최소 task_id로 정하는 결정적 ID."""
+    return "c-" + min(t.task_id for t in group)
+
+
 def describe_error(exc: ValidationError | json.JSONDecodeError) -> str:
     """입력값을 싣지 않고 오류 위치와 유형만 적는다(정답이나 본문이 있을 수 있다)."""
     if isinstance(exc, json.JSONDecodeError):
@@ -143,6 +175,16 @@ def validate_dataset(
     for sid, splits in sorted(scenario_splits.items()):
         if len(splits) > 1:
             problems.append(f"시나리오 {sid}의 과제가 dev와 test에 모두 있다")
+    by_cluster: dict[str, set[str]] = {}
+    for t in tasks:
+        by_cluster.setdefault(t.cluster_id, set()).add(t.split)
+    for cid, splits in sorted(by_cluster.items()):
+        if len(splits) > 1:
+            problems.append(f"묶음 {cid}의 과제가 dev와 test에 모두 있다")
+    for group in evidence_clusters(tasks):
+        if len({t.cluster_id for t in group}) > 1:
+            names = ", ".join(sorted(t.task_id for t in group))
+            problems.append(f"근거를 공유하는 과제가 서로 다른 묶음에 있다: {names}")
     messages = sum(len(a.get("messages", [])) for a in accounts.values())
     events = sum(len(a.get("events", [])) for a in accounts.values())
     expected = (len(accounts), messages, events, len(tasks))
