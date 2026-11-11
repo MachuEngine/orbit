@@ -33,7 +33,7 @@ import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -84,6 +84,23 @@ class _ThreadSnapshot(BaseModel):
     message_ids: list[str]
 
 
+class DraftLogEntry(BaseModel):
+    """초안 생애 기록 한 건. `diff`가 생성·발송·삭제를 추론 없이 정확히 짝짓는 데 쓴다.
+
+    `draft`는 그 시점의 초안 내용이다(생성 후 발송·삭제되면 `drafts`에서 사라지므로 따로 담는다).
+    `sent_message_id`는 `kind == "sent"`일 때 발송으로 생긴 메시지 ID다.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    seq: int
+    kind: Literal["created", "sent", "deleted"]
+    draft_id: str
+    thread_id: str
+    draft: Draft
+    sent_message_id: str | None = None
+
+
 class _AccountSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -93,6 +110,7 @@ class _AccountSnapshot(BaseModel):
     messages: list[MailMessage] = []
     threads: list[_ThreadSnapshot] = []
     drafts: list[Draft] = []
+    draft_log: list[DraftLogEntry] = []  # 스냅샷 v1에 없으면 빈 기록
 
 
 class _WorldSnapshot(BaseModel):
@@ -113,6 +131,26 @@ class AccountState:
     messages: dict[str, MailMessage] = field(default_factory=dict)
     threads: dict[str, list[str]] = field(default_factory=dict)  # thread_id -> message_ids
     drafts: dict[str, Draft] = field(default_factory=dict)
+    draft_log: list[DraftLogEntry] = field(default_factory=list)
+
+    def record_draft(
+        self,
+        kind: Literal["created", "sent", "deleted"],
+        draft: Draft,
+        *,
+        sent_message_id: str | None = None,
+    ) -> None:
+        """초안 생애 기록을 남긴다. Sim 커넥터가 초안 상태를 바꿀 때 함께 호출한다."""
+        self.draft_log.append(
+            DraftLogEntry(
+                seq=len(self.draft_log) + 1,
+                kind=kind,
+                draft_id=draft.draft_id,
+                thread_id=draft.thread_id,
+                draft=draft,
+                sent_message_id=sent_message_id,
+            )
+        )
 
     @classmethod
     def from_snapshot(cls, snap: _AccountSnapshot, label: str) -> AccountState:
@@ -149,13 +187,17 @@ class AccountState:
             if draft.spec is None:
                 raise SnapshotError(f"{label}: 초안 {draft.draft_id}에 spec이 없다")
             state.drafts[draft.draft_id] = draft
+        seqs = [e.seq for e in snap.draft_log]
+        if seqs != list(range(1, len(seqs) + 1)):
+            raise SnapshotError(f"{label}: draft_log의 seq는 1부터 연속이어야 한다")
+        state.draft_log = list(snap.draft_log)
         return state
 
     def to_snapshot(self) -> dict[str, Any]:
         def dump(m: BaseModel) -> dict[str, Any]:
             return m.model_dump(mode="json", by_alias=True)
 
-        return {
+        snapshot: dict[str, Any] = {
             "email": self.email,
             "calendars": [dump(c) for c in self.calendars.values()],
             "events": [dump(e) for evs in self.events.values() for e in evs.values()],
@@ -165,6 +207,9 @@ class AccountState:
             ],
             "drafts": [dump(d) for d in self.drafts.values()],
         }
+        if self.draft_log:  # 기록이 없으면 v1 스냅샷과 같은 모양을 유지한다
+            snapshot["draft_log"] = [dump(e) for e in self.draft_log]
+        return snapshot
 
 
 class SimWorld:
@@ -387,6 +432,14 @@ def _diff_events(
                 updated.append(EventUpdated(aid, cal_id, ev_id, changes))
 
 
+def _same_content(draft: Draft, msg: MailMessage) -> bool:
+    return (
+        draft.spec is not None
+        and draft.spec.subject == msg.subject
+        and draft.spec.body_text == msg.body_text
+    )
+
+
 def _diff_mail(
     aid: str,
     b: AccountState,
@@ -408,39 +461,57 @@ def _diff_mail(
                 d.pop("thread_id")
         return d
 
-    def clean_draft(draft: Draft, *, existing_threads: dict[str, list[str]]) -> dict[str, Any]:
+    def clean_draft(draft: Draft) -> dict[str, Any]:
         d = _dump(draft)
         if norm.ignore_generated_ids:
             d.pop("draft_id")
             d.pop("message_id")
-            if draft.thread_id not in existing_threads:
+            if draft.thread_id not in b.threads:
                 d.pop("thread_id")
         return d
 
-    for did, draft in sorted(b.drafts.items()):
-        if did in a.drafts:
+    # 1) 초안 생애 기록: after에만 있는 항목은 추론 없이 정확히 짝지어진다.
+    before_seqs = {e.seq for e in b.draft_log}
+    logged_created: set[str] = set()
+    logged_ended: set[str] = set()
+    for entry in a.draft_log:
+        if entry.seq in before_seqs:
             continue
-        sent_msg = next(
-            (
-                m
-                for mid, m in sorted(new_messages.items())
-                if mid not in claimed and "SENT" in m.labels and m.thread_id == draft.thread_id
-            ),
-            None,
+        if entry.kind == "created":
+            logged_created.add(entry.draft_id)
+            drafts_created.append(DraftCreated(aid, clean_draft(entry.draft)))
+            continue
+        logged_ended.add(entry.draft_id)
+        if entry.kind == "deleted":
+            drafts_deleted.append(DraftDeleted(aid, clean_draft(entry.draft)))
+            continue
+        sent = a.messages.get(entry.sent_message_id or "")
+        if sent is not None:
+            claimed.add(sent.id)
+        drafts_sent.append(
+            DraftSent(aid, clean_draft(entry.draft), clean_message(sent) if sent else {})
         )
-        if sent_msg is not None:
-            claimed.add(sent_msg.id)
-            drafts_sent.append(
-                DraftSent(
-                    aid, clean_draft(draft, existing_threads=b.threads), clean_message(sent_msg)
-                )
-            )
+
+    # 2) 기록에 없는 변경(기록 없이 상태를 직접 바꾼 경우)은 기존 추론을 쓴다.
+    for did, draft in sorted(b.drafts.items()):
+        if did in a.drafts or did in logged_ended:
+            continue
+        candidates = [
+            m
+            for mid, m in sorted(new_messages.items())
+            if mid not in claimed and "SENT" in m.labels and m.thread_id == draft.thread_id
+        ]
+        if len(candidates) > 1:  # 같은 스레드에 후보가 여럿이면 제목·본문까지 비교한다
+            candidates = [m for m in candidates if _same_content(draft, m)]
+        if candidates:
+            claimed.add(candidates[0].id)
+            drafts_sent.append(DraftSent(aid, clean_draft(draft), clean_message(candidates[0])))
         else:
-            drafts_deleted.append(DraftDeleted(aid, clean_draft(draft, existing_threads=b.threads)))
+            drafts_deleted.append(DraftDeleted(aid, clean_draft(draft)))
 
     for did, draft in a.drafts.items():
-        if did not in b.drafts:
-            drafts_created.append(DraftCreated(aid, clean_draft(draft, existing_threads=b.threads)))
+        if did not in b.drafts and did not in logged_created:
+            drafts_created.append(DraftCreated(aid, clean_draft(draft)))
 
     for mid, msg in new_messages.items():
         if mid not in claimed:
