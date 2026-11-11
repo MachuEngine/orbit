@@ -1,0 +1,301 @@
+# Orbit 평가 세계 모델 v0 (합성 데이터). 실제 인물·주소·회사가 아니다.
+# 모든 도메인은 example.com / example.org / .test 이다.
+#
+# 한계: 두 사용자는 모두 Asia/Seoul이지만 v0 날짜 처리는 UTC 기준이다(Sim 캘린더의 종일 일정이
+# UTC 날짜 경계를 쓴다). 그래서 모든 일정은 평일 09:00~18:00(KST)에 두고 종일 일정은 만들지 않는다.
+
+[meta]
+dataset_name = "orbit-eval"
+dataset_version = "v0"
+dev_ratio = 0.6   # D2-3 미결정. 임시값
+test_ratio = 0.4
+
+[window]
+mail_start = 2026-10-19
+snapshot = 2026-11-09T08:00:00+09:00   # 메일함·캘린더 스냅샷 시각 (모든 메일은 이 시각 이전)
+event_start = 2026-10-19
+event_end = 2026-11-27
+asof_start = 2026-11-09                # 과제의 as_of_time 날짜 범위
+asof_end = 2026-11-13
+
+[targets]
+day_schedule = 10
+free_slot = 10
+reschedule = 12
+cancelled_exclusion = 8
+project_week = 10
+person_next = 10
+newsletters_per_user = 20
+spam_per_user = 8
+notices_per_user = 6
+deadlines = 14
+followups = 12
+
+[[users]]
+key = "seoyeon"
+account_id = "acct-seoyeon"
+name = "한서연"
+email = "seoyeon.han@example.com"
+role = "프로덕트 매니저"
+calendar_id = "cal-seoyeon-main"
+calendar_name = "한서연 기본"
+
+[[users]]
+key = "jihoon"
+account_id = "acct-jihoon"
+name = "오지훈"
+email = "jihoon.oh@example.com"
+role = "백엔드 개발 리드"
+calendar_id = "cal-jihoon-main"
+calendar_name = "오지훈 기본"
+
+# ---- 인물 20명. 김민수는 동명이인(회사·주소가 다르다) ----
+
+[[people]]
+key = "kim_minsu_hanbit"
+name = "김민수"
+email = "minsu.kim@hanbitlab.example.org"
+company = "한빛랩"
+role = "디자이너"
+works_with = ["seoyeon"]
+
+[[people]]
+key = "kim_minsu_nuri"
+name = "김민수"
+email = "minsu.kim@nuri.example.com"
+company = "누리컴퍼니"
+role = "개발자"
+works_with = ["seoyeon"]
+
+[[people]]
+key = "park_jisu"
+name = "박지수"
+email = "jisu.park@hanbitlab.example.org"
+company = "한빛랩"
+role = "기획자"
+works_with = ["seoyeon"]
+
+[[people]]
+key = "lee_doyun"
+name = "이도윤"
+email = "doyun.lee@nuri.example.com"
+company = "누리컴퍼니"
+role = "마케터"
+works_with = ["seoyeon"]
+
+[[people]]
+key = "choi_yuna"
+name = "최유나"
+email = "yuna.choi@hanbitlab.example.org"
+company = "한빛랩"
+role = "데이터 분석가"
+works_with = ["seoyeon"]
+
+[[people]]
+key = "jung_hajun"
+name = "정하준"
+email = "hajun.jung@example.org"
+company = "프리랜서"
+role = "카피라이터"
+works_with = ["seoyeon"]
+
+[[people]]
+key = "kang_seoah"
+name = "강서아"
+email = "seoah.kang@bluepine.example.com"
+company = "블루파인"
+role = "영업 담당"
+works_with = ["seoyeon"]
+
+[[people]]
+key = "yoon_taeho"
+name = "윤태호"
+email = "taeho.yoon@bluepine.example.com"
+company = "블루파인"
+role = "고객 성공 매니저"
+works_with = ["seoyeon"]
+
+[[people]]
+key = "han_sora"
+name = "한소라"
+email = "sora.han@example.org"
+company = "프리랜서"
+role = "UX 리서처"
+works_with = ["seoyeon", "jihoon"]
+
+[[people]]
+key = "im_nayeon"
+name = "임나연"
+email = "nayeon.im@bluepine.example.com"
+company = "블루파인"
+role = "법무 담당"
+works_with = ["seoyeon"]
+
+[[people]]
+key = "song_minjae"
+name = "송민재"
+email = "minjae.song@datafield.test"
+company = "데이터필드"
+role = "데이터 엔지니어"
+works_with = ["jihoon"]
+
+[[people]]
+key = "jo_eunbi"
+name = "조은비"
+email = "eunbi.jo@datafield.test"
+company = "데이터필드"
+role = "SRE"
+works_with = ["jihoon"]
+
+[[people]]
+key = "bae_junseo"
+name = "배준서"
+email = "junseo.bae@datafield.test"
+company = "데이터필드"
+role = "백엔드 개발자"
+works_with = ["jihoon"]
+
+[[people]]
+key = "kwon_haeun"
+name = "권하은"
+email = "haeun.kwon@datafield.test"
+company = "데이터필드"
+role = "QA 엔지니어"
+works_with = ["jihoon", "seoyeon"]
+
+[[people]]
+key = "hong_yerin"
+name = "홍예린"
+email = "yerin.hong@cloudnest.example.com"
+company = "클라우드네스트"
+role = "솔루션 아키텍트"
+works_with = ["jihoon"]
+
+[[people]]
+key = "seo_jaemin"
+name = "서재민"
+email = "jaemin.seo@cloudnest.example.com"
+company = "클라우드네스트"
+role = "기술 지원"
+works_with = ["jihoon"]
+
+[[people]]
+key = "nam_dohyun"
+name = "남도현"
+email = "dohyun.nam@cloudnest.example.com"
+company = "클라우드네스트"
+role = "보안 담당"
+works_with = ["jihoon"]
+
+[[people]]
+key = "shin_jiho"
+name = "신지호"
+email = "jiho.shin@cloudnest.example.com"
+company = "클라우드네스트"
+role = "프로젝트 매니저"
+works_with = ["jihoon"]
+
+[[people]]
+key = "ahn_chaewon"
+name = "안채원"
+email = "chaewon.ahn@example.org"
+company = "프리랜서"
+role = "기술 문서 작성자"
+works_with = ["jihoon"]
+
+[[people]]
+key = "moon_siwoo"
+name = "문시우"
+email = "siwoo.moon@example.org"
+company = "프리랜서"
+role = "모바일 개발자"
+works_with = ["jihoon"]
+
+# ---- 프로젝트 4개 ----
+
+[[projects]]
+key = "alpha"
+name = "알파"
+user = "seoyeon"
+members = ["kim_minsu_hanbit", "park_jisu", "choi_yuna", "han_sora"]
+topics = ["결제 모듈", "온보딩 화면", "검색 개선", "알림 정책", "권한 체계", "사용자 인터뷰"]
+
+[[projects]]
+key = "beta"
+name = "베타"
+user = "seoyeon"
+members = ["kim_minsu_nuri", "lee_doyun", "kang_seoah", "yoon_taeho", "im_nayeon"]
+topics = ["가격 정책", "파트너 연동", "계약 검토", "고객 대시보드", "출시 캠페인", "지표 정의"]
+
+[[projects]]
+key = "gamma"
+name = "감마"
+user = "jihoon"
+members = ["song_minjae", "jo_eunbi", "bae_junseo", "kwon_haeun"]
+topics = ["로그 수집", "배치 파이프라인", "장애 대응", "캐시 전략", "테스트 자동화", "스키마 변경"]
+
+[[projects]]
+key = "delta"
+name = "델타"
+user = "jihoon"
+members = ["hong_yerin", "seo_jaemin", "nam_dohyun", "shin_jiho", "ahn_chaewon"]
+topics = ["인프라 이전", "접근 제어", "비용 점검", "API 문서", "모니터링", "릴리스 절차"]
+
+# ---- 반복 일정 (격주) ----
+
+[[recurring]]
+user = "seoyeon"
+title = "프로덕트 주간 회의"
+weekday = 0
+start = "10:00"
+duration_min = 60
+every_weeks = 2
+attendees = ["jung_hajun"]
+location = "회의실 3층 A"
+
+[[recurring]]
+user = "jihoon"
+title = "백엔드 스탠드업"
+weekday = 2
+start = "09:30"
+duration_min = 30
+every_weeks = 2
+attendees = ["moon_siwoo"]
+location = "화상 회의"
+
+# ---- 노이즈 발신자 ----
+
+[[noise_senders]]
+name = "테크레터"
+email = "letter@techletter.example.com"
+kind = "newsletter"
+
+[[noise_senders]]
+name = "프로덕트 위클리"
+email = "hello@productweekly.example.org"
+kind = "newsletter"
+
+[[noise_senders]]
+name = "개발자 모임 소식"
+email = "news@devmeetup.example.org"
+kind = "newsletter"
+
+[[noise_senders]]
+name = "특가 알림"
+email = "deals@promo.test"
+kind = "spam"
+
+[[noise_senders]]
+name = "이벤트 당첨 안내"
+email = "winner@prize.test"
+kind = "spam"
+
+[[noise_senders]]
+name = "계정 보안 알림"
+email = "no-reply@accounts.example.com"
+kind = "notice"
+
+[[noise_senders]]
+name = "월간 사용 내역"
+email = "billing@cloudnest.example.com"
+kind = "notice"
