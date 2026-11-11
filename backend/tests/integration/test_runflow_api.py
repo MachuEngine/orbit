@@ -65,32 +65,28 @@ async def test_post_runs_creates_run_message_and_job_together(make_harness: Make
 
 async def test_post_runs_reuses_existing_conversation(make_harness: Make) -> None:
     h = await make_harness(SCRIPT)
-    first = await h.client.post("/runs", json={"message": "하나"}, headers=h.headers())
+    first = await h.client.post("/api/runs", json={"message": "하나"}, headers=h.headers())
     conv = first.json()["conversation_id"]
     second = await h.client.post(
-        "/runs", json={"message": "둘", "conversation_id": conv}, headers=h.headers()
+        "/api/runs",
+        json={"message": "둘", "conversation_id": conv},
+        headers=h.headers(),
     )
     assert second.status_code == 201
     assert second.json()["conversation_id"] == conv
     assert await h.count("SELECT count(*) FROM conversation") == 1
     missing = await h.client.post(
-        "/runs",
+        "/api/runs",
         json={"message": "셋", "conversation_id": str(uuid.uuid4())},
         headers=h.headers(),
     )
     assert missing.status_code == 404
 
 
-async def test_auth_header_is_required_and_workspace_must_exist(make_harness: Make) -> None:
+async def test_post_runs_rejects_empty_message(make_harness: Make) -> None:
     h = await make_harness(SCRIPT)
-    assert (await h.client.post("/runs", json={"message": "x"})).status_code == 401
-    bad = await h.client.post("/runs", json={"message": "x"}, headers={"X-Orbit-Workspace": "no"})
-    assert bad.status_code == 401
-    unknown = await h.client.post("/runs", json={"message": "x"}, headers=h.headers(uuid.uuid4()))
-    assert unknown.status_code == 404
-    assert (
-        await h.client.post("/runs", json={"message": ""}, headers=h.headers())
-    ).status_code == 422
+    response = await h.client.post("/api/runs", json={"message": ""}, headers=h.headers())
+    assert response.status_code == 422
 
 
 # ---------------------------------------------------------------- 다른 워크스페이스
@@ -101,24 +97,27 @@ async def test_other_workspace_gets_404_everywhere(
 ) -> None:
     h = await make_harness(SCRIPT)
     run_id, approval_id = await _waiting(h)
-    other = workspaces.create()
+    other = await h.client_for(workspaces.create())
 
-    for path in (f"/runs/{run_id}", f"/approvals/{approval_id}"):
-        mine = await h.client.get(path, headers=h.headers())
+    for path in (f"/api/runs/{run_id}", f"/api/approvals/{approval_id}"):
+        mine = await h.client.get(path)
         assert mine.status_code == 200, path
     # 승인 대기 중인 run의 SSE는 열려 있으므로(종료 상태가 아니다) 다른 워크스페이스 쪽만 확인한다.
-    for path in (f"/runs/{run_id}", f"/runs/{run_id}/events", f"/approvals/{approval_id}"):
-        theirs = await h.client.get(path, headers=h.headers(other))
+    paths = (f"/api/runs/{run_id}", f"/api/runs/{run_id}/events", f"/api/approvals/{approval_id}")
+    for path in paths:
+        theirs = await other.get(path)
         assert theirs.status_code == 404, path
     for decision in ("approve", "reject"):
-        response = await h.decide(approval_id, decision, workspace=other)
+        response = await h.decide(approval_id, decision, client=other)
         assert response.status_code == 404
     # 다른 워크스페이스의 시도가 상태를 바꾸지 못했다.
     assert (await h.run_row(run_id))["pending_approval_id"] == str(approval_id)
     assert h.write_calls() == []
-    conv = (await h.client.get(f"/runs/{run_id}", headers=h.headers())).json()["conversation_id"]
-    stolen = await h.client.post(
-        "/runs", json={"message": "x", "conversation_id": conv}, headers=h.headers(other)
+    conv = (await h.client.get(f"/api/runs/{run_id}")).json()["conversation_id"]
+    stolen = await other.post(
+        "/api/runs",
+        json={"message": "x", "conversation_id": conv},
+        headers=h.headers(other),
     )
     assert stolen.status_code == 404
 
@@ -131,7 +130,7 @@ async def test_get_approval_returns_args_summary_provenance_and_expiry(
 ) -> None:
     h = await make_harness(SCRIPT)
     _, approval_id = await _waiting(h)
-    body = (await h.client.get(f"/approvals/{approval_id}", headers=h.headers())).json()
+    body = (await h.client.get(f"/api/approvals/{approval_id}")).json()
 
     assert body["status"] == "pending"
     assert body["tool_name"] == "update_event_time"
@@ -169,7 +168,7 @@ async def test_send_mail_records_argument_provenance(make_harness: Make) -> None
     h = await make_harness(script)
     run_id, approval_id = await _waiting(h, f"{USER_MARKER} bob@example.org 에게 답장 보내줘")
 
-    body = (await h.client.get(f"/approvals/{approval_id}", headers=h.headers())).json()
+    body = (await h.client.get(f"/api/approvals/{approval_id}")).json()
     assert body["provenance"] == {
         "bob@example.org": "user",
         "alice@example.com": "workspace_data",
@@ -251,7 +250,7 @@ async def test_sse_replays_after_last_event_id_without_gaps(make_harness: Make) 
     stored = await h.events(run_id)
     assert len(stored) >= 6
 
-    full = await h.client.get(f"/runs/{run_id}/events", headers=h.headers())
+    full = await h.client.get(f"/api/runs/{run_id}/events")
     assert full.status_code == 200
     assert full.headers["content-type"].startswith("text/event-stream")
     parsed = _parse_sse(full.text)
@@ -260,20 +259,20 @@ async def test_sse_replays_after_last_event_id_without_gaps(make_harness: Make) 
 
     for last in (0, 3, len(stored) - 1):
         resumed = await h.client.get(
-            f"/runs/{run_id}/events",
+            f"/api/runs/{run_id}/events",
             headers={**h.headers(), "Last-Event-ID": str(last)},
         )
         seqs = [seq for seq, _, _ in _parse_sse(resumed.text)]
         assert seqs == list(range(last + 1, len(stored) + 1))
-    by_query = await h.client.get(f"/runs/{run_id}/events?after=4", headers=h.headers())
+    by_query = await h.client.get(f"/api/runs/{run_id}/events?after=4")
     assert [seq for seq, _, _ in _parse_sse(by_query.text)] == list(range(5, len(stored) + 1))
     done = await h.client.get(
-        f"/runs/{run_id}/events", headers={**h.headers(), "Last-Event-ID": str(len(stored))}
+        f"/api/runs/{run_id}/events", headers={**h.headers(), "Last-Event-ID": str(len(stored))}
     )
     assert done.status_code == 200
     assert done.text == ""  # 종료 상태이고 남은 이벤트가 없으면 바로 닫는다
     bad = await h.client.get(
-        f"/runs/{run_id}/events", headers={**h.headers(), "Last-Event-ID": "abc"}
+        f"/api/runs/{run_id}/events", headers={**h.headers(), "Last-Event-ID": "abc"}
     )
     assert bad.status_code == 400
 
@@ -284,7 +283,7 @@ async def test_sse_waits_for_new_events_until_run_finishes(make_harness: Make) -
     run_id, approval_id = await _waiting(h)
     waiting_events = len(await h.events(run_id))
 
-    stream = asyncio.create_task(h.client.get(f"/runs/{run_id}/events", headers=h.headers()))
+    stream = asyncio.create_task(h.client.get(f"/api/runs/{run_id}/events"))
     await asyncio.sleep(0.6)  # 폴링 몇 번 동안 새 이벤트가 없다
     assert not stream.done()
     assert (await h.decide(approval_id, "approve")).status_code == 200

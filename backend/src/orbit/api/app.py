@@ -1,4 +1,4 @@
-"""FastAPI 앱: 헬스체크와 Run·승인 API.
+"""FastAPI 앱: 헬스체크와 Run·승인 API. 모든 경로는 `/api` 아래에 있다.
 
 로그인(6단계) 전에는 `ORBIT_ENV=dev`에서만 시작한다(`orbit.api.auth`). 시계·ID 생성기는 주입할 수
 있고(테스트), 기본은 시스템 시계다.
@@ -8,9 +8,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import APIRouter, FastAPI, Request, Response, status
 
-from orbit.api.auth import ensure_dev_environment
+from orbit.api.auth import build_auth_router, ensure_dev_environment
 from orbit.api.runs import router as runs_router
 from orbit.core.clock import Clock, SystemClock
 from orbit.core.config import Settings, get_settings
@@ -47,9 +47,11 @@ def create_app(
     app.state.settings = resolved
     app.state.clock = resolved_clock
     app.state.ids = resolved_ids
-    app.include_router(runs_router)
+    api = APIRouter(prefix="/api")
+    api.include_router(build_auth_router(resolved))
+    api.include_router(runs_router)
 
-    @app.get("/healthz")
+    @api.get("/healthz")
     async def healthz(request: Request, response: Response) -> dict[str, str]:
         """워크스페이스 없이 DB 연결만 확인한다."""
         db: AsyncDatabase = request.app.state.db
@@ -61,4 +63,5 @@ def create_app(
             return {"status": "unavailable"}
         return {"status": "ok"}
 
+    app.include_router(api)
     return app
