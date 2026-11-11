@@ -20,7 +20,7 @@ from orbit.llm.openrouter import OpenRouterLLM
 from orbit.llm.types import ForcedToolChoice, LLMRequest, Message, ToolCall, ToolSpec
 
 MODEL = "openai/gpt-4o-2024-08-06"
-KEY = "sk-or-test-SYNTHETIC-KEY-123"
+KEY = "sk-or-test-SYNTHETIC-KEY-123"  # gitleaks:allow (합성 테스트 값)
 
 
 def _settings(**over: Any) -> LLMSettings:
