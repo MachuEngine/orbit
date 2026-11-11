@@ -1,13 +1,13 @@
 """통합 테스트 픽스처."""
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from alembic import command
 from sqlalchemy import Engine, create_engine
 
 from integration.support import WorkspaceFactory, alembic_config, require_test_database
-from orbit.db.session import SyncDatabase
+from orbit.db.session import AsyncDatabase, SyncDatabase
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -23,6 +23,13 @@ def sync_db(app_url: str) -> Iterator[SyncDatabase]:
     db = SyncDatabase.from_url(app_url)
     yield db
     db.dispose()
+
+
+@pytest.fixture
+async def async_db(app_url: str) -> AsyncIterator[AsyncDatabase]:
+    db = AsyncDatabase.from_url(app_url)
+    yield db
+    await db.dispose()
 
 
 @pytest.fixture
