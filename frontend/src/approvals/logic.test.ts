@@ -58,8 +58,8 @@ describe("출처 경고", () => {
 
 describe("동작 문구", () => {
   it("실제 동작과 같은 동사를 쓰고 메일 발송만 되돌릴 수 없다고 본다", () => {
-    expect(actionLabel("send_mail")?.confirm).toBe("보내기");
-    expect(actionLabel("update_event_time")?.confirm).toBe("일정 변경");
+    expect(actionLabel("send_mail")?.confirm).toBe("메일 보내기");
+    expect(actionLabel("update_event_time")?.confirm).toBe("일정 시간 변경");
     expect(actionLabel("unknown_tool")).toBeNull();
     expect(isIrreversible("send_mail")).toBe(true);
     expect(isIrreversible("cancel_event")).toBe(false);

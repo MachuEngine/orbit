@@ -51,6 +51,7 @@ from orbit.runflow.repo import get_approval_by_tool_call, get_tool_call, lock_ru
 from orbit.runflow.state import RunState, validate_state
 from orbit.runflow.store import ActionsStoreAdapter
 from orbit.runflow.summary import approval_summary
+from orbit.runflow.target import build_target
 from orbit.runflow.transcript import Transcript
 from orbit.runflow.write_tools import (
     READ_TOOLS,
@@ -397,6 +398,7 @@ class RunNodes:
                 external_texts=external_texts,
             ),
             "handles": handles,
+            "target": await build_target(action, calendar=calendar, mail=mail),
         }
         async with d.db.workspace_session(ws) as s:
             status = await lock_run(s, ws, run_id)

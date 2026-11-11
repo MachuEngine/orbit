@@ -3,7 +3,11 @@ import { devLogin, getSession, logout } from "../api/endpoints";
 import { isApiError } from "../api/errors";
 
 export type SessionState =
-  { phase: "loading" } | { phase: "signed_out" } | { phase: "signed_in" } | { phase: "error" };
+  | { phase: "loading" }
+  /** `loginFailed`는 방금 한 로그인 시도가 실패했다는 뜻이다. */
+  | { phase: "signed_out"; loginFailed?: boolean }
+  | { phase: "signed_in" }
+  | { phase: "error" };
 
 /** 세션 확인과 임시 로그인·로그아웃. 401이면 로그인이 필요한 상태로 본다. */
 export function useSession() {
@@ -34,7 +38,8 @@ export function useSession() {
       await devLogin();
       setState({ phase: "signed_in" });
     } catch {
-      setState({ phase: "error" });
+      // 세션 확인은 됐으므로 서버 연결 오류 화면이 아니라 로그인 화면에서 실패를 알린다.
+      setState({ phase: "signed_out", loginFailed: true });
     }
   }, []);
 

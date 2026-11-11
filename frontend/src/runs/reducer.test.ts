@@ -47,7 +47,9 @@ describe("runViewReducer", () => {
       state,
     );
     expect(done.pendingApproval).toBeNull();
-    expect(done.results).toEqual([{ approvalId: "ap1", status: "succeeded", errorKind: null }]);
+    expect(done.results).toEqual([
+      { approvalId: "ap1", status: "succeeded", errorKind: null, toolName: "send_mail" },
+    ]);
     expect(done.finished).toBe(true);
     expect(done.lastSeq).toBe(7);
   });
@@ -97,7 +99,7 @@ describe("runViewReducer", () => {
     expect(state.results[0]?.errorKind).toBe("x");
   });
 
-  it("run_started는 메시지를 남기고 run 상태를 비운다", () => {
+  it("run_started는 메시지를 남기고 run 상태를 접수 직후(queued)로 되돌린다", () => {
     const withUser = runViewReducer(initialRunViewState, {
       type: "user_message",
       id: "user-1",
@@ -107,7 +109,7 @@ describe("runViewReducer", () => {
     const next = runViewReducer(running, { type: "run_started" });
     expect(next.messages).toHaveLength(1);
     expect(next.lastSeq).toBe(0);
-    expect(next.status).toBe("idle");
+    expect(next.status).toBe("queued");
   });
 
   it("형태가 다른 이벤트는 스트림 문제로 표시한다", () => {

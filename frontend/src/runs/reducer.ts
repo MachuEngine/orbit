@@ -18,6 +18,8 @@ export interface ExecutionOutcome {
   approvalId: string;
   status: ExecutionStatus;
   errorKind: string | null;
+  /** 승인을 요청할 때 알려 준 동작. 알 수 없으면 null */
+  toolName: string | null;
 }
 
 export interface RunViewState {
@@ -27,6 +29,8 @@ export interface RunViewState {
   messages: ChatMessage[];
   pendingApproval: PendingApproval | null;
   results: ExecutionOutcome[];
+  /** 승인 ID -> 동작 이름. 결과 문구에 같은 동사를 쓰려고 기억해 둔다. */
+  toolByApproval: Record<string, string>;
   /** 서버가 알린 run 오류 종류 */
   error: string | null;
   /** 스트림 자체의 문제(형태가 다른 이벤트 등) */
@@ -47,6 +51,7 @@ export const initialRunViewState: RunViewState = {
   messages: [],
   pendingApproval: null,
   results: [],
+  toolByApproval: {},
   error: null,
   streamProblem: null,
   finished: false,
@@ -56,7 +61,8 @@ export function runViewReducer(state: RunViewState, action: RunViewAction): RunV
   switch (action.type) {
     case "run_started":
       // 새 run을 시작한다. 대화 메시지는 유지하고 run 단위 상태만 비운다.
-      return { ...initialRunViewState, messages: state.messages };
+      // run은 접수된 직후(`queued`)이므로 첫 이벤트가 오기 전에도 "작업 중"으로 보인다.
+      return { ...initialRunViewState, status: "queued", messages: state.messages };
     case "user_message":
       return {
         ...state,
@@ -101,6 +107,10 @@ function applyEvent(state: RunViewState, event: RunEvent): RunViewState {
           toolName: event.payload.tool_name,
           summary: event.payload.summary,
         },
+        toolByApproval: {
+          ...next.toolByApproval,
+          [event.payload.approval_id]: event.payload.tool_name,
+        },
       };
     case "execution_result": {
       const { approval_id: approvalId, status, error_kind: errorKind } = event.payload;
@@ -108,7 +118,15 @@ function applyEvent(state: RunViewState, event: RunEvent): RunViewState {
         ...next,
         pendingApproval:
           next.pendingApproval?.approvalId === approvalId ? null : next.pendingApproval,
-        results: [...next.results, { approvalId, status, errorKind: errorKind ?? null }],
+        results: [
+          ...next.results,
+          {
+            approvalId,
+            status,
+            errorKind: errorKind ?? null,
+            toolName: next.toolByApproval[approvalId] ?? null,
+          },
+        ],
       };
     }
   }
