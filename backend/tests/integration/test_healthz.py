@@ -6,7 +6,7 @@ from orbit.core.config import Settings
 
 
 async def _get_healthz(url: str) -> httpx.Response:
-    app = create_app(Settings(database_url=SecretStr(url)))
+    app = create_app(Settings(database_url=SecretStr(url), env="dev"))
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

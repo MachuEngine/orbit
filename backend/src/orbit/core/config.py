@@ -4,9 +4,13 @@
 - `ORBIT_DATABASE_URL`: 앱 런타임용. `orbit_app` 역할(소유자 아님, NOBYPASSRLS)로 접속한다.
 - `ORBIT_MIGRATION_DATABASE_URL`: 마이그레이션용. `orbit_owner` 역할로 접속한다.
   앱 프로세스에는 설정하지 않는다.
+- `ORBIT_ENV`: `dev`일 때만 임시 인증(`X-Orbit-Workspace` 헤더)이 켜진다(6단계 로그인 전까지).
+  기본값은 `prod`이고, `prod`로는 API 앱이 시작되지 않는다(로그인 구현 전이라 인증 수단이 없다).
+- `ORBIT_SIM_SNAPSHOT_PATH`, `ORBIT_SIM_ACCOUNT_ID`: 개발용 Sim 커넥터가 읽을 합성 스냅샷과 계정.
+- `ORBIT_USER_TIMEZONE`: 비서가 상대 날짜를 계산할 때 쓰는 IANA 시간대.
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -17,6 +21,13 @@ class Settings(BaseSettings):
 
     database_url: SecretStr
     migration_database_url: SecretStr | None = None
+    env: Literal["dev", "prod"] = "prod"
+    llm_model_id: str | None = None  # 설정 지문용. 비어 있으면 지문에 "unset"으로 들어간다
+    sim_snapshot_path: str | None = None
+    sim_account_id: str = "acct-alice"
+    user_timezone: str = "Asia/Seoul"
+    approval_ttl_seconds: float = Field(default=900.0, gt=0)  # D5-5 후보값 15분
+    sse_poll_interval_seconds: float = Field(default=0.25, gt=0)
 
 
 def get_settings() -> Settings:
