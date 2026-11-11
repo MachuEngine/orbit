@@ -78,6 +78,7 @@ class LLMResponse:
     usage: LLMUsage
     cost_usd: float | None  # 알 수 없으면 None. 0.0과 구분한다.
     latency_ms: int
-    model_id: str  # 실제 응답한 모델
+    model_id: str | None  # 실제 응답한 모델. 응답에 없으면 None
     provider: str | None  # 실제 응답한 제공자. 응답에 없으면 None
     retries: int = 0  # 이 호출에서 일어난 재시도 횟수(사용량·지연은 재시도를 합산한 값)
+    cost_incomplete: bool = False  # 비용을 모르는 실패 시도가 섞여 cost_usd가 하한일 수 있음
