@@ -1,2 +1,4 @@
 # 합성 테스트 값(sk-or-test-SYNTHETIC-KEY-123). 실제 키가 아니다. 이후 커밋은 줄 끝 gitleaks:allow로 표시했다.
 3d72fd4dfea0643ee4c7abe96d0160297857e10e:backend/tests/unit/llm/test_openrouter.py:generic-api-key:23
+# 6A Google 로그인 모의 서버의 합성 서명 키(test-signing-key-...). 실제 키가 아니다.
+f012d1d70f8ea5d9b352e027dea327fd69fb2dbd:backend/tests/google_mock.py:generic-api-key:26
