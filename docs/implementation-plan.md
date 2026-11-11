@@ -65,6 +65,8 @@
 
 완료 조건: 같은 설정으로 다시 돌리면 같은 범위의 결과가 나온다. 모델이 고정된다.
 
+진행 메모(3b, 평가 데이터 생성기 v0): `orbit.evaldata`와 `eval/worlds/orbit-v0.toml`, 생성 데이터셋 `eval/datasets/orbit-eval/v0`(과제 60개)를 만들었다. 리뷰 1회차에서 ADR-0010에 맞춰 정답을 구조화된 답(`expected_answer`: event_set·event·event_time·time_slot)으로 바꾸고, 정답 근거(일정·메일)를 공유하는 과제가 dev와 test에 걸치지 않도록 날짜·프로젝트 주·인물을 미리 나눠 시나리오를 만들었다(정답 지문 중복은 제거). 동명이인은 메일 서명의 소속으로 구분한다. 세계 모델은 의존성을 늘리지 않으려고 YAML 대신 TOML(`tomllib`)로 썼다. 사람 검수 전이며 `python -m orbit.evaldata.review export`로 검수표를 만든다. 분할 비율 0.6/0.4는 D2-3 미결정 상태의 임시값이다. 2회차에서 과제에 `cluster_id`(근거 공유 묶음)를 넣고, 날짜 소유를 시드 기반으로 바꿨으며, 동명이인·변경 2회 과제가 dev·test 양쪽에 있는지 생성 단계에서 검사한다. 러너(3c)는 `expected_answer` 기준 채점으로 맞춘 뒤 통합한다.
+
 ### 4단계. Run 실행과 승인 (쓰기 경로)
 1. `run`·`approval`·`execution`·`run_event` 테이블
 2. Procrastinate 워커, 멈춘 작업 복구 주기 작업
