@@ -130,8 +130,10 @@ async def test_request_shape() -> None:
             "name": "list_events",
             "description": "일정 조회",
             "parameters": {"type": "object", "properties": {"day": {"type": "string"}}},
+            "strict": False,
         }
     ]
+    assert body["include"] == ["reasoning.encrypted_content"]
     assert "temperature" not in body  # 기본은 보내지 않는다
 
 
@@ -142,12 +144,8 @@ async def test_temperature_sent_only_when_enabled() -> None:
     assert json.loads(server.requests[0].content)["temperature"] == 0.0
     assert llm.fingerprint_info["temperature_sent"] is True
     off = _llm(Server(), llm_send_temperature=False)
-    assert off.fingerprint_info == {
-        "provider": "openai",
-        "reasoning_effort": None,
-        "temperature_sent": False,
-        "price_source": None,
-    }
+    assert off.fingerprint_info["temperature_sent"] is False
+    assert off.fingerprint_info["tool_strict"] is False
     assert "reasoning" not in off.build_body(_request())
 
 
@@ -376,11 +374,113 @@ def test_build_llm_branches() -> None:
 
 
 def test_llm_config_info_has_no_secrets() -> None:
-    info = llm_config_info(_settings(llm_reasoning_effort="low", **PRICES))
+    info = llm_config_info(
+        _settings(
+            llm_reasoning_effort="low",
+            llm_accepted_response_model_ids=["openai/b-1", "openai/a-1"],
+            **PRICES,
+        )
+    )
     assert info == {
         "provider": "openai",
         "reasoning_effort": "low",
         "temperature_sent": False,
+        "tool_strict": False,
+        "reasoning_items_roundtrip": True,
+        "accepted_response_models": ["openai/a-1", "openai/b-1"],
+        "price_input_per_mtok": 0.10,
+        "price_cached_input_per_mtok": 0.01,
+        "price_output_per_mtok": 0.50,
         "price_source": "test-table",
     }
+    assert (
+        llm_config_info(_settings(llm_reasoning_effort="none"))["reasoning_items_roundtrip"]
+        is False
+    )
     assert KEY not in json.dumps(info)
+
+
+async def test_include_only_when_effort_is_not_none() -> None:
+    for effort, expect in (("none", False), ("low", True), (None, True)):
+        body = _llm(Server(), llm_reasoning_effort=effort).build_body(_request())
+        assert ("include" in body) is expect
+        if expect:
+            assert body["include"] == ["reasoning.encrypted_content"]
+
+
+async def test_reasoning_items_round_trip_in_order() -> None:
+    reasoning = {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "ENC1"}
+    first = _ok_body(
+        output=[
+            reasoning,
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "list_events",
+                "arguments": "{}",
+            },
+        ]
+    )
+    server = Server(_json(200, first), _json(200, _ok_body()))
+    llm = _llm(server, llm_reasoning_effort="low")
+    resp = await llm.complete(_request())
+    assert resp.provider_items == (reasoning,)
+    assistant = Message(
+        role="assistant",
+        content="설명",
+        tool_calls=resp.tool_calls,
+        provider_items=resp.provider_items,
+    )
+    messages = (
+        Message(role="user", content="질문"),
+        assistant,
+        Message(role="tool", content="ok", tool_call_id="call_1"),
+    )
+    await llm.complete(_request(messages=messages))
+    items = json.loads(server.requests[1].content)["input"]
+    assert items == [
+        {"role": "user", "content": "질문"},
+        reasoning,  # 텍스트·함수 호출보다 앞
+        {"role": "assistant", "content": "설명"},
+        {"type": "function_call", "call_id": "call_1", "name": "list_events", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "ok"},
+    ]
+
+
+async def test_response_without_reasoning_has_no_provider_items() -> None:
+    resp = await _llm(
+        Server(
+            _json(
+                200,
+                _ok_body(
+                    output=[{"type": "message", "content": [{"type": "output_text", "text": "x"}]}]
+                ),
+            )
+        )
+    ).complete(_request())
+    assert resp.provider_items == ()
+
+
+def test_fingerprint_uses_llm_info() -> None:
+    from orbit.runflow.fingerprint import config_fingerprint
+
+    base = config_fingerprint(MODEL)
+    low = config_fingerprint(MODEL, llm_config_info(_settings(llm_reasoning_effort="low")))
+    none = config_fingerprint(MODEL, llm_config_info(_settings(llm_reasoning_effort="none")))
+    assert len({base, low, none}) == 3
+    assert low == config_fingerprint(MODEL, llm_config_info(_settings(llm_reasoning_effort="low")))
+    priced = config_fingerprint(
+        MODEL, llm_config_info(_settings(llm_reasoning_effort="low", **PRICES))
+    )
+    assert priced != low
+
+
+def test_declared_model_matches_date_suffix() -> None:
+    from orbit.llm.model_id import is_declared_model
+
+    d = "openai/gpt-6-luna"
+    assert is_declared_model(d, d)
+    assert is_declared_model(d, d + "-2026-11-01")
+    assert is_declared_model(d, d + "-20261101")
+    assert not is_declared_model(d, d + "-mini")
+    assert not is_declared_model(d, "openai/gpt-6.1-terra")

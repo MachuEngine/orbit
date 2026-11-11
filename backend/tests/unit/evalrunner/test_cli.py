@@ -141,6 +141,12 @@ def test_live_llm_records_provider_config(
         "provider": "openai",
         "reasoning_effort": "low",
         "temperature_sent": False,
+        "tool_strict": False,
+        "reasoning_items_roundtrip": True,
+        "accepted_response_models": [],
+        "price_input_per_mtok": None,
+        "price_cached_input_per_mtok": None,
+        "price_output_per_mtok": None,
         "price_source": None,
     }
     assert config["experiment_budget"]["max_cost_usd"] == 1

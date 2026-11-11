@@ -26,6 +26,21 @@ _FORBIDDEN_VARIANTS = frozenset({"floating", "nitro", "online"})
 _FORBIDDEN_PROVIDERS = frozenset({"openrouter"})
 
 
+_DATE_SUFFIX = re.compile(r"-(\d{4}-\d{2}-\d{2}|\d{8})")
+
+
+def is_declared_model(declared: str, actual: str) -> bool:
+    """실제 응답 모델이 선언 모델과 같은 모델인가. 선언 ID에 날짜 접미가 붙은 것까지 같다고 본다.
+
+    어댑터의 허용 규칙(`-YYYY-MM-DD`, `-YYYYMMDD`)과 같다. 허용 목록(`accepted`)은 반영하지 않는다.
+    """
+    if actual == declared:
+        return True
+    return (
+        actual.startswith(declared) and _DATE_SUFFIX.fullmatch(actual[len(declared) :]) is not None
+    )
+
+
 class InvalidModelIdError(ValueError):
     """고정 모델 ID 규칙을 어긴 값."""
 

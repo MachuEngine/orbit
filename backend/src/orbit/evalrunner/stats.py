@@ -401,5 +401,16 @@ def state_diff_mismatch_count(records: Sequence[Record]) -> int:
     return sum(r.get("state_diff_match") is False for r in records)
 
 
+def response_model_set(records: Sequence[Record]) -> dict[str, Any]:
+    """실행 전체에서 응답한 모델의 집합. 하나가 아니면 서로 다른 모델이 섞인 실행이다."""
+    models: set[str] = set()
+    for r in records:
+        usage = r.get("usage")
+        if isinstance(usage, dict):
+            models.update(str(m) for m in usage.get("models") or [])
+    ordered = sorted(models)
+    return {"models": ordered, "single": len(ordered) <= 1}
+
+
 def model_mismatch_count(records: Sequence[Record]) -> int:
     return sum(bool(r.get("model_mismatch")) for r in records)

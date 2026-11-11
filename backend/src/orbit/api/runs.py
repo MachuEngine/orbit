@@ -20,14 +20,15 @@ from typing import Annotated, Any, Literal
 import procrastinate
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import text
 
 from orbit.api.auth import current_workspace
 from orbit.core.clock import Clock
-from orbit.core.config import Settings
+from orbit.core.config import Settings, get_llm_settings
 from orbit.core.ids import Uuid7Generator
 from orbit.db.session import AsyncDatabase
+from orbit.llm.config_info import llm_config_info
 from orbit.records.approvals import decide_approval, expire_approval, get_approval
 from orbit.records.jobs import defer_job
 from orbit.records.runs import (
@@ -61,6 +62,14 @@ class CreateRunBody(BaseModel):
 
 class DecisionBody(BaseModel):
     decision: Literal["approve", "reject"]
+
+
+def _llm_info() -> dict[str, Any] | None:
+    """Run 설정 지문에 넣을 LLM 설정. LLM 설정이 없는 환경(테스트 등)에서는 None이다."""
+    try:
+        return llm_config_info(get_llm_settings())
+    except ValidationError:
+        return None
 
 
 def _db(request: Request) -> AsyncDatabase:
@@ -125,7 +134,7 @@ async def post_run(body: CreateRunBody, request: Request, ws: Workspace) -> dict
             workspace_id=ws,
             conversation_id=conversation_id,
             pattern=PATTERN,
-            config_fingerprint=config_fingerprint(settings.llm_model_id),
+            config_fingerprint=config_fingerprint(settings.llm_model_id, _llm_info()),
             clock=clock,
             ids=ids,
         )

@@ -66,7 +66,12 @@ class ScriptedToolSUT:
             if not response.tool_calls:
                 return EpisodeOutput(final_text=response.text or "", structured=structured)
             messages.append(
-                Message(role="assistant", content=response.text, tool_calls=response.tool_calls)
+                Message(
+                    role="assistant",
+                    content=response.text,
+                    tool_calls=response.tool_calls,
+                    provider_items=response.provider_items,
+                )
             )
             submitted = False
             for call in response.tool_calls:

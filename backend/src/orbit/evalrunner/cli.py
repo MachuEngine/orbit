@@ -240,7 +240,13 @@ def _stats(args: argparse.Namespace) -> int:
         "failure_distribution": stats.failure_distribution(records),
         "state_diff_mismatch_episodes": stats.state_diff_mismatch_count(records),
         "model_mismatch_episodes": stats.model_mismatch_count(records),
+        "response_models": stats.response_model_set(records),
     }
+    if not report["response_models"]["single"]:
+        report["warnings"] = [
+            "실행 전체의 응답 모델이 하나가 아니다. 결과를 같은 모델로 해석하지 않는다"
+        ]
+        print("경고: 실행 전체의 응답 모델이 하나가 아니다", file=sys.stderr)
     if args.compare:
         other = stats.load_results(args.compare, reject_model_mismatch=reject)
         report["paired_difference_a_minus_b"] = stats.paired_difference(

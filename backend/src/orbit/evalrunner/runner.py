@@ -39,6 +39,7 @@ from orbit.evalrunner.scoring import FailureType, score_episode
 from orbit.evalrunner.structured import answer_ids
 from orbit.evalrunner.task_source import SPLITS, Dataset, DatasetError, TaskView
 from orbit.llm.interface import LLM, UsageRecorder
+from orbit.llm.model_id import is_declared_model
 
 UNSPECIFIED_MODEL = "unspecified"
 
@@ -155,6 +156,7 @@ class EpisodeResult:
     model_mismatch: bool
     latency_ms: int
     text_skipped: bool = False  # 최종 텍스트를 받지 못해 텍스트 지표가 없다
+    length_finishes: int = 0  # 출력 토큰 한도로 끝난 LLM 응답 수(finish_reason == "length")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -184,6 +186,7 @@ class EpisodeResult:
                 "cost_usd": self.cost_usd,
                 "models": list(self.models),
                 "providers": list(self.providers),
+                "length_finishes": self.length_finishes,
             },
             "model_mismatch": self.model_mismatch,
             "latency_ms": self.latency_ms,
@@ -290,7 +293,7 @@ async def run_episode(
     mismatch = (
         declared_model_id != UNSPECIFIED_MODEL
         and bool(models)
-        and set(models) != {declared_model_id}
+        and any(not is_declared_model(declared_model_id, m) for m in models)
     )
     checks: Mapping[str, bool | None] = score.checks
     if error_type is not None:  # 응답이 없으면 응답·호출 검사는 의미가 없다
@@ -325,6 +328,7 @@ async def run_episode(
         model_mismatch=mismatch,
         latency_ms=latency_ms,
         text_skipped=text_skipped,
+        length_finishes=sum(r.finish_reason == "length" for r in recorder.records),
     )
 
 
@@ -489,6 +493,7 @@ class Estimate:
     estimated_total_tokens: float
     estimated_total_cost_usd: float | None
     stopped_reason: str | None
+    length_finish_rate: float  # 전체 LLM 호출 중 finish_reason == "length" 비율
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
@@ -523,6 +528,9 @@ async def estimate_experiment(
             estimated_total_tokens=(mean_in + mean_out) * episodes,
             estimated_total_cost_usd=mean_cost * episodes if mean_cost is not None else None,
             stopped_reason=summary.stopped_reason,
+            length_finish_rate=(
+                sum(r.length_finishes for r in results) / max(sum(r.llm_calls for r in results), 1)
+            ),
         ),
         summary,
     )

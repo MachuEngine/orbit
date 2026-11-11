@@ -6,7 +6,10 @@
   공개하지 않으므로 응답의 실제 모델 값을 `openai/<응답 모델>`로 기록한다.
 - 추론 토큰은 `output_tokens`에 이미 포함돼 있다고 가정하고(문서 기준) 출력 단가로 계산한다.
   따로 더하지 않는다. `LLMUsage.reasoning_tokens`는 그 부분집합을 기록만 한다.
-- 추론 항목(reasoning item)은 다음 요청에 되돌려 보내지 않는다. `LLM` 인터페이스에 담을 곳이 없다.
+- 도구 정의에는 `strict: false`를 명시한다(기존 스키마를 유지).
+- effort가 `none`이 아니면 `include=["reasoning.encrypted_content"]`를 요청하고, 응답의 `reasoning`
+  항목을 `provider_items`로 돌려준다. 다음 요청에서 assistant 메시지의 `provider_items`를
+  함수 호출 앞에 다시 보낸다(`store=false`에서 추론 맥락을 유지하는 방법).
 """
 
 import json
@@ -18,6 +21,7 @@ from typing import Any
 import httpx
 
 from orbit.core.config import LLMSettings
+from orbit.llm.config_info import llm_config_info
 from orbit.llm.interface import (
     LLMError,
     LLMRequestError,
@@ -71,19 +75,15 @@ class OpenAILLM:
         self._price_cached = settings.llm_price_cached_input_per_mtok
         self._price_out = settings.llm_price_output_per_mtok
         self._price_source = settings.llm_price_source
+        self._info = llm_config_info(settings)
         self._transport = transport
         self._retry = retry_policy or RetryPolicy(max_retries=settings.llm_max_retries)
         self._sleep = sleep
 
     @property
     def fingerprint_info(self) -> dict[str, Any]:
-        """설정 지문에 넣을 값. 보내지 않는 파라미터도 여기에 드러낸다."""
-        return {
-            "provider": PROVIDER_NAME,
-            "reasoning_effort": self._effort,
-            "temperature_sent": self._send_temperature,
-            "price_source": self._price_source,
-        }
+        """설정 지문. `llm_config_info(settings)`와 같은 값이다."""
+        return dict(self._info)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         kwargs: dict[str, Any] = {}
@@ -103,6 +103,7 @@ class OpenAILLM:
                     "name": t.name,
                     "description": t.description,
                     "parameters": t.parameters,
+                    "strict": False,
                 }
                 for t in request.tools
             ]
@@ -117,6 +118,8 @@ class OpenAILLM:
             body["max_output_tokens"] = request.max_output_tokens
         if self._effort is not None:
             body["reasoning"] = {"effort": self._effort}
+        if self._effort != "none":
+            body["include"] = ["reasoning.encrypted_content"]
         if self._send_temperature and request.temperature is not None:
             body["temperature"] = request.temperature
         return body
@@ -230,6 +233,7 @@ class OpenAILLM:
 
         texts: list[str] = []
         tool_calls: list[ToolCall] = []
+        provider_items: list[dict[str, Any]] = []
         refused = False
         for item in output:
             kind = item.get("type") if isinstance(item, dict) else None
@@ -241,6 +245,8 @@ class OpenAILLM:
                         refused = True
             elif kind == "function_call":
                 tool_calls.append(_parse_tool_call(item))
+            elif kind == "reasoning":
+                provider_items.append(dict(item))  # output 순서대로 담는다
 
         return LLMResponse(
             text="".join(texts) if texts else None,
@@ -251,6 +257,7 @@ class OpenAILLM:
             latency_ms=0,  # run_with_retry가 시도 전체 시간으로 채운다
             model_id=recorded_model,
             provider=PROVIDER_NAME,
+            provider_items=tuple(provider_items),
         )
 
 
@@ -284,6 +291,8 @@ def _message_to_items(m: Message) -> list[dict[str, Any]]:
             {"type": "function_call_output", "call_id": m.tool_call_id, "output": m.content or ""}
         ]
     items: list[dict[str, Any]] = []
+    if m.role == "assistant":
+        items.extend(dict(i) for i in m.provider_items)  # 원래 순서, 함수 호출보다 앞
     if m.role != "assistant" or m.content or not m.tool_calls:
         items.append({"role": m.role, "content": m.content or ""})
     for tc in m.tool_calls:
