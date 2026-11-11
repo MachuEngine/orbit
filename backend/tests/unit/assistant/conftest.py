@@ -1,5 +1,6 @@
 import copy
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,7 @@ def make_assistant(
     *,
     steps: list[str] | None = None,
     max_turns: int = 20,
+    has_step_room: Callable[[], bool] | None = None,
 ) -> tuple[ReadOnlyAssistant, ScriptedLLM]:
     calendar, mail = make_connectors()
     llm = ScriptedLLM([build_response(item) for item in script])
@@ -103,6 +105,7 @@ def make_assistant(
         clock=FixedClock(NOW),
         tz=TZ,
         on_step=(lambda: steps.append("step")) if steps is not None else None,
+        has_step_room=has_step_room,
         max_turns=max_turns,
     )
     return assistant, llm

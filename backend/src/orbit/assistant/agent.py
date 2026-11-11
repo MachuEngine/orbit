@@ -31,6 +31,7 @@ class ReadOnlyAssistant:
         clock: Clock,
         tz: tzinfo,
         on_step: Callable[[], None] | None = None,
+        has_step_room: Callable[[], bool] | None = None,
         max_turns: int = DEFAULT_MAX_TURNS,
         metadata: Mapping[str, str] | None = None,
     ) -> None:
@@ -42,6 +43,7 @@ class ReadOnlyAssistant:
         self._clock = clock
         self._tz = tz
         self._on_step = on_step
+        self._has_step_room = has_step_room
         self._max_turns = max_turns
         self._metadata = dict(metadata or {})  # 원문 금지. 과제 ID 같은 식별자만.
 
@@ -101,7 +103,9 @@ class ReadOnlyAssistant:
                 messages.append(Message(role="tool", content=outcome.content, tool_call_id=call.id))
             if structured is not None:
                 text = (response.text or "").strip()
-                if not text:  # 제출 응답에 문장이 없으면 도구 없이 한 번 더 받는다
+                # 제출 응답에 문장이 없으면 도구 없이 한 번 더 받는다. 단계 여유가 없으면
+                # 보충을 건너뛰고 제출한 답을 빈 텍스트로 돌려준다(답을 버리지 않는다).
+                if not text and (self._has_step_room is None or self._has_step_room()):
                     text = await self._final_text(messages)
                 return text, structured
         return "", None

@@ -5,6 +5,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from orbit.assistant.prompt import PROMPT_VERSION
 from orbit.evalrunner.runner import ExperimentSummary
 from orbit.evalrunner.suts import create_sut, sut_names
@@ -45,14 +47,17 @@ SUBMITS: dict[str, dict[str, Any]] = {
 def make_dataset(tmp_path: Path) -> Dataset:
     root = tmp_path / "assistant-ds"
     root.mkdir()
-    for name in ("manifest.json", "world.json"):
-        shutil.copy(DATASET_DIR / name, root / name)
+    shutil.copy(DATASET_DIR / "world.json", root / "world.json")
+    manifest = json.loads((DATASET_DIR / "manifest.json").read_text(encoding="utf-8"))
+    manifest["counts"]["tasks"] = len(EXPECTED)  # 과제 수를 실제 개수에 맞춘다
+    (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     rows = []
     for task_id, expected in EXPECTED.items():
         rows.append(
             {
                 "task_id": task_id,
                 "scenario_id": f"s-{task_id}",
+                "cluster_id": f"c-{task_id}",
                 "split": "dev",
                 "as_of_time": "2026-11-11T09:00:00+09:00",
                 "account_id": "acct-alice",
@@ -148,3 +153,17 @@ def test_sut_registered_with_prompt_version_in_fingerprint() -> None:
 async def test_result_config_records_sut_version(tmp_path: Path) -> None:
     summary = await run(make_dataset(tmp_path), script(SUBMITS), sut="assistant_v0", repeats=1)
     assert PROMPT_VERSION in json.dumps(summary.results[0].config["sut"])
+
+
+def test_step_counter_has_room_does_not_consume() -> None:
+    from orbit.evalrunner.episode import Budget, BudgetExceeded, StepCounter
+    from orbit.llm.interface import UsageRecorder
+
+    counter = StepCounter(Budget(max_steps=2), UsageRecorder())
+    assert counter.has_room()
+    counter.consume()
+    assert counter.has_room() and counter.steps == 1  # 확인만 하고 소비하지 않는다
+    counter.consume()
+    assert not counter.has_room()
+    with pytest.raises(BudgetExceeded):
+        counter.consume()

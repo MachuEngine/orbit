@@ -152,3 +152,15 @@ def test_answer_ids_never_copies_free_text() -> None:
     assert got is not None and "비밀" not in json.dumps(got, ensure_ascii=False)
     assert got["kind"] == "<invalid>" and got["start"] == "<invalid>"
     assert got["event"] == {"calendar_id": "<invalid>", "event_id": "<invalid>"}
+
+
+def test_answer_ids_id_pattern_is_ascii_and_at_most_64() -> None:
+    def event_id(value: str) -> str:
+        got = answer_ids({"kind": "event", "event": {"calendar_id": "cal-1", "event_id": value}})
+        assert got is not None
+        return str(got["event"]["event_id"])
+
+    for ok in ("ev000040", "a_b-c:d.e", "x" * 64):
+        assert event_id(ok) == ok
+    for bad in ("x" * 65, "한글", "a@b", "a/b", "a b", "ａｂ", "a\n", ""):
+        assert event_id(bad) != bad, bad

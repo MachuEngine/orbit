@@ -110,6 +110,7 @@ class AssistantV0SUT:
             clock=episode.clock,
             tz=ZoneInfo(self.TIME_ZONE),
             on_step=episode.steps.consume,
+            has_step_room=episode.steps.has_room,
             max_turns=self._max_turns,
             metadata={"task_id": episode.task.task_id},
         )

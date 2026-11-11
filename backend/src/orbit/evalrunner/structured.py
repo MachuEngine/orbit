@@ -27,7 +27,7 @@ Verdict = Literal["ok", "answer_format", "wrong_answer"]
 
 _EVENT_KEYS = {"calendar_id", "event_id"}
 _KINDS = ("event_set", "event", "event_time", "time_slot")
-_ID = re.compile(r"[\w\-:.@/]{1,80}")
+_ID = re.compile(r"[A-Za-z0-9_\-:.]{1,64}")
 INVALID = "<invalid>"
 
 

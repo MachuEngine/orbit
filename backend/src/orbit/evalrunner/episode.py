@@ -64,14 +64,24 @@ class StepCounter:
         self._started = monotonic()
         self.steps = 0
 
-    def consume(self) -> None:
+    def _violation(self) -> Literal["steps", "tokens", "time"] | None:
         if self.steps + 1 > self._budget.max_steps:
-            raise BudgetExceeded("steps")
+            return "steps"
         usage = self._recorder.total_usage
         if usage.input_tokens + usage.output_tokens > self._budget.max_tokens:
-            raise BudgetExceeded("tokens")
+            return "tokens"
         if self._monotonic() - self._started > self._budget.max_seconds:
-            raise BudgetExceeded("time")
+            return "time"
+        return None
+
+    def has_room(self) -> bool:
+        """`consume()`이 지금 성공할지 미리 본다. 단계를 소비하지 않는다."""
+        return self._violation() is None
+
+    def consume(self) -> None:
+        reason = self._violation()
+        if reason is not None:
+            raise BudgetExceeded(reason)
         self.steps += 1
 
 

@@ -174,3 +174,14 @@ def test_sut_version_reflects_prompt_and_temperature() -> None:
     from orbit.evalrunner.suts import create_sut
 
     assert create_sut("assistant_v0").version == f"0+{PROMPT_VERSION}+temp0"
+
+
+async def test_final_text_call_is_skipped_without_step_room(make_connectors: Any) -> None:
+    script: list[dict[str, Any]] = [
+        {"tool_calls": [tc("list_events", **DAY)]},
+        {"structured": {"kind": "event", "event": "E2"}},  # 텍스트 없음
+    ]
+    assistant, llm = make_assistant(make_connectors, script, has_step_room=lambda: False)
+    text, structured = await assistant.run(QUESTION)
+    assert text == "" and structured is not None  # 제출한 답은 남는다
+    assert len(llm.requests) == 2  # 보충 호출 없음
