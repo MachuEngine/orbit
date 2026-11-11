@@ -26,13 +26,13 @@
 
 각 단계는 하나 이상의 PR로 끝내고, `scripts/check.sh`와 CI 통과를 완료 조건에 포함한다.
 
-### 0단계. 준비
+### 0단계. 준비 (완료, 2026-11-11, PR #3)
 1. 하네스 템플릿 v0.3.0: 리뷰어 훅이 저장소 루트 기준으로 `scripts/check.sh`를 실행하고 `uv run pytest`를 허용하도록 수정 → Orbit에 `copier update`
 2. 백엔드 개발 스킬 작성 (프로젝트 구조, 테스트 작성 규칙, RLS·실행 기록 규칙 체크리스트)
 3. `main` 브랜치 보호: CI 통과 필수
 4. ADR-0006: 그래프 상태·작업 인자에 사용자 본문 금지, 체크포인트 삭제 전파
 
-### 1단계. 백엔드 골격 (완료, 2026-11-11, PR 리뷰 대기)
+### 1단계. 백엔드 골격 (완료, 2026-11-11, PR #4)
 1. `backend/` uv 프로젝트, lint·타입 검사·테스트 도구 결정 후 `scripts/check.sh`와 CI(PostgreSQL 서비스 포함)에 연결
 2. 설정, 고정 시계(Clock) 주입, UUIDv7 생성기
 3. 마이그레이션 도구, 소유자·애플리케이션 DB 역할 분리, RLS 정책
@@ -41,14 +41,18 @@
 
 완료 조건: 다른 워크스페이스 데이터 노출 0을 CI가 매번 검증한다.
 
-결과: 로컬 PostgreSQL(pgvector 0.8.0-pg17)에서 `scripts/check.sh`가 통과했고, RLS 통합 테스트(설정 없음·교차 접근·풀 재사용·동기 스레드/비동기 태스크 동시성·역할 확인)와 마이그레이션 upgrade→downgrade→upgrade가 모두 실행됐다. CI는 PR에서 처음 실행된다.
+결과: 로컬 PostgreSQL(pgvector 0.8.0-pg17)에서 `scripts/check.sh`가 통과했고, RLS 통합 테스트(설정 없음·교차 접근·풀 재사용·동기 스레드/비동기 태스크 동시성·역할 확인)와 마이그레이션 upgrade→downgrade→upgrade가 모두 실행됐다. GitHub Actions(PostgreSQL 서비스)에서도 28건이 skip 없이 통과했다.
 
-### 2단계. Connector 계약과 Sim Provider v0
+### 2단계. Connector 계약과 Sim Provider v0 (완료, 2026-11-11)
 1. `MailConnector`·`CalendarConnector` 계약 (메일은 초안 생성·발송·조회 포함)
 2. Sim Provider: JSON 스냅샷 → 에피소드별 복제, 상태 diff, FaultPlan, Gmail 검색 부분집합
 3. 계약 테스트 묶음 (나중에 Google Adapter도 같은 묶음을 통과해야 한다)
 
 완료 조건: Sim이 계약 테스트를 모두 통과하고, 같은 시드·스냅샷이면 결과가 같다.
+
+결과: 계약(ADR-0008)과 Sim 공통부·캘린더·메일을 병렬로 구현했다(2단계-A~D). 전체 276건 통과·skip 0. 계약 테스트는 Sim 내부 상태에 접근하지 않고, 실제 Google에서 깨질 가정(부분 문자열 검색, 다른 계정 미배달, 스레드의 초안 제외, 색인 지연)은 Sim 단위 테스트로 분리했다. 상태 diff는 Sim이 기록한 초안 생애로 발송을 판정한다. 평가 러너·4단계는 `build_sim_connectors` 팩토리로만 커넥터를 만든다(공유 FaultPlan 봉인 강제).
+
+6단계로 넘길 확인 사항: 실제 Gmail·Calendar의 검색 의미(단어 단위, `to:`의 cc 포함), 생성 직후 검색 색인 지연, `threads.get`의 초안 포함 여부, 취소된 일정 수정·재취소 응답, 계약 테스트 시드를 테스트 계정에 맞추는 방법(캘린더 ID는 Google이 정함).
 
 ### 3단계. 일정 조회 경로와 평가 기반
 1. 내부 LLM 인터페이스 + OpenRouter 구현 (고정 모델 ID, 토큰·비용 기록)
