@@ -33,8 +33,15 @@ CASES = [
     ("11월 16일", "11월 16일 17시입니다", True),
     ("11월 16일", "11월16일17시입니다", True),
     ("10시", "10시30분입니다", False),
-    ("10시", "10시 반입니다", False),
-    ("10시", "10시반입니다", False),
+    ("10시", "10시 반에 만납니다", False),
+    ("10시", "10시 반부터 가능합니다", False),
+    ("10시", "10시 반.", False),
+    ("9시", "9시 반복 회의입니다", True),
+    ("9시", "9시 반이 좋습니다", False),
+    ("10시", "10시간 걸립니다", False),
+    ("10시", "10시 간식 시간입니다", True),
+    ("10시", "10시반부터입니다", False),
+    ("9시", "9시반복 회의입니다", True),
     ("2시", "11월 16일 2시입니다", True),
     ("2시", "12시와 2시입니다", True),
     ("오후5시", "오후 5시입니다", True),
@@ -63,3 +70,8 @@ def test_whitespace_is_flexible_between_characters_but_not_between_digits() -> N
 
 def test_second_occurrence_is_checked_after_a_rejected_one() -> None:
     assert contains("12시와 2시", "2시")  # 첫 일치(12시 안)는 거부, 두 번째는 통과
+
+
+def test_leading_digit_rejection_applies_only_to_digit_initial_candidates() -> None:
+    assert contains("09:00베타 고객 미팅", "베타 고객 미팅")
+    assert not contains("12시", "2시")

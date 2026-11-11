@@ -62,7 +62,13 @@ def good_script(cost: float | None = 0.001) -> Script:
                 ],
                 cost=cost,
             ),
-            step("모레는 팀 회고가 있습니다.", cost=cost),
+            {
+                **step("모레는 팀 회고가 있습니다.", cost=cost),
+                "structured": {
+                    "kind": "event_set",
+                    "events": [{"calendar_id": "cal-alice-team", "event_id": "evalice003"}],
+                },
+            },
         ],
         "t-003": [
             step(calls=[call("search_messages", query="from:bob@example.org")], cost=cost),

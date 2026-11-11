@@ -6,9 +6,11 @@
   `ceil((1 - a/2) * B) - 1`번째 값을 쓴다(a는 유의수준).
 - 시드를 고정하면 결과가 같다(`random.Random(seed)`).
 - `outcome.success`가 `None`인 에피소드(채점 불가)는 성공률 분모에서 빼고 개수를 따로 보고한다.
-- 에피소드 수가 기대 반복 수(결과 행의 `config.repeats`, 행마다 다르거나 없으면 오류)보다 적은
-  과제는 기본적으로 성공률·CI에서 제외하고 개수를 보고한다(`include_incomplete=True`로 포함).
-  누적 상한 중단 같은 부분 실행을 완주한 과제와 섞지 않으려는 것이다.
+- 중단된 실험(누적 상한 등)은 "모든 과제가 완료한 최대 반복 라운드"까지만 잘라서 쓴다. 기대 반복
+  수는 결과 행의 `config.repeats`(행마다 다르거나 없으면 오류), 과제 수는 `config.n_tasks`(없으면
+  파일에 나온 과제 수)다. 잘랐다는 사실과 원래 `config.repeats`는 `RateSummary`에 남는다.
+  남은 과제가 하나도 없으면 오류이고 메시지에 `--include-incomplete` 안내가 있다. 이 옵션
+  (`include_incomplete=True`)은 자르지 않고 있는 에피소드를 모두 쓴다.
 - `(task_id, repeat)`가 겹치는 결과는 오류다.
 """
 
@@ -90,14 +92,6 @@ def _per_task(records: Sequence[Record]) -> dict[str, list[bool | None]]:
     return {t: [ok for _, ok in sorted(v)] for t, v in grouped.items()}
 
 
-@dataclass(frozen=True)
-class TaskRates:
-    rates: dict[str, float]
-    n_incomplete_tasks: int  # 반복 수가 부족해 제외한 과제
-    n_unscored_tasks: int  # 채점된 에피소드가 하나도 없는 과제
-    n_unscored_episodes: int
-
-
 def _expected_repeats(records: Sequence[Record]) -> int:
     values = {(r.get("config") or {}).get("repeats") for r in records}
     only = next(iter(values))
@@ -106,22 +100,65 @@ def _expected_repeats(records: Sequence[Record]) -> int:
     return only
 
 
-def _task_rates(records: Sequence[Record], include_incomplete: bool) -> TaskRates:
-    per_task = _per_task(records)
+def _planned_tasks(records: Sequence[Record]) -> int | None:
+    values = {(r.get("config") or {}).get("n_tasks") for r in records}
+    only = next(iter(values))
+    return only if len(values) == 1 and isinstance(only, int) else None
+
+
+def _complete_rounds(records: Sequence[Record], per_round: dict[int, int]) -> int:
+    """모든 과제가 완료한 최대 반복 라운드. 1회차부터 끊기지 않고 이어진 라운드만 센다."""
     expected = _expected_repeats(records)
+    planned = _planned_tasks(records) or len({str(r["task_id"]) for r in records})
+    done = 0
+    for rnd in range(1, expected + 1):
+        if per_round.get(rnd, 0) < planned:
+            break
+        done = rnd
+    return done
+
+
+@dataclass(frozen=True)
+class TaskRates:
+    rates: dict[str, float]
+    n_incomplete_tasks: int  # 사용할 라운드에 에피소드가 부족해 제외한 과제
+    n_unscored_tasks: int  # 채점된 에피소드가 하나도 없는 과제
+    n_unscored_episodes: int
+    config_repeats: int
+    used_repeats: int  # 통계에 쓴 반복 라운드 수
+    truncated: bool  # 중단된 실험이라 라운드를 잘라 썼는가
+
+
+def _task_rates(records: Sequence[Record], include_incomplete: bool) -> TaskRates:
+    _check_duplicates(records)
+    expected = _expected_repeats(records)
+    by_task: dict[str, dict[int, bool | None]] = {}
+    per_round: dict[int, int] = {}
+    for r in records:
+        success = r["outcome"]["success"]
+        rnd = int(r.get("repeat", 0))
+        by_task.setdefault(str(r["task_id"]), {})[rnd] = None if success is None else bool(success)
+        per_round[rnd] = per_round.get(rnd, 0) + 1
+    if include_incomplete:
+        used, truncated = expected, False
+    else:
+        used = _complete_rounds(records, per_round)
+        truncated = used < expected
     rates: dict[str, float] = {}
     incomplete = unscored_tasks = 0
-    for t, v in per_task.items():
-        if len(v) < expected and not include_incomplete:
+    n_unscored = 0
+    for t, rounds in by_task.items():
+        picked = [rounds[k] for k in sorted(rounds) if include_incomplete or k <= used]
+        n_unscored += sum(ok is None for ok in picked)
+        if not include_incomplete and len(picked) < used:
             incomplete += 1
             continue
-        scored = [ok for ok in v if ok is not None]
+        scored = [ok for ok in picked if ok is not None]
         if not scored:
             unscored_tasks += 1
             continue
         rates[t] = sum(scored) / len(scored)
-    n_unscored = sum(ok is None for v in per_task.values() for ok in v)
-    return TaskRates(rates, incomplete, unscored_tasks, n_unscored)
+    return TaskRates(rates, incomplete, unscored_tasks, n_unscored, expected, used, truncated)
 
 
 def _bootstrap_ci(
@@ -132,7 +169,10 @@ def _bootstrap_ci(
     if not 0 < alpha < 1:
         raise ValueError("alpha는 0과 1 사이여야 한다")
     if not values:
-        raise ResultsError("통계에 쓸 수 있는 과제가 없다")
+        raise ResultsError(
+            "통계에 쓸 수 있는 과제가 없다(완료한 반복 라운드가 없거나 모두 채점 불가다). "
+            "부분 실행 결과를 그대로 쓰려면 --include-incomplete를 쓴다"
+        )
     rng = random.Random(seed)  # noqa: S311  재현성용 의사난수
     n = len(values)
     means = sorted(
@@ -153,6 +193,9 @@ class RateSummary:
     n_unscored_episodes: int
     n_unscored_tasks: int
     n_incomplete_tasks: int
+    config_repeats: int  # 원래 설정의 반복 수
+    used_repeats: int  # 통계에 쓴 반복 라운드 수
+    truncated: bool  # 중단된 실험이라 라운드를 잘라 썼다
 
 
 def success_rate(
@@ -175,6 +218,9 @@ def success_rate(
         tr.n_unscored_episodes,
         tr.n_unscored_tasks,
         tr.n_incomplete_tasks,
+        tr.config_repeats,
+        tr.used_repeats,
+        tr.truncated,
     )
 
 
@@ -188,6 +234,8 @@ class PairedSummary:
     n_tasks: int
     n_unpaired_a: int
     n_unpaired_b: int
+    used_repeats_a: int
+    used_repeats_b: int
 
 
 def _config_value(records: Sequence[Record], key: str) -> str:
@@ -210,15 +258,22 @@ def paired_difference(
     for key in ("dataset", "split"):
         if _config_value(a, key) != _config_value(b, key):
             raise ResultsError(f"두 결과의 config.{key}가 다르다")
-    ra = _task_rates(a, include_incomplete).rates
-    rb = _task_rates(b, include_incomplete).rates
+    tra, trb = _task_rates(a, include_incomplete), _task_rates(b, include_incomplete)
+    ra, rb = tra.rates, trb.rates
     common = sorted(set(ra) & set(rb))
     if not common:
         raise ResultsError("두 결과에 공통 task_id가 없다")
     diffs = [ra[t] - rb[t] for t in common]
     lo, hi = _bootstrap_ci(diffs, resamples=resamples, seed=seed, alpha=alpha)
     return PairedSummary(
-        statistics.fmean(diffs), lo, hi, len(common), len(set(ra) - set(rb)), len(set(rb) - set(ra))
+        statistics.fmean(diffs),
+        lo,
+        hi,
+        len(common),
+        len(set(ra) - set(rb)),
+        len(set(rb) - set(ra)),
+        tra.used_repeats,
+        trb.used_repeats,
     )
 
 

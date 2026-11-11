@@ -2,11 +2,13 @@
 
 import json
 from collections.abc import Callable
+from typing import Any
 
 from orbit.connectors.contracts import ConnectorError
 from orbit.evalrunner.episode import Episode, EpisodeOutput, SystemUnderTest
+from orbit.evalrunner.llm_script import SUBMIT_ANSWER
 from orbit.evalrunner.tools import ToolDispatcher, serialize_result, tool_specs
-from orbit.llm.types import LLMRequest, Message
+from orbit.llm.types import LLMRequest, Message, ToolSpec
 
 
 class NoopSUT:
@@ -39,7 +41,11 @@ class ScriptedToolSUT:
 
     async def run(self, episode: Episode) -> EpisodeOutput:
         dispatcher = ToolDispatcher(episode.connectors)
-        specs = tool_specs()
+        specs = (
+            *tool_specs(),
+            ToolSpec(SUBMIT_ANSWER, "구조화된 최종 답을 제출한다", {"type": "object"}),
+        )
+        structured: dict[str, Any] | None = None
         messages: list[Message] = [
             Message(role="user", content=t.content) for t in episode.task.turns
         ]
@@ -55,12 +61,18 @@ class ScriptedToolSUT:
                 )
             )
             if not response.tool_calls:
-                return EpisodeOutput(final_text=response.text or "")
+                return EpisodeOutput(final_text=response.text or "", structured=structured)
             messages.append(
                 Message(role="assistant", content=response.text, tool_calls=response.tool_calls)
             )
+            submitted = False
             for call in response.tool_calls:
                 episode.steps.consume()
+                if call.name == SUBMIT_ANSWER:  # 커넥터 호출이 아니다. 마지막 제출이 유효하다
+                    structured = dict(call.arguments)
+                    submitted = True
+                    messages.append(Message(role="tool", content="ok", tool_call_id=call.id))
+                    continue
                 try:
                     content = serialize_result(await dispatcher.call(call.name, call.arguments))
                 except (ConnectorError, ValueError) as exc:  # ValueError: 입력 위반, 인자 검증 실패
@@ -68,7 +80,9 @@ class ScriptedToolSUT:
                         raise
                     content = json.dumps({"error": type(exc).__name__})
                 messages.append(Message(role="tool", content=content, tool_call_id=call.id))
-        return EpisodeOutput(final_text="")
+            if submitted:  # 답 제출이 끝이다
+                return EpisodeOutput(final_text=response.text or "", structured=structured)
+        return EpisodeOutput(final_text="", structured=structured)
 
 
 SutFactory = Callable[[], SystemUnderTest]

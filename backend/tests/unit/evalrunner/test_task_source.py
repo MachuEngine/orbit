@@ -100,3 +100,51 @@ def test_summary_constants_match_call_log() -> None:
 
     assert task_source.REDACTED_KEYS == calls._REDACTED_KEYS
     assert task_source.MAX_SUMMARY_STR == calls._MAX_STR
+
+
+def _with_answer(root: Path, answer: object) -> None:
+    task = _first_task(root)
+    gold = task["gold"]
+    assert isinstance(gold, dict)
+    gold["expected_answer"] = answer
+    _write_task(root, task)
+
+
+def test_expected_answer_is_parsed_per_kind(tmp_path: Path) -> None:
+    root = _copy(tmp_path)
+    ev = {"calendar_id": "c1", "event_id": "e1"}
+    cases = [
+        {"kind": "event_set", "events": [ev]},
+        {"kind": "event", "event": ev},
+        {"kind": "event_time", "event": ev, "start": "2026-11-12T10:00:00+09:00"},
+        {"kind": "time_slot", "start": "2026-11-12T01:00:00Z"},
+    ]
+    for answer in cases:
+        _with_answer(root, answer)
+        got = load_dataset(root).tasks[0].gold.expected_answer
+        assert got is not None and got.kind == str(answer["kind"])  # type: ignore[index]
+    _with_answer(root, {"kind": "time_slot", "start": "2026-11-12T10:00:00+09:00"})
+    start = load_dataset(root).tasks[0].gold.expected_answer.start  # type: ignore[union-attr]
+    assert start is not None and start.utcoffset() is not None
+    _with_answer(root, None)
+    assert load_dataset(root).tasks[0].gold.expected_answer is None
+
+
+def test_expected_answer_rejects_bad_shapes(tmp_path: Path) -> None:
+    root = _copy(tmp_path)
+    ev = {"calendar_id": "c1", "event_id": "e1"}
+    bad = [
+        {"kind": "nope"},
+        {"kind": "event_set"},
+        {"kind": "event_set", "events": [ev, ev]},  # 중복
+        {"kind": "event_set", "events": [ev], "extra": 1},
+        {"kind": "event", "event": {"calendar_id": "c1"}},
+        {"kind": "time_slot", "start": "2026-11-12T10:00:00"},  # 오프셋 없음
+        {"kind": "time_slot", "start": 5},
+        {"kind": "event_time", "event": ev},
+        "event_set",
+    ]
+    for answer in bad:
+        _with_answer(root, answer)
+        with pytest.raises(DatasetError, match="expected_answer"):
+            load_dataset(root)

@@ -22,29 +22,29 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "backend" / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
     _g(tmp_path, "add", ".")
     _g(tmp_path, "commit", "-q", "-m", "init")
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path.parent)  # cwd와 무관해야 한다
     return tmp_path
 
 
 def test_clean_tree(repo: Path) -> None:
-    sha, dirty = _git_state()
+    sha, dirty = _git_state(repo=repo)
     assert len(sha) == 40 and dirty is False
 
 
 def test_modified_tracked_file_is_dirty(repo: Path) -> None:
     (repo / "backend" / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
-    assert _git_state()[1] is True
+    assert _git_state(repo=repo)[1] is True
 
 
 def test_untracked_code_is_dirty_but_results_folder_is_not(repo: Path) -> None:
     (repo / "eval" / "results").mkdir(parents=True)
     (repo / "eval" / "results" / "r.jsonl").write_text("{}\n", encoding="utf-8")
-    assert _git_state(repo / "eval" / "results")[1] is False
-    assert _git_state()[1] is True  # 출력 폴더를 모르면 eval/ 아래 새 파일은 변경이다
+    assert _git_state(repo / "eval" / "results", repo)[1] is False
+    assert _git_state(repo=repo)[1] is True  # 출력 폴더를 모르면 eval/ 아래 새 파일은 변경이다
     (repo / "backend" / "src" / "b.py").write_text("y = 1\n", encoding="utf-8")
-    assert _git_state(repo / "eval" / "results")[1] is True
+    assert _git_state(repo / "eval" / "results", repo)[1] is True
 
 
 def test_untracked_files_elsewhere_are_ignored(repo: Path) -> None:
     (repo / "notes.txt").write_text("메모\n", encoding="utf-8")
-    assert _git_state()[1] is False
+    assert _git_state(repo=repo)[1] is False

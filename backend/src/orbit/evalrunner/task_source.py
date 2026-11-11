@@ -63,6 +63,17 @@ class RequiredToolCallView(Protocol):
     def args_subset(self) -> Mapping[str, Any]: ...
 
 
+class ExpectedAnswerView(Protocol):
+    @property
+    def kind(self) -> str: ...
+    @property
+    def events(self) -> Sequence["EventRef"]: ...
+    @property
+    def event(self) -> "EventRef | None": ...
+    @property
+    def start(self) -> datetime | None: ...
+
+
 class GoldView(Protocol):
     @property
     def answer_facts(self) -> Sequence[AnswerFactView]: ...
@@ -74,6 +85,8 @@ class GoldView(Protocol):
     def required_tool_calls(self) -> Sequence[RequiredToolCallView]: ...
     @property
     def forbidden_tools(self) -> Sequence[str]: ...
+    @property
+    def expected_answer(self) -> "ExpectedAnswer | None": ...
 
 
 class TaskView(Protocol):
@@ -120,12 +133,29 @@ class RequiredCallRecord:
 
 
 @dataclass(frozen=True)
+class EventRef:
+    calendar_id: str
+    event_id: str
+
+
+@dataclass(frozen=True)
+class ExpectedAnswer:
+    """구조화된 정답 (ADR-0010 §1). kind별로 쓰는 필드만 채운다."""
+
+    kind: str  # event_set | event | event_time | time_slot
+    events: tuple[EventRef, ...] = ()
+    event: EventRef | None = None
+    start: datetime | None = None  # tz-aware
+
+
+@dataclass(frozen=True)
 class GoldRecord:
     answer_facts: tuple[FactRecord, ...]
     must_not_contain: tuple[str, ...]
     expected_changes: tuple[Mapping[str, Any], ...] | None
     required_tool_calls: tuple[RequiredCallRecord, ...]
     forbidden_tools: tuple[str, ...]
+    expected_answer: ExpectedAnswer | None = None
 
 
 @dataclass(frozen=True)
@@ -171,6 +201,58 @@ def _check_args_subset(value: Any, where: str, key: str = "") -> None:
         raise DatasetError(f"{where}: args_subset 문자열이 {MAX_SUMMARY_STR}자를 넘는다")
 
 
+def _parse_event(value: Any, where: str) -> EventRef:
+    if not isinstance(value, dict) or set(value) != {"calendar_id", "event_id"}:
+        raise DatasetError(f"{where}: 일정은 calendar_id, event_id만 가진 객체여야 한다")
+    cal, ev = value["calendar_id"], value["event_id"]
+    if not isinstance(cal, str) or not isinstance(ev, str) or not cal or not ev:
+        raise DatasetError(f"{where}: calendar_id, event_id는 비어 있지 않은 문자열이어야 한다")
+    return EventRef(cal, ev)
+
+
+def _parse_start(value: Any, where: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise DatasetError(f"{where}: start는 시간대 오프셋이 있는 ISO 8601이어야 한다")
+    return parsed
+
+
+_ANSWER_KEYS = {
+    "event_set": {"kind", "events"},
+    "event": {"kind", "event"},
+    "event_time": {"kind", "event", "start"},
+    "time_slot": {"kind", "start"},
+}
+
+
+def _parse_expected_answer(data: Any, where: str) -> ExpectedAnswer | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise DatasetError(f"{where}: expected_answer는 객체 또는 null이어야 한다")
+    kind = data.get("kind")
+    if kind not in _ANSWER_KEYS:
+        raise DatasetError(f"{where}: expected_answer.kind는 {sorted(_ANSWER_KEYS)} 중 하나다")
+    if set(data) != _ANSWER_KEYS[kind]:
+        raise DatasetError(
+            f"{where}: expected_answer({kind})의 키가 {sorted(_ANSWER_KEYS[kind])}와 다르다"
+        )
+    events: tuple[EventRef, ...] = ()
+    if kind == "event_set":
+        raw = data["events"]
+        if not isinstance(raw, list):
+            raise DatasetError(f"{where}: events는 목록이어야 한다")
+        events = tuple(_parse_event(e, f"{where}.events") for e in raw)
+        if len(set(events)) != len(events):
+            raise DatasetError(f"{where}: events에 중복 항목이 있다")
+    event = _parse_event(data["event"], f"{where}.event") if "event" in data else None
+    start = _parse_start(data["start"], where) if "start" in data else None
+    return ExpectedAnswer(kind, events, event, start)
+
+
 def _parse_gold(data: Mapping[str, Any], where: str) -> GoldRecord:
     facts: list[FactRecord] = []
     for i, f in enumerate(_get(data, "answer_facts", list, where)):
@@ -206,6 +288,9 @@ def _parse_gold(data: Mapping[str, Any], where: str) -> GoldRecord:
         expected_changes=changes,
         required_tool_calls=tuple(calls),
         forbidden_tools=_str_list(data, "forbidden_tools", where),
+        expected_answer=_parse_expected_answer(
+            data.get("expected_answer"), f"{where}.expected_answer"
+        ),
     )
 
 

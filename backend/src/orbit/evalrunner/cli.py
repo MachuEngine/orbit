@@ -34,10 +34,10 @@ from orbit.evalrunner.task_source import DatasetError, load_dataset
 SEAL_FLAG = "--i-understand-this-uses-the-sealed-test-split"
 
 
-def _git(*args: str) -> str | None:
+def _git(root: Path, *args: str) -> str | None:
     try:
         out = subprocess.run(  # noqa: S603
-            ["git", *args],  # noqa: S607
+            ["git", "-C", str(root), *args],  # noqa: S607
             capture_output=True,
             text=True,
             check=True,
@@ -48,27 +48,32 @@ def _git(*args: str) -> str | None:
     return out.stdout
 
 
-def _git_state(out_dir: Path | None = None) -> tuple[str, bool]:
+def _git_state(out_dir: Path | None = None, repo: Path | None = None) -> tuple[str, bool]:
     """(HEAD SHA, 작업 트리에 추적 파일 변경이 있는가). git을 쓸 수 없으면 ("unknown", True).
 
     추적하지 않는 파일은 `backend/src`, `eval/` 아래에 있을 때만 변경으로 본다(`out_dir` 제외).
     """
-    sha = (_git("rev-parse", "HEAD") or "").strip() or "unknown"
-    status = _git("status", "--porcelain", "--untracked-files=no")
+    # 실행 위치(cwd)가 아니라 이 패키지가 있는 저장소를 본다. `repo`는 테스트용 재정의다.
+    start = repo or Path(__file__).resolve().parent
+    top_out = _git(start, "rev-parse", "--show-toplevel")
+    if top_out is None or not top_out.strip():
+        return "unknown", True
+    top = Path(top_out.strip())
+    sha = (_git(top, "rev-parse", "HEAD") or "").strip() or "unknown"
+    status = _git(top, "status", "--porcelain", "--untracked-files=no")
     if status is None or status.strip():
         return sha, True
     # 코드가 있는 곳(`backend/src`, `eval/`)의 추적하지 않는 파일도 변경으로 본다.
     # 결과 출력 폴더는 제외한다.
     specs = [":(top)backend/src", ":(top)eval"]
-    top = (_git("rev-parse", "--show-toplevel") or "").strip()
-    if out_dir is not None and top:
+    if out_dir is not None:
         try:
-            rel = out_dir.resolve().relative_to(Path(top).resolve())
+            rel = out_dir.resolve().relative_to(top.resolve())
         except ValueError:
             rel = None
         if rel is not None and str(rel) != ".":
             specs.append(f":(top,exclude){rel.as_posix()}")
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *specs)
+    untracked = _git(top, "ls-files", "--others", "--exclude-standard", "--", *specs)
     return sha, untracked is None or bool(untracked.strip())
 
 

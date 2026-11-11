@@ -207,3 +207,17 @@ async def test_partial_run_covers_every_task_once_before_second_repeat(dataset: 
     assert summary.stopped_reason == "token_cap"
     assert {r.repeat for r in summary.results} == {1}
     assert len({r.task_id for r in summary.results}) == len(summary.results)
+
+
+async def test_model_id_requirement_does_not_instantiate_an_llm(dataset: Dataset) -> None:
+    created: list[int] = []
+
+    def factory(task: Any, repeat: int) -> Any:
+        created.append(1)
+        return SlowLLM()
+
+    with pytest.raises(ValueError, match="model-id"):
+        await run_experiment(
+            dataset, split="dev", sut_factory=ScriptedToolSUT, llm_factory=factory, repeats=1
+        )
+    assert created == []

@@ -16,12 +16,18 @@ def rec(
     dataset: str = "d@1",
     split: str = "dev",
     repeats: int = 2,
+    n_tasks: int | None = None,
 ) -> dict[str, Any]:
     return {
         "task_id": task,
         "repeat": repeat,
         "config_fingerprint": fp,
-        "config": {"dataset": dataset, "split": split, "repeats": repeats},
+        "config": {
+            "dataset": dataset,
+            "split": split,
+            "repeats": repeats,
+            **({} if n_tasks is None else {"n_tasks": n_tasks}),
+        },
         "outcome": {"success": ok, "failure_type": None if ok else (failure or "wrong_answer")},
     }
 
@@ -132,13 +138,26 @@ def test_duplicate_task_repeat_is_error(tmp_path: Path) -> None:
         stats.load_results(path)
 
 
-def test_incomplete_tasks_are_excluded_and_counted() -> None:
-    records = make({"a": [True] * 3, "b": [False] * 3, "c": [True]})
+def test_interrupted_run_is_cut_to_last_complete_round_and_reported() -> None:
+    # 설정은 3회였지만 중단: a·b는 3회, c는 1회만 했다. 모든 과제가 끝낸 라운드는 1회차뿐이다.
+    records = [
+        *[rec("a", i, True, repeats=3) for i in (1, 2, 3)],
+        *[rec("b", i, False, repeats=3) for i in (1, 2, 3)],
+        rec("c", 1, True, repeats=3),
+    ]
     s = stats.success_rate(records, resamples=50, seed=0)
-    assert (s.n_tasks, s.n_incomplete_tasks, s.rate) == (2, 1, 0.5)
-    s2 = stats.success_rate(records, resamples=50, seed=0, include_incomplete=True)
-    assert (s2.n_tasks, s2.n_incomplete_tasks) == (3, 0)
-    assert s2.rate == pytest.approx(2 / 3)
+    assert (s.truncated, s.used_repeats, s.config_repeats) == (True, 1, 3)
+    assert (s.n_tasks, s.n_incomplete_tasks) == (3, 0)
+    assert s.rate == pytest.approx(2 / 3)  # 1회차만 쓴다: a 성공, b 실패, c 성공
+    full = stats.success_rate(records, resamples=50, seed=0, include_incomplete=True)
+    assert (full.truncated, full.used_repeats, full.n_tasks) == (False, 3, 3)
+    assert full.rate == pytest.approx((1 + 0 + 1) / 3)
+    assert stats.pass_k(records).k == 3  # pass^k는 자신의 k 규칙을 따른다
+
+
+def test_complete_run_is_not_truncated() -> None:
+    s = stats.success_rate(make({"a": [True] * 2, "b": [False] * 2}), resamples=50, seed=0)
+    assert (s.truncated, s.used_repeats, s.config_repeats) == (False, 2, 2)
 
 
 def test_unscored_episodes_are_not_in_denominator() -> None:
@@ -181,12 +200,18 @@ def test_state_diff_mismatch_count_and_model_mismatch_rejection(tmp_path: Path) 
         stats.load_results(path, reject_model_mismatch=True)
 
 
-def test_expected_repeats_come_from_config_not_from_data() -> None:
-    # 모든 과제가 1회만 돌았지만 설정은 3회였다: 전부 불완전이므로 통계에 쓸 과제가 없다
-    records = [rec("a", 1, True, repeats=3), rec("b", 1, False, repeats=3)]
-    with pytest.raises(stats.ResultsError, match="과제가 없다"):
+def test_never_started_tasks_make_round_incomplete_when_n_tasks_is_known() -> None:
+    # 3개 과제 중 2개만 1회차를 했다(config.n_tasks=3): 완료한 라운드가 없다
+    records = [rec("a", 1, True, repeats=3, n_tasks=3), rec("b", 1, False, repeats=3, n_tasks=3)]
+    with pytest.raises(stats.ResultsError, match="--include-incomplete"):
         stats.success_rate(records, resamples=10)
     assert stats.success_rate(records, resamples=10, include_incomplete=True).n_tasks == 2
+
+
+def test_no_complete_round_error_mentions_include_incomplete() -> None:
+    only_second = [rec("a", 2, True, repeats=3)]  # 1회차가 없다
+    with pytest.raises(stats.ResultsError, match="--include-incomplete"):
+        stats.success_rate(only_second, resamples=10)
 
 
 def test_config_repeats_must_exist_and_agree() -> None:

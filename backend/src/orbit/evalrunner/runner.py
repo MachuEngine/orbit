@@ -38,7 +38,6 @@ from orbit.evalrunner.episode import (
 from orbit.evalrunner.scoring import FailureType, score_episode
 from orbit.evalrunner.task_source import SPLITS, Dataset, DatasetError, TaskView
 from orbit.llm.interface import LLM, UsageRecorder
-from orbit.llm.scripted import ScriptedLLM
 
 UNSPECIFIED_MODEL = "unspecified"
 
@@ -103,6 +102,7 @@ def _config_dict(
     seed: int,
     repeats: int,
     sample: int | None,
+    n_tasks: int,
 ) -> dict[str, Any]:
     return {
         "git_sha": git_sha,
@@ -119,6 +119,7 @@ def _config_dict(
         "experiment_seed": seed,
         "repeats": repeats,
         "sample": sample,
+        "n_tasks": n_tasks,
     }
 
 
@@ -136,6 +137,7 @@ class EpisodeResult:
     state_diff_match: bool | None
     checks: Mapping[str, bool | None]
     unscored: tuple[str, ...]
+    text_fact_recall: float | None  # 구조화 채점 과제에서만. 사실이 없으면 None
     trajectory: tuple[str, ...]
     llm_calls: int
     input_tokens: int
@@ -163,6 +165,7 @@ class EpisodeResult:
             "approval_violations": 0,  # v0 고정. 승인 경로는 4단계에서 채운다
             "checks": dict(self.checks),
             "unscored": list(self.unscored),
+            "text_fact_recall": self.text_fact_recall,
             "trajectory": list(self.trajectory),
             "usage": {
                 "llm_calls": self.llm_calls,
@@ -255,7 +258,11 @@ async def run_episode(
             error_type, detail = "budget_exceeded", "tokens"
 
     score = score_episode(
-        task.gold, output.final_text if output is not None else "", calls, diff(before, world)
+        task.gold,
+        output.final_text if output is not None else "",
+        calls,
+        diff(before, world),
+        output.structured if output is not None else None,
     )
     failure: FailureType | None
     if score.failure_type in ("forbidden_tool", "unexpected_state_change"):
@@ -294,6 +301,7 @@ async def run_episode(
         state_diff_match=score.state_diff_match,
         checks=checks,
         unscored=score.unscored,
+        text_fact_recall=None if error_type is not None else score.text_fact_recall,
         trajectory=tuple(c.tool for c in calls),
         llm_calls=len(recorder.records),
         input_tokens=usage.input_tokens,
@@ -382,7 +390,8 @@ async def run_experiment(
     for account in {t.account_id for t in tasks}:  # FaultPlan 오타를 실행 전에 드러낸다
         build_sim_connectors(base_world.fork(0), [account], fault.plan)
 
-    if model_id == UNSPECIFIED_MODEL and not isinstance(llm_factory(tasks[0], 1), ScriptedLLM):
+    # LLM 인스턴스를 따로 만들지 않고 팩토리 메타데이터(`is_scripted`)로 판별한다.
+    if model_id == UNSPECIFIED_MODEL and not getattr(llm_factory, "is_scripted", False):
         raise ValueError("ScriptedLLM이 아닌 LLM에는 --model-id(고정 모델 ID)를 지정해야 한다")
     probe = sut_factory()
     config = _config_dict(
@@ -399,6 +408,7 @@ async def run_experiment(
         seed=seed,
         repeats=repeats,
         sample=sample,
+        n_tasks=len(tasks),
     )
     fingerprint = _digest(config)
     exp_id = experiment_id or f"exp-{fingerprint[:12]}"
