@@ -1,4 +1,9 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { createRef } from "react";
+import { vi } from "vitest";
+import { useComposer } from "../composer/useComposer";
+import { Composer } from "./Composer";
 import { describe, expect, it } from "vitest";
 import { initialRunViewState } from "../runs/reducer";
 import { MessageList } from "./MessageList";
@@ -94,7 +99,7 @@ describe("MessageList", () => {
         working={false}
       />,
     );
-    expect(screen.getByText("보내는 중")).toBeInTheDocument();
+    expect(screen.getByText("전송 중")).toBeInTheDocument();
     rerender(
       <MessageList
         messages={[]}
@@ -104,7 +109,7 @@ describe("MessageList", () => {
         working={false}
       />,
     );
-    expect(screen.getByText("보내지 못했습니다")).toBeInTheDocument();
+    expect(screen.getByText("전송하지 못했습니다")).toBeInTheDocument();
     expect(screen.getByText("보낼 말")).toBeInTheDocument();
   });
 
@@ -121,5 +126,33 @@ describe("isNearBottom", () => {
     expect(isNearBottom({ scrollTop: 900, scrollHeight: 1000, clientHeight: 100 })).toBe(true);
     expect(isNearBottom({ scrollTop: 860, scrollHeight: 1000, clientHeight: 100 })).toBe(true);
     expect(isNearBottom({ scrollTop: 300, scrollHeight: 1000, clientHeight: 100 })).toBe(false);
+  });
+});
+
+function Harness({ blocked, send }: { blocked: boolean; send: (text: string) => Promise<void> }) {
+  const composer = useComposer(send);
+  return (
+    <Composer composer={composer} inputRef={createRef<HTMLTextAreaElement>()} blocked={blocked} />
+  );
+}
+
+describe("Composer", () => {
+  it("승인 대기 중에는 전송 버튼이 꺼지고 입력은 되며 Enter로도 전송되지 않는다", async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    render(<Harness blocked send={send} />);
+    const input = screen.getByLabelText("메시지");
+    await userEvent.type(input, "나중에 보낼 말{Enter}");
+    expect(input).toHaveValue("나중에 보낼 말");
+    expect(screen.getByRole("button", { name: "전송" })).toBeDisabled();
+    expect(send).not.toHaveBeenCalled();
+    expect(input).toHaveAccessibleDescription(/승인 대기 중에는 전송할 수 없습니다/);
+  });
+
+  it("승인 대기가 아니면 전송 버튼 문구는 전송이고 Enter로 전송한다", async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    render(<Harness blocked={false} send={send} />);
+    await userEvent.type(screen.getByLabelText("메시지"), "안녕{Enter}");
+    expect(send).toHaveBeenCalledWith("안녕");
+    expect(screen.getByRole("button", { name: "전송" })).toBeEnabled();
   });
 });

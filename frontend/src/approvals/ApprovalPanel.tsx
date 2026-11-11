@@ -4,7 +4,7 @@ import { Icon } from "../ui/Icon";
 import {
   describeApproval,
   hasProvenanceWarning,
-  provenanceReason,
+  personReason,
   provenanceTag,
   type DetailRow,
   type Person,
@@ -82,7 +82,7 @@ function decisionMessage(state: DecisionState): { tone: "info" | "error"; text: 
         case "network":
           return {
             tone: "error",
-            text: "서버에 연결하지 못했습니다. 연결을 확인한 뒤 다시 눌러 주세요.",
+            text: "결정이 전달됐는지 확인하지 못했습니다. 다시 눌러도 두 번 실행되지 않습니다.",
           };
         default:
           return { tone: "error", text: "결정을 전달하지 못했습니다. 다시 눌러 주세요." };
@@ -132,7 +132,16 @@ function ApprovalDetail({ approval, clock }: { approval: Approval; clock: Clock 
       {warned && (
         <p className="approval-alert" role="alert">
           <Icon name="warning" />
-          <span>직접 말씀하지 않은 값이 들어 있습니다. 표시된 항목을 확인해 주세요.</span>
+          <span>확인이 필요한 값이 들어 있습니다. 표시된 항목을 확인해 주세요.</span>
+        </p>
+      )}
+      {view.hiddenKeys.length > 0 && (
+        <p className="approval-alert" role="alert">
+          <Icon name="warning" />
+          <span>
+            표시되지 않은 항목이 있습니다({view.hiddenKeys.join(", ")}). 내용을 모두 확인할 수
+            없으면 실행하지 않는 것이 안전합니다.
+          </span>
         </p>
       )}
       <dl className="approval-details">
@@ -208,15 +217,20 @@ function Row({ row }: { row: DetailRow }) {
   );
 }
 
+function personBadge(person: Person): string {
+  if (person.source === null) return "출처 확인 안 됨";
+  return person.source === "model" ? "비서가 만든 값" : "외부 출처";
+}
+
 function PersonItem({ person }: { person: Person }) {
-  const reason = provenanceReason(person.source);
+  const reason = personReason(person);
   const tag = provenanceTag(person.source);
   return (
     <li className={person.flagged ? "person person-flagged" : "person"}>
       {person.flagged && (
         <span className="badge badge-warning">
           <Icon name="warning" />
-          <span>{person.source === "model" ? "비서가 만든 값" : "외부 출처"}</span>
+          <span>{personBadge(person)}</span>
         </span>
       )}{" "}
       <span className="person-email">{person.email}</span>

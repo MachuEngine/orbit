@@ -6,8 +6,19 @@ export default defineConfig({
   // 글꼴 파일이 작아도 CSS에 끼워 넣지 않고 따로 내려받게 한다(unicode-range 분할이 의미를 가진다).
   build: { assetsInlineLimit: 0 },
   server: {
-    // 브랜드 토큰·로고 원본(docs/brand)을 저장소 루트에서 직접 읽는다.
-    fs: { allow: [".."] },
+    // 개발 서버가 내줄 수 있는 파일: frontend/와 브랜드 토큰·로고 원본(docs/brand)뿐이다.
+    // deny는 vite 기본값(.env*, 인증서, .git)에 비공개 문서와 비밀 파일 패턴을 더한 것이다.
+    fs: {
+      allow: [".", "../docs/brand"],
+      deny: [
+        ".env",
+        ".env.*",
+        "*.{crt,pem,key}",
+        "**/.git/**",
+        "**/private-docs/**",
+        "**/secrets/**",
+      ],
+    },
     // 개발 중에도 웹과 API를 같은 출처로 쓴다(ADR-0013).
     proxy: {
       "/api": "http://127.0.0.1:8000",

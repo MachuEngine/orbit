@@ -52,7 +52,7 @@ export function MessageList({
           <span className="visually-hidden">나</span>
           <p>{outgoing}</p>
           <span className="message-meta">
-            {sendStatus === "failed" ? "보내지 못했습니다" : "보내는 중"}
+            {sendStatus === "failed" ? "전송하지 못했습니다" : "전송 중"}
           </span>
         </li>
       )}

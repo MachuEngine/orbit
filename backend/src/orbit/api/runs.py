@@ -47,6 +47,7 @@ from orbit.runflow.repo import (
     workspace_exists,
 )
 from orbit.runflow.summary import approval_summary
+from orbit.runflow.target import public_target
 
 router = APIRouter()
 Workspace = Annotated[uuid.UUID, Depends(current_workspace)]
@@ -241,6 +242,7 @@ async def read_approval(approval_id: uuid.UUID, request: Request, ws: Workspace)
         "args": tool_call.args,
         "summary": approval_summary(tool_call.tool_name, tool_call.args, handles),
         "provenance": tool_call.provenance.get("emails", {}),
+        "target": public_target(tool_call.provenance.get("target")),
         "expires_at": approval.expires_at.isoformat(),
         "decided_at": approval.decided_at.isoformat() if approval.decided_at else None,
     }

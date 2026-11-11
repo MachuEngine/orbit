@@ -40,7 +40,7 @@ export function runStatusItem(run: RunProgress): StatusItem | null {
         id: "waiting",
         tone: "warning",
         icon: "warning",
-        text: "승인 대기 중입니다. 내용을 확인하고 실행 여부를 정해 주세요.",
+        text: "승인 대기 중입니다. 위 카드에서 실행 여부를 정하기 전에는 새 메시지를 전송할 수 없습니다.",
       };
     case "succeeded":
       return { id: "done", tone: "success", icon: "success", text: "완료했습니다." };

@@ -41,6 +41,7 @@ export function ChatScreen({ onSignOut }: { onSignOut: () => void }) {
   const composer = useComposer(send);
   const busy = state.status === "queued" || state.status === "running";
   const approvalId = state.pendingApproval?.approvalId ?? null;
+  const approvalWait = state.status === "waiting_approval" || approvalId !== null;
 
   const { scrollRef, contentRef, onScroll, showJump, jumpToBottom } = useStickToBottom(
     `${state.messages.length}:${state.results.length}:${outgoing ?? ""}:${busy}:${approvalId ?? ""}`,
@@ -97,7 +98,7 @@ export function ChatScreen({ onSignOut }: { onSignOut: () => void }) {
           <StatusBar
             items={[runStatusItem(state), connectionStatusItem(connection, state.finished)]}
           />
-          <Composer composer={composer} inputRef={inputRef} />
+          <Composer composer={composer} inputRef={inputRef} blocked={approvalWait} />
         </div>
       </footer>
     </main>

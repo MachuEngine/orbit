@@ -26,9 +26,23 @@ export interface ApprovalView {
   rows: DetailRow[];
   /** 인자 목록에 없는데 출처 경고가 붙은 주소. 경고를 빠뜨리지 않으려고 따로 보여 준다. */
   strayWarnings: Person[];
+  /** 승인 인자에 있지만 이 화면이 보여 주지 않은 항목 이름 */
+  hiddenKeys: string[];
 }
 
-type ApprovalInput = Pick<Approval, "tool_name" | "args" | "summary" | "provenance">;
+type ApprovalInput = Pick<Approval, "tool_name" | "args" | "summary" | "provenance"> & {
+  target?: Approval["target"];
+};
+
+/** 화면에 보이지 않아도 되는 내부 식별자. 제공자 ID는 일부러 보여 주지 않는다. */
+const INTERNAL_KEYS = ["kind", "calendar_id", "event_id"];
+/** 도구별로 이 화면이 보여 주는 인자 이름 */
+const SHOWN_KEYS: Record<string, string[]> = {
+  send_mail: ["to", "cc", "subject", "body", "reply_to_thread_id"],
+  create_event: ["title", "start", "end", "attendees", "location", "description"],
+  update_event_time: ["start", "end"],
+  cancel_event: [],
+};
 
 const EXCERPT_LENGTH = 80;
 const COLLAPSE_OVER_LENGTH = 120;
@@ -46,7 +60,8 @@ function strList(value: unknown): string[] {
 
 function person(email: string, provenance: Approval["provenance"]): Person {
   const source = provenance[email.toLowerCase()] ?? null;
-  return { email, source, flagged: source !== null && isWarnedProvenance(source) };
+  // 출처를 알 수 없는 주소도 경고한다(확인하지 못한 값은 안전하다고 보지 않는다).
+  return { email, source, flagged: source === null || isWarnedProvenance(source) };
 }
 
 /** 이 출처가 왜 확인이 필요한지 한 줄로 설명한다. 확인이 필요 없는 출처는 null이다. */
@@ -59,6 +74,13 @@ export function provenanceReason(source: Provenance | null): string | null {
     default:
       return null;
   }
+}
+
+/** 수신자·참석자 주소에 붙이는 이유. 출처가 없으면(null) 확인하지 못했다고 알린다. */
+export function personReason(person: Person): string | null {
+  return person.source === null && person.flagged
+    ? "출처를 확인하지 못한 주소입니다. 직접 말씀하신 주소가 맞는지 확인해 주세요."
+    : provenanceReason(person.source);
 }
 
 /** 출처가 확인된 주소 옆에 붙이는 짧은 말. */
@@ -130,8 +152,12 @@ function timeRow(label: string, args: Record<string, unknown>): DetailRow | null
     : null;
 }
 
-function eventTargetRow(summary: Record<string, unknown>): DetailRow {
-  // 모델과 같은 핸들(E1 등)만 받는다. 제공자의 일정 ID는 화면에 오지 않는다.
+function eventTargetRow(
+  summary: Record<string, unknown>,
+  target: Approval["target"] | undefined,
+): DetailRow {
+  // 서버가 준 대상 요약(제목)을 쓴다. 없으면 모델과 같은 핸들(E1 등)만 보여 준다. 제공자 ID는 오지 않는다.
+  if (target?.kind === "event") return { kind: "text", label: "대상 일정", value: target.title };
   const handle = str(summary.handle);
   return {
     kind: "text",
@@ -142,8 +168,9 @@ function eventTargetRow(summary: Record<string, unknown>): DetailRow {
 
 /** 승인 인자를 사람이 읽는 항목으로 바꾼다. JSON 원문은 보여 주지 않는다. */
 export function describeApproval(approval: ApprovalInput): ApprovalView {
-  const { args, summary, provenance } = approval;
+  const { args, summary, provenance, target } = approval;
   const rows: DetailRow[] = [];
+  const hiddenKeys: string[] = [];
   const shown = new Set<string>();
   const people = (label: string, emails: string[]) => {
     if (emails.length === 0) return;
@@ -163,7 +190,11 @@ export function describeApproval(approval: ApprovalInput): ApprovalView {
       const body = str(args.body);
       if (body !== null) rows.push(longText("본문", body));
       if (str(args.reply_to_thread_id) !== null) {
-        rows.push({ kind: "text", label: "종류", value: "받은 메일 대화에 답장" });
+        rows.push(
+          target?.kind === "thread"
+            ? { kind: "text", label: "답장할 대화", value: target.subject }
+            : { kind: "text", label: "종류", value: "받은 메일 대화에 답장" },
+        );
       }
       break;
     }
@@ -179,12 +210,28 @@ export function describeApproval(approval: ApprovalInput): ApprovalView {
       break;
     }
     case "update_event_time": {
-      rows.push(eventTargetRow(summary));
-      push(timeRow("새 시간", args));
+      rows.push(eventTargetRow(summary, target));
+      if (target?.kind === "event") {
+        rows.push({
+          kind: "text",
+          label: "변경 전",
+          value: formatTimeRange(target.start, target.end),
+        });
+        push(timeRow("변경 후", args));
+      } else {
+        push(timeRow("새 시간", args));
+      }
       break;
     }
     case "cancel_event": {
-      rows.push(eventTargetRow(summary));
+      rows.push(eventTargetRow(summary, target));
+      if (target?.kind === "event") {
+        rows.push({
+          kind: "text",
+          label: "일정 시간",
+          value: formatTimeRange(target.start, target.end),
+        });
+      }
       break;
     }
     default: {
@@ -192,8 +239,18 @@ export function describeApproval(approval: ApprovalInput): ApprovalView {
       for (const [key, value] of Object.entries(args)) {
         if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
           rows.push({ kind: "text", label: key, value: String(value) });
+        } else {
+          hiddenKeys.push(key);
         }
       }
+    }
+  }
+
+  // 알려진 도구에 이 화면이 모르는 인자가 들어 있으면 숨겨진 값으로 알린다.
+  const known = SHOWN_KEYS[approval.tool_name];
+  if (known !== undefined) {
+    for (const key of Object.keys(args)) {
+      if (!known.includes(key) && !INTERNAL_KEYS.includes(key)) hiddenKeys.push(key);
     }
   }
 
@@ -201,7 +258,7 @@ export function describeApproval(approval: ApprovalInput): ApprovalView {
     .filter((email) => !shown.has(email.toLowerCase()))
     .map((email) => person(email, provenance))
     .filter((p) => p.flagged);
-  return { rows, strayWarnings };
+  return { rows, strayWarnings, hiddenKeys };
 }
 
 /** 카드 전체에서 출처 경고가 붙은 주소가 하나라도 있는지. */

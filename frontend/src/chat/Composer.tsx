@@ -5,9 +5,12 @@ import type { useComposer } from "../composer/useComposer";
 export function Composer({
   composer,
   inputRef,
+  blocked = false,
 }: {
   composer: ReturnType<typeof useComposer>;
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  /** 승인 대기 중이라 새 메시지를 보낼 수 없다. 입력은 계속 할 수 있다. */
+  blocked?: boolean;
 }) {
   const sending = composer.status === "sending";
   const failed = composer.status === "failed";
@@ -17,7 +20,7 @@ export function Composer({
       className="composer"
       onSubmit={(event) => {
         event.preventDefault();
-        void composer.submit();
+        if (!blocked) void composer.submit();
       }}
     >
       <label className="visually-hidden" htmlFor="composer-input">
@@ -32,19 +35,29 @@ export function Composer({
           aria-describedby={describedBy}
           aria-invalid={failed}
           {...composer.inputProps}
+          onKeyDown={(event) => {
+            // 승인 대기 중에는 Enter로도 전송하지 않는다. 입력한 내용은 그대로 둔다.
+            if (blocked && event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              return;
+            }
+            composer.inputProps.onKeyDown(event);
+          }}
         />
-        <button type="submit" className="btn btn-primary" disabled={sending}>
-          {sending ? "보내는 중" : "보내기"}
+        <button type="submit" className="btn btn-primary" disabled={sending || blocked}>
+          {sending ? "전송 중" : "전송"}
         </button>
       </div>
       <p id="composer-hint" className="composer-hint">
-        Enter로 보내고, Shift+Enter로 줄을 바꿉니다.
+        {blocked
+          ? "승인 대기 중에는 전송할 수 없습니다. 위 카드에서 결정하면 보낼 수 있고, 입력한 내용은 그대로 남습니다."
+          : "Enter로 전송하고, Shift+Enter로 줄을 바꿉니다."}
       </p>
       {failed && (
         <p id="composer-error" className="composer-error" role="alert">
-          메시지를 보내지 못했습니다. 연결을 확인한 뒤 다시 보내 주세요.{" "}
+          메시지를 전송하지 못했습니다. 연결을 확인한 뒤 다시 전송해 주세요.{" "}
           <button type="button" className="btn btn-secondary" onClick={() => void composer.retry()}>
-            다시 보내기
+            다시 전송
           </button>
         </p>
       )}

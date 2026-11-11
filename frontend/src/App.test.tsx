@@ -79,7 +79,7 @@ describe("채팅 화면", () => {
     render(<App />);
     expect(await screen.findByText(/물어보세요/)).toBeInTheDocument();
     const input = screen.getByLabelText("메시지");
-    expect(input).toHaveAccessibleDescription(/Enter로 보내고/);
+    expect(input).toHaveAccessibleDescription(/Enter로 전송하고/);
     expect(screen.getByRole("log", { name: "대화" })).toBeInTheDocument();
   });
 
@@ -108,14 +108,14 @@ describe("채팅 화면", () => {
     const input = await screen.findByLabelText("메시지");
     await userEvent.type(input, "내일 일정 알려 줘{Enter}");
 
-    expect(await screen.findByText("보내지 못했습니다")).toBeInTheDocument();
-    expect(screen.getByText(/메시지를 보내지 못했습니다/)).toBeInTheDocument();
+    expect(await screen.findByText("전송하지 못했습니다")).toBeInTheDocument();
+    expect(screen.getByText(/메시지를 전송하지 못했습니다/)).toBeInTheDocument();
     expect(input).toHaveValue("내일 일정 알려 줘");
-    expect(input).toHaveAccessibleDescription(/메시지를 보내지 못했습니다/);
+    expect(input).toHaveAccessibleDescription(/메시지를 전송하지 못했습니다/);
 
-    await userEvent.click(screen.getByRole("button", { name: "다시 보내기" }));
+    await userEvent.click(screen.getByRole("button", { name: "다시 전송" }));
     await waitFor(() => {
-      expect(screen.queryByText("보내지 못했습니다")).toBeNull();
+      expect(screen.queryByText("전송하지 못했습니다")).toBeNull();
     });
     expect(input).toHaveValue("");
     expect(runAttempts).toBe(2);

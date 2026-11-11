@@ -71,7 +71,7 @@ export function actionLabel(toolName: string): ActionLabel | null {
     case "send_mail":
       return {
         name: "메일 보내기",
-        confirm: "보내기",
+        confirm: "메일 보내기",
         done: "메일을 보냈습니다.",
         failed: "메일을 보내지 못했습니다.",
       };
@@ -85,14 +85,14 @@ export function actionLabel(toolName: string): ActionLabel | null {
     case "update_event_time":
       return {
         name: "일정 시간 변경",
-        confirm: "일정 변경",
+        confirm: "일정 시간 변경",
         done: "일정 시간을 변경했습니다.",
         failed: "일정 시간을 변경하지 못했습니다.",
       };
     case "cancel_event":
       return {
         name: "일정 취소",
-        confirm: "일정 취소",
+        confirm: "일정 취소하기",
         done: "일정을 취소했습니다.",
         failed: "일정을 취소하지 못했습니다.",
       };

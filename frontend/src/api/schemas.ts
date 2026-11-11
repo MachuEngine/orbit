@@ -73,6 +73,14 @@ export const approvalSchema = z.object({
   summary: z.record(z.string(), z.unknown()),
   /** 이메일(소문자) -> 출처 */
   provenance: z.record(z.string(), provenanceSchema),
+  /** 대상 요약. 일정 변경·취소는 현재 제목·시각, 메일 답장은 스레드 제목. 없으면 null */
+  target: z
+    .union([
+      z.object({ kind: z.literal("event"), title: z.string(), start: z.string(), end: z.string() }),
+      z.object({ kind: z.literal("thread"), subject: z.string() }),
+    ])
+    .nullable()
+    .default(null),
   expires_at: z.string(),
   decided_at: z.string().nullable(),
 });

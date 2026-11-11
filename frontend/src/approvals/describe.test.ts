@@ -79,6 +79,72 @@ describe("describeApproval", () => {
   });
 });
 
+describe("출처 fail-closed와 숨겨진 항목", () => {
+  it("출처가 없는 수신자·참석자는 경고 대상이다", () => {
+    const mail = describeApproval({
+      tool_name: "send_mail",
+      args: { to: ["a@example.com"], subject: "s", body: "b" },
+      summary: {},
+      provenance: {},
+    });
+    expect(hasProvenanceWarning(mail)).toBe(true);
+    const event = describeApproval({
+      tool_name: "create_event",
+      args: {
+        title: "t",
+        start: "2026-11-12T05:00:00Z",
+        end: "2026-11-12T06:00:00Z",
+        attendees: ["a@example.com"],
+      },
+      summary: {},
+      provenance: {},
+    });
+    expect(hasProvenanceWarning(event)).toBe(true);
+  });
+
+  it("알려진 도구의 모르는 인자 이름을 숨겨진 항목으로 모은다(내부 ID는 제외)", () => {
+    const view = describeApproval({
+      tool_name: "cancel_event",
+      args: { kind: "cancel_event", calendar_id: "c", event_id: "e", reason: "x" },
+      summary: {},
+      provenance: {},
+    });
+    expect(view.hiddenKeys).toEqual(["reason"]);
+    const clean = describeApproval({
+      tool_name: "cancel_event",
+      args: { kind: "cancel_event", calendar_id: "c", event_id: "e" },
+      summary: {},
+      provenance: {},
+    });
+    expect(clean.hiddenKeys).toEqual([]);
+  });
+
+  it("모르는 도구의 객체 인자는 숨겨진 항목이다", () => {
+    const view = describeApproval({
+      tool_name: "future_tool",
+      args: { nested: { a: 1 } },
+      summary: {},
+      provenance: {},
+    });
+    expect(view.hiddenKeys).toEqual(["nested"]);
+  });
+
+  it("메일 답장은 대상 스레드 제목을 보여 준다", () => {
+    const view = describeApproval({
+      tool_name: "send_mail",
+      args: { to: ["a@example.com"], subject: "s", body: "b", reply_to_thread_id: "t" },
+      summary: {},
+      provenance: { "a@example.com": "user" },
+      target: { kind: "thread", subject: "프로젝트 일정 문의" },
+    });
+    expect(view.rows).toContainEqual({
+      kind: "text",
+      label: "답장할 대화",
+      value: "프로젝트 일정 문의",
+    });
+  });
+});
+
 describe("formatTimeRange", () => {
   it("같은 날이면 끝 시각만 쓰고 시간대를 덧붙인다", () => {
     const text = formatTimeRange("2026-11-12T05:30:00Z", "2026-11-12T06:00:00Z", "Asia/Seoul");

@@ -142,6 +142,58 @@ async def test_get_approval_returns_args_summary_provenance_and_expiry(
     assert body["args"]["event_id"] == "evalice002"
     assert body["provenance"] == {}
     assert body["expires_at"].startswith("2026-11-11T00:15:00")
+    # 대상 요약: 일정의 현재 제목·시각. 제공자 ID는 없다.
+    assert body["target"] == {
+        "kind": "event",
+        "title": "점심",
+        "start": "2026-11-12T03:00:00Z",
+        "end": "2026-11-12T04:00:00Z",
+    }
+    assert "evalice002" not in json.dumps(body["target"])
+
+
+async def test_get_approval_target_for_cancel_and_reply_thread(make_harness: Make) -> None:
+    cancel = [
+        {"text": None, "tool_calls": [{"name": "list_events", "arguments": DAY}]},
+        {"text": None, "tool_calls": [{"name": "cancel_event", "arguments": {"handle": "E2"}}]},
+        {"text": "취소했습니다."},
+    ]
+    h = await make_harness(cancel)
+    _, approval_id = await _waiting(h, "점심 취소해줘")
+    body = (await h.client.get(f"/api/approvals/{approval_id}")).json()
+    assert body["target"] == {
+        "kind": "event",
+        "title": "점심",
+        "start": "2026-11-12T03:00:00Z",
+        "end": "2026-11-12T04:00:00Z",
+    }
+
+    send = {"to": ["bob@example.org"], "subject": "Re", "body": "네.", "reply_to_handle": "M1"}
+    reply = [
+        {
+            "text": None,
+            "tool_calls": [{"name": "search_mail", "arguments": {"query": "in:inbox 프로젝트"}}],
+        },
+        {"text": None, "tool_calls": [{"name": "send_mail", "arguments": send}]},
+        {"text": "보냈습니다."},
+    ]
+    h2 = await make_harness(reply)
+    _, approval_id = await _waiting(h2, "답장해줘")
+    body = (await h2.client.get(f"/api/approvals/{approval_id}")).json()
+    assert body["target"] == {"kind": "thread", "subject": "프로젝트 일정 문의"}
+
+
+async def test_get_approval_target_is_null_without_existing_target(make_harness: Make) -> None:
+    create = {"title": "합성 회의", "start": MOVE["start"], "end": MOVE["end"]}
+    h = await make_harness(
+        [
+            {"text": None, "tool_calls": [{"name": "create_event", "arguments": create}]},
+            {"text": "만들었습니다."},
+        ]
+    )
+    _, approval_id = await _waiting(h, "회의 잡아줘")
+    body = (await h.client.get(f"/api/approvals/{approval_id}")).json()
+    assert body["target"] is None
 
 
 async def test_send_mail_records_argument_provenance(make_harness: Make) -> None:
