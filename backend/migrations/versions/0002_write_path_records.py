@@ -138,6 +138,8 @@ def upgrade() -> None:
                 ('pending', 'succeeded', 'failed', 'unknown', 'needs_user')),
             external_ref jsonb,
             error_kind text,
+            lease_owner uuid,
+            lease_expires_at timestamptz,
             created_at timestamptz NOT NULL,
             updated_at timestamptz NOT NULL,
             FOREIGN KEY (approval_id, workspace_id)
@@ -158,7 +160,8 @@ def upgrade() -> None:
     op.execute("GRANT SELECT, INSERT ON run_event, run_message, tool_call TO orbit_app")
     op.execute("GRANT SELECT, INSERT, UPDATE (status, decided_at) ON approval TO orbit_app")
     op.execute(
-        "GRANT SELECT, INSERT, UPDATE (status, external_ref, error_kind, updated_at)"
+        "GRANT SELECT, INSERT, UPDATE (status, external_ref, error_kind, lease_owner,"
+        " lease_expires_at, updated_at)"
         " ON execution TO orbit_app"
     )
 

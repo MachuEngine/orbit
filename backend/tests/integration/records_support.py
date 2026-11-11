@@ -2,7 +2,7 @@
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 
@@ -14,6 +14,7 @@ from orbit.records.approvals import create_tool_call_with_approval, decide_appro
 from orbit.records.executions import SqlExecutionStore
 from orbit.records.runs import append_event, append_message, create_run
 
+LEASE = timedelta(minutes=5)
 RECORD_TABLES = ("run", "run_event", "run_message", "tool_call", "approval", "execution")
 
 
@@ -29,6 +30,7 @@ class Seeded:
     tool_call_id: uuid.UUID
     approval_id: uuid.UUID
     execution_id: uuid.UUID
+    owner: uuid.UUID
 
 
 async def conversation_of(db: AsyncDatabase, workspace_id: uuid.UUID) -> uuid.UUID:
@@ -110,6 +112,8 @@ async def seed_all_tables(
         assert await decide_approval(
             s, workspace_id=ws, approval_id=approval.id, approve=True, clock=clock
         )
-    record, created = await SqlExecutionStore(db, ws, clock=clock, ids=ids).begin(approval.id)
+    owner = ids.next()
+    store = SqlExecutionStore(db, ws, clock=clock, ids=ids)
+    record, created = await store.begin(approval.id, owner, clock.now() + LEASE)
     assert created
-    return Seeded(ws, conv, run.id, tool_call_id, approval.id, record.id)
+    return Seeded(ws, conv, run.id, tool_call_id, approval.id, record.id, owner)

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
-from integration.records_support import new_clock, new_run, seed_all_tables
+from integration.records_support import LEASE, new_clock, new_run, seed_all_tables
 from integration.support import WorkspaceFactory
 from orbit.core.ids import Uuid7Generator
 from orbit.db.session import AsyncDatabase
@@ -387,23 +387,37 @@ async def test_expire_due_approvals_bulk(
 # ExecutionStore -------------------------------------------------------------------
 
 
+async def _approved(
+    db: AsyncDatabase, ws: uuid.UUID, run_id: uuid.UUID, ids: Uuid7Generator, clock: Any
+) -> uuid.UUID:
+    _, approval_id, _ = await _create_call(db, ws, run_id, ids.next(), ids, clock)
+    async with db.workspace_session(ws) as s:
+        assert await decide_approval(
+            s, workspace_id=ws, approval_id=approval_id, approve=True, clock=clock
+        )
+    return approval_id
+
+
 async def test_execution_store_begin_is_single_row_under_concurrency(
     async_db: AsyncDatabase, workspaces: WorkspaceFactory
 ) -> None:
     clock = new_clock()
     ids = Uuid7Generator(clock)
     ws, run_id = await new_run(async_db, workspaces, clock, ids)
-    _, approval_id, _ = await _create_call(async_db, ws, run_id, ids.next(), ids, clock)
-    async with async_db.workspace_session(ws) as s:
-        assert await decide_approval(
-            s, workspace_id=ws, approval_id=approval_id, approve=True, clock=clock
-        )
+    approval_id = await _approved(async_db, ws, run_id, ids, clock)
     store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
+    owners = [ids.next() for _ in range(CONCURRENCY)]
 
-    results = await asyncio.gather(*(store.begin(approval_id) for _ in range(CONCURRENCY)))
+    results = await asyncio.gather(
+        *(store.begin(approval_id, o, clock.now() + LEASE) for o in owners)
+    )
     assert sum(created for _, created in results) == 1
     assert len({rec.id for rec, _ in results}) == 1
-    assert all(rec.status == "pending" for rec, _ in results)
+    # 새 행을 만든 호출자만 소유권을 갖는다. 기존 행을 본 호출은 소유권을 바꾸지 못한다.
+    winner = next(rec for rec, created in results if created)
+    assert winner.lease_owner in owners
+    final = await store.get(approval_id)
+    assert final is not None and final.lease_owner == winner.lease_owner
     async with async_db.workspace_session(ws) as s:
         count = (await s.execute(text("SELECT count(*) FROM execution"))).scalar_one()
     assert count == 1
@@ -417,43 +431,49 @@ async def test_execution_store_requires_approved_approval(
     ws, run_id = await new_run(async_db, workspaces, clock, ids)
     _, approval_id, _ = await _create_call(async_db, ws, run_id, ids.next(), ids, clock)
     store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
+    until = clock.now() + LEASE
 
     with pytest.raises(ApprovalNotApproved):  # pending
-        await store.begin(approval_id)
+        await store.begin(approval_id, ids.next(), until)
     async with async_db.workspace_session(ws) as s:
         assert await decide_approval(
             s, workspace_id=ws, approval_id=approval_id, approve=False, clock=clock
         )
     with pytest.raises(ApprovalNotApproved):  # rejected
-        await store.begin(approval_id)
+        await store.begin(approval_id, ids.next(), until)
     with pytest.raises(ApprovalNotApproved):  # 없는 승인
-        await store.begin(ids.next())
+        await store.begin(ids.next(), ids.next(), until)
     assert await store.get(approval_id) is None
 
 
-async def test_execution_store_lifecycle(
+async def test_execution_store_lifecycle_with_lease(
     async_db: AsyncDatabase, workspaces: WorkspaceFactory
 ) -> None:
     clock = new_clock()
     ids = Uuid7Generator(clock)
     seeded = await seed_all_tables(async_db, workspaces, clock, ids)
-    ws = seeded.workspace_id
+    ws, owner = seeded.workspace_id, seeded.owner
     store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
+    until = clock.now() + LEASE
 
     rec = await store.get(seeded.approval_id)
     assert rec is not None and rec.id == seeded.execution_id
     assert (rec.status, rec.external_ref, rec.error_kind) == ("pending", None, None)
-    again, created = await store.begin(seeded.approval_id)
+    assert (rec.lease_owner, rec.lease_expires_at) == (owner, until)
+    # 기존 행에 begin해도 소유권은 바뀌지 않는다.
+    again, created = await store.begin(seeded.approval_id, ids.next(), until + LEASE)
     assert (again, created) == (rec, False)
 
-    await store.record_ref(rec.id, {"draft_id": "d-1"})
+    assert await store.record_ref(rec.id, owner, {"draft_id": "d-1"})
     got = await store.get(seeded.approval_id)
     assert got is not None and got.external_ref == {"draft_id": "d-1"}
 
-    # 결과 불명 -> 대조 후 성공. external_ref=None이면 기존 값을 유지한다.
-    await store.finish(rec.id, "unknown", None, None)
-    await store.record_ref(rec.id, {"draft_id": "d-1", "thread_id": "t-1"})
-    await store.finish(rec.id, "succeeded", None, None)
+    # 결과 불명 -> 대조 후 성공. unknown은 lease를 유지하고, ref는 통째로 바뀐다.
+    assert await store.finish(rec.id, owner, "unknown", None, None)
+    unknown = await store.get(seeded.approval_id)
+    assert unknown is not None and (unknown.status, unknown.lease_owner) == ("unknown", owner)
+    assert await store.record_ref(rec.id, owner, {"draft_id": "d-1", "thread_id": "t-1"})
+    assert await store.finish(rec.id, owner, "succeeded", None, None)
     done = await store.get(seeded.approval_id)
     assert done is not None
     assert (done.status, done.external_ref, done.error_kind) == (
@@ -461,19 +481,17 @@ async def test_execution_store_lifecycle(
         {"draft_id": "d-1", "thread_id": "t-1"},
         None,
     )
+    assert (done.lease_owner, done.lease_expires_at) == (None, None)  # 최종 상태는 lease를 비운다
 
-    # 같은 최종 상태의 재진입은 무해하고, 다른 상태로 바꾸거나 ref를 고치는 것은 거부한다.
-    await store.finish(rec.id, "succeeded", None, None)
-    with pytest.raises(InvalidTransition):
-        await store.finish(rec.id, "failed", None, "NotFound")
-    with pytest.raises(InvalidTransition):
-        await store.record_ref(rec.id, {"draft_id": "other"})
-    with pytest.raises(RecordNotFound):
-        await store.finish(ids.next(), "failed", None, "NotFound")
+    # 끝난 행은 어떤 쓰기도 반영되지 않는다.
+    assert not await store.finish(rec.id, owner, "succeeded", None, None)
+    assert not await store.finish(rec.id, owner, "failed", None, "NotFound")
+    assert not await store.record_ref(rec.id, owner, {"draft_id": "other"})
+    assert not await store.claim(rec.id, owner, until)
+    assert not await store.finish(ids.next(), owner, "failed", None, "NotFound")
     with pytest.raises(ValueError):
-        await store.finish(rec.id, "pending", None, None)
-    final = await store.get(seeded.approval_id)
-    assert final == done
+        await store.finish(rec.id, owner, "pending", None, None)
+    assert await store.get(seeded.approval_id) == done
 
 
 async def test_execution_failure_kind_is_recorded(
@@ -483,6 +501,71 @@ async def test_execution_failure_kind_is_recorded(
     ids = Uuid7Generator(clock)
     seeded = await seed_all_tables(async_db, workspaces, clock, ids)
     store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
-    await store.finish(seeded.execution_id, "failed", None, "PreconditionFailed")
+    assert await store.finish(
+        seeded.execution_id, seeded.owner, "failed", None, "PreconditionFailed"
+    )
     rec = await store.get(seeded.approval_id)
     assert rec is not None and (rec.status, rec.error_kind) == ("failed", "PreconditionFailed")
+
+
+async def test_concurrent_claim_only_one_succeeds(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids)
+    store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
+    # 처음 소유자의 lease가 만료된 뒤 여러 실행자가 동시에 claim한다.
+    clock.advance(LEASE)
+    owners = [ids.next() for _ in range(CONCURRENCY)]
+    until = clock.now() + LEASE
+    results = await asyncio.gather(*(store.claim(seeded.execution_id, o, until) for o in owners))
+    assert sum(results) == 1
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None
+    assert rec.lease_owner == owners[results.index(True)]
+
+
+async def test_claim_rules_and_lease_expiry(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids)
+    store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
+    first, other = seeded.owner, ids.next()
+    eid = seeded.execution_id
+
+    # lease가 유효한 동안 다른 owner의 claim은 실패하고, 소유자는 연장할 수 있다.
+    assert not await store.claim(eid, other, clock.now() + LEASE)
+    assert await store.claim(eid, first, clock.now() + 2 * LEASE)
+
+    # 소유자가 아닌 record_ref/finish는 거부되고 기록은 그대로다.
+    assert not await store.record_ref(eid, other, {"x": 1})
+    assert not await store.finish(eid, other, "succeeded", None, None)
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None and (rec.status, rec.external_ref, rec.lease_owner) == (
+        "pending",
+        None,
+        first,
+    )
+
+    # 만료 시각 정각부터 소유자의 쓰기도 거부된다(lease_expires_at > now).
+    clock.advance(2 * LEASE)
+    assert not await store.record_ref(eid, first, {"x": 1})
+    assert not await store.finish(eid, first, "succeeded", None, None)
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None and (rec.status, rec.external_ref) == ("pending", None)
+
+    # 만료 후에는 다른 owner가 claim하고, 이전 소유자는 쓸 수 없다.
+    assert await store.claim(eid, other, clock.now() + LEASE)
+    assert not await store.finish(eid, first, "succeeded", None, None)
+    assert await store.record_ref(eid, other, {"draft_id": "d-2"})
+    assert await store.finish(eid, other, "needs_user", None, None)
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None
+    assert (rec.status, rec.external_ref, rec.lease_owner) == (
+        "needs_user",
+        {"draft_id": "d-2"},
+        None,
+    )
