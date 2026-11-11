@@ -57,7 +57,15 @@ async def test_requests_without_cookie_get_401(make_harness: Make) -> None:
         anonymous.cookies.set("orbit_session", "not-a-session")
         assert (await anonymous.get(f"/api/runs/{run_id}")).status_code == 401
         info = (await anonymous.get("/api/session")).json()
-        assert info == {"authenticated": False, "workspace_id": None, "expires_at": None}
+        assert info == {
+            "authenticated": False,
+            "workspace_id": None,
+            "expires_at": None,
+            "display_name": None,
+            "email": None,
+            "dev_login": True,
+            "google_login": False,
+        }
 
 
 async def test_old_workspace_header_no_longer_authenticates(make_harness: Make) -> None:

@@ -35,11 +35,19 @@ export const executionStatusSchema = z.enum([
 ]);
 export type ExecutionStatus = z.infer<typeof executionStatusSchema>;
 
-/** `GET /api/session`. 로그인하지 않았어도 200이고 `authenticated`가 false다. */
+/**
+ * `GET /api/session`. 로그인하지 않았어도 200이고 `authenticated`가 false다.
+ * `display_name`·`email`은 이 세션의 사용자 본인 정보이고, 개발용 세션에는 없다(null).
+ * `dev_login`·`google_login`은 서버가 열어 둔 로그인 수단이다.
+ */
 export const sessionSchema = z.object({
   authenticated: z.boolean(),
   workspace_id: z.string().nullable(),
   expires_at: z.string().nullable(),
+  display_name: z.string().nullable(),
+  email: z.string().nullable(),
+  dev_login: z.boolean(),
+  google_login: z.boolean(),
 });
 export type Session = z.infer<typeof sessionSchema>;
 
