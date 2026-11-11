@@ -6,8 +6,10 @@
   앱 프로세스에는 설정하지 않는다.
 """
 
-from pydantic import SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Annotated
+
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -20,3 +22,35 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """환경 변수에서 설정을 읽는다. 필수 값이 없으면 ValidationError가 난다."""
     return Settings()
+
+
+class LLMSettings(BaseSettings):
+    """LLM 호출 설정. DB·API 경로가 이 설정 없이 동작하도록 `Settings`와 분리했다.
+
+    - `ORBIT_LLM_MODEL_ID`: 고정 모델 ID (D9-3). 형식 검증은 `orbit.llm.model_id`가 한다.
+    - `ORBIT_LLM_PROVIDER_ORDER`: 쉼표로 구분한 제공자 우선순위 (D9-4).
+    - `ORBIT_OPENROUTER_API_KEY`: 기본값 없음.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ORBIT_", extra="ignore")
+
+    llm_model_id: str
+    llm_provider_order: Annotated[list[str], NoDecode]
+    openrouter_api_key: SecretStr
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    llm_timeout_seconds: float = Field(default=60.0, gt=0)
+    llm_max_retries: int = Field(default=2, ge=0)
+
+    @field_validator("llm_provider_order", mode="before")
+    @classmethod
+    def _split_provider_order(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = [part.strip() for part in value.split(",") if part.strip()]
+        if isinstance(value, list) and not value:
+            raise ValueError("제공자 우선순위가 비어 있다")
+        return value
+
+
+def get_llm_settings() -> LLMSettings:
+    """환경 변수에서 LLM 설정을 읽는다. 필수 값이 없으면 ValidationError가 난다."""
+    return LLMSettings()
