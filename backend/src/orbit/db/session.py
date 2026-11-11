@@ -102,7 +102,9 @@ class AsyncDatabase:
             await conn.rollback()
         return None if row is None else tuple(row)
 
-    async def unscoped_auth_session_profile(self, token_hash: str) -> tuple[Any, ...] | None:
+    async def unscoped_auth_session_profile(
+        self, token_hash: str, now: datetime
+    ) -> tuple[Any, ...] | None:
         """토큰 해시의 세션에 묶인 사용자의 (user_id, email, display_name). 본인 정보만 나온다.
 
         `auth_session_profile` 함수(SECURITY DEFINER, 마이그레이션 0005)만 호출한다.
@@ -110,7 +112,8 @@ class AsyncDatabase:
         async with self._engine.connect() as conn:
             row = (
                 await conn.execute(
-                    text("SELECT * FROM auth_session_profile(:h)"), {"h": token_hash}
+                    text("SELECT * FROM auth_session_profile(:h, :now)"),
+                    {"h": token_hash, "now": now},
                 )
             ).first()
             await conn.rollback()

@@ -265,7 +265,20 @@ async def test_audience_mismatch() -> None:
     flow, _ = begin(oidc, mock)
     mock.edit(aud="another-client.apps.googleusercontent.com")
     assert await kind_of(oidc, flow, flow.state, CODE) == "id_token"
-    mock.edit(aud=[CLIENT_ID, "another"])  # 목록이면 포함 여부를 본다
+    mock.edit(aud=[CLIENT_ID, "another"])  # 목록이면 azp도 있어야 한다
+    assert await kind_of(oidc, flow, flow.state, CODE) == "id_token"
+    mock.edit(azp=CLIENT_ID)
+    assert (await oidc.complete(flow=flow, state=flow.state, code=CODE)).sub
+
+
+async def test_authorized_party_must_be_our_client() -> None:
+    oidc, mock, _ = make()
+    flow, _ = begin(oidc, mock)
+    mock.edit(azp="another-client.apps.googleusercontent.com")  # aud가 단일이어도 azp가 있으면 확인
+    assert await kind_of(oidc, flow, flow.state, CODE) == "id_token"
+    mock.edit(aud=[CLIENT_ID, "another"], azp="another")
+    assert await kind_of(oidc, flow, flow.state, CODE) == "id_token"
+    mock.edit(aud=CLIENT_ID, azp=CLIENT_ID)
     assert (await oidc.complete(flow=flow, state=flow.state, code=CODE)).sub
 
 

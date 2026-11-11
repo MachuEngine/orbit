@@ -240,6 +240,13 @@ def build_auth_router(settings: Settings, google: GoogleOIDC | None = None) -> A
                     ttl_seconds=settings.session_ttl_seconds,
                     user_id=result.user_id,
                 )
+                # 로그인마다 새 토큰을 발급하고, 요청에 실린 기존 세션은 폐기한다(세션 고정 방지).
+                old_token = request.cookies.get(SESSION_COOKIE)
+                old = await lookup_session(db, old_token, clock=clock) if old_token else None
+                if old is not None:
+                    await revoke_session(
+                        db, workspace_id=old.workspace_id, session_id=old.session_id, clock=clock
+                    )
             except Exception as exc:
                 # 예외 메시지에 SQL 인자(이메일 등)가 들어갈 수 있어 종류만 남긴다.
                 logger.error("Google 로그인 처리 실패: %s", type(exc).__name__)
@@ -316,7 +323,9 @@ def build_auth_router(settings: Settings, google: GoogleOIDC | None = None) -> A
         profile = None
         token = request.cookies.get(SESSION_COOKIE)
         if token:
-            profile = await session_profile(request.app.state.db, token)
+            profile = await session_profile(
+                request.app.state.db, token, clock=request.app.state.clock
+            )
         return {
             "authenticated": True,
             "workspace_id": str(session.workspace_id),

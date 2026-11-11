@@ -485,18 +485,53 @@ async def test_app_role_cannot_read_users_and_sessions_bind_only_to_members(
     assert ws_alice != ws_bob
 
 
+async def test_profile_function_skips_expired_and_revoked_sessions(env: Env) -> None:
+    client = await env.login(ALICE)
+    token = client.cookies.get("orbit_session")
+    assert token
+    digest = hash_token(token)
+    assert await env.db.unscoped_auth_session_profile(digest, NOW) is not None
+    expiry = NOW + timedelta(hours=12)  # 기본 세션 유효 시간
+    assert await env.db.unscoped_auth_session_profile(digest, expiry - timedelta(seconds=1))
+    assert await env.db.unscoped_auth_session_profile(digest, expiry) is None
+    csrf = client.cookies.get("orbit_csrf")
+    assert csrf
+    assert (await client.post("/api/logout", headers={"X-CSRF-Token": csrf})).status_code == 204
+    assert await env.db.unscoped_auth_session_profile(digest, NOW) is None
+
+
+async def test_login_revokes_the_session_cookie_sent_with_the_request(env: Env) -> None:
+    client = await env.login(ALICE)
+    old_token = client.cookies.get("orbit_session")
+    assert old_token
+    assert (await client.get("/api/session")).json()["authenticated"] is True
+    # 같은 브라우저(쿠키 유지)가 다시 로그인한다.
+    await env.start(client)
+    assert (await env.callback(client)).headers["location"] == "/"
+    new_token = client.cookies.get("orbit_session")
+    assert new_token and new_token != old_token
+    assert (await client.get("/api/session")).json()["authenticated"] is True
+    stale = env.new_client()
+    stale.cookies.set("orbit_session", old_token, domain="orbit.test")
+    assert (await stale.get("/api/session")).json()["authenticated"] is False
+    # 실패한 로그인은 기존 세션을 건드리지 않는다.
+    await env.start(client)
+    assert _error_of(await env.callback(client, state="forged")) == "state"
+    assert (await client.get("/api/session")).json()["authenticated"] is True
+
+
 async def test_profile_function_returns_only_the_token_owners_row(env: Env) -> None:
     alice = await env.login(ALICE)
     bob = await env.login(BOB)
     token_a = alice.cookies.get("orbit_session")
     token_b = bob.cookies.get("orbit_session")
     assert token_a and token_b
-    row_a = await env.db.unscoped_auth_session_profile(hash_token(token_a))
-    row_b = await env.db.unscoped_auth_session_profile(hash_token(token_b))
+    row_a = await env.db.unscoped_auth_session_profile(hash_token(token_a), NOW)
+    row_b = await env.db.unscoped_auth_session_profile(hash_token(token_b), NOW)
     assert row_a is not None and row_b is not None
     assert (row_a[1], row_b[1]) == ("alice@example.test", "bob@example.test")
     for probe in (token_a, "", "%", hash_token("none"), str(row_a[0]), hash_token(token_a).upper()):
-        assert await env.db.unscoped_auth_session_profile(probe) is None, probe
+        assert await env.db.unscoped_auth_session_profile(probe, NOW) is None, probe
 
 
 async def test_session_without_user_has_no_profile(env: Env, workspaces: WorkspaceFactory) -> None:
@@ -504,7 +539,7 @@ async def test_session_without_user_has_no_profile(env: Env, workspaces: Workspa
     issued = await issue_session(
         env.db, workspace_id=ws, clock=env.clock, ids=env.ids, ttl_seconds=60
     )
-    assert await env.db.unscoped_auth_session_profile(hash_token(issued.token)) is None
+    assert await env.db.unscoped_auth_session_profile(hash_token(issued.token), NOW) is None
     client = env.new_client()
     client.cookies.set("orbit_session", issued.token, domain="orbit.test")
     info = (await client.get("/api/session")).json()

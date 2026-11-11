@@ -11,8 +11,8 @@ Revises: 0004
   - `login_upsert_user(...)`: 사용자를 만들거나 갱신하고, 처음이면 개인 워크스페이스와 owner
     멤버십을 한 트랜잭션에서 만든다. ID·시각은 앱이 정해(UUIDv7, 주입 Clock) 넘긴다. 이미 있는
     사용자면 넘긴 ID는 쓰지 않는다. 같은 `sub`의 동시 첫 로그인은 `ON CONFLICT`가 직렬화한다.
-  - `auth_session_profile(token_hash)`: 그 토큰의 세션에 묶인 사용자의 표시 이름·이메일만
-    돌려준다(본인 정보).
+  - `auth_session_profile(token_hash, now)`: 그 토큰의 세션에 묶인 사용자의 표시 이름·이메일만
+    돌려준다(본인 정보). 폐기됐거나 `now`에 만료된 세션은 거른다(`now`는 앱의 주입 Clock).
 - `membership`은 워크스페이스 범위 테이블이다(`workspace_isolation`). 함수 소유자만 쓸 수 있고,
   `orbit_app`은 현재 워크스페이스의 행을 읽기만 한다.
 - `workspace`에 `type`·`owner_user_id`를 더한다. 개발용 워크스페이스는 사용자가 없다.
@@ -144,7 +144,7 @@ def upgrade() -> None:
 
     op.execute(
         """
-        CREATE FUNCTION auth_session_profile(p_token_hash text)
+        CREATE FUNCTION auth_session_profile(p_token_hash text, p_now timestamptz)
         RETURNS TABLE (user_id uuid, email text, display_name text)
         LANGUAGE sql STABLE SECURITY DEFINER
         SET search_path = pg_catalog, public
@@ -153,15 +153,16 @@ def upgrade() -> None:
             FROM public.auth_session AS s
             JOIN public.app_user AS u ON u.id = s.user_id
             WHERE s.token_hash = p_token_hash AND s.revoked_at IS NULL
+              AND s.expires_at > p_now
         $$
         """
     )
-    op.execute("REVOKE ALL ON FUNCTION auth_session_profile(text) FROM PUBLIC")
-    op.execute("GRANT EXECUTE ON FUNCTION auth_session_profile(text) TO orbit_app")
+    op.execute("REVOKE ALL ON FUNCTION auth_session_profile(text, timestamptz) FROM PUBLIC")
+    op.execute("GRANT EXECUTE ON FUNCTION auth_session_profile(text, timestamptz) TO orbit_app")
 
 
 def downgrade() -> None:
-    op.execute("DROP FUNCTION auth_session_profile(text)")
+    op.execute("DROP FUNCTION auth_session_profile(text, timestamptz)")
     op.execute("DROP FUNCTION login_upsert_user(text, text, text, uuid, uuid, timestamptz)")
     op.execute("ALTER TABLE auth_session DROP COLUMN user_id")
     op.execute("DROP TABLE membership")

@@ -251,6 +251,10 @@ class GoogleOIDC:
             raise LoginError("id_token")
         if self._clock.now().timestamp() >= exp:
             raise LoginError("id_token")
+        # aud가 여러 개이거나 azp가 있으면 azp가 우리 클라이언트여야 한다(OIDC Core 3.1.3.7).
+        aud, azp = claims.get("aud"), claims.get("azp")
+        if (isinstance(aud, list) or azp is not None) and azp != self._config.client_id:
+            raise LoginError("id_token")
         nonce = claims.get("nonce")
         if not isinstance(nonce, str) or not hmac.compare_digest(
             nonce.encode(), expected_nonce.encode()

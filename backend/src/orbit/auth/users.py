@@ -53,10 +53,10 @@ async def login_upsert_user(
     return LoginResult(uuid.UUID(str(user_id)), uuid.UUID(str(workspace_id)), bool(created))
 
 
-async def session_profile(db: AsyncDatabase, token: str) -> SessionProfile | None:
+async def session_profile(db: AsyncDatabase, token: str, *, clock: Clock) -> SessionProfile | None:
     if not token or len(token) > 256:
         return None
-    row = await db.unscoped_auth_session_profile(hash_token(token))
+    row = await db.unscoped_auth_session_profile(hash_token(token), clock.now())
     if row is None:
         return None
     user_id, email, display_name = row
