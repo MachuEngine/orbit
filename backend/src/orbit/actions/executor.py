@@ -13,7 +13,8 @@
 - 승인이 만료됐거나 `approved`가 아닌 상태에서 `execution` 행이 없으면 거절한다. 행이 이미 있는
   재진입이면 시도 표식(`attempted`, `before_version`, `draft_attempted`·`draft_id`)이 없을 때만
   외부 호출 없이 `failed`(`expired`·`not_approved`)로 끝내고, 표식이 있으면 대조만 한다
-  (대조 결과의 1회 재호출 포함). 해시 불일치는 항상 거절한다.
+  읽기 대조만 한다(재호출 없음: 읽기로 적용이 확인되면 `succeeded`, 아니면 `needs_user`. 메일은
+  `draft_id`가 없거나 초안이 남아 있으면 `needs_user`). 해시 불일치는 항상 거절한다.
 - 대조 중 읽기 호출이 `ResultUnknown` 말고 다른 오류로 실패하면(일시 오류 등) 결론을 내리지 않고
   `unknown`으로 기록한다(소유권도 놓는다). 다음 재진입에서 다시 대조한다.
 - 일정 생성 대조는 요청한 참석자가 현재 일정에 모두 있으면 같은 내용으로 본다(주최자 자동 추가 등
@@ -95,6 +96,7 @@ class _Run:
         self.record = record
         self.owner = owner
         self.ref: dict[str, Any] = dict(record.external_ref)
+        self.read_only = False  # 승인이 유효하지 않으면 읽기 대조만 한다(어떤 쓰기 호출도 없음)
 
     @property
     def hex_id(self) -> str:
@@ -169,6 +171,7 @@ async def execute_approved(
     try:
         if invalid is not None and not _attempted(run.ref, action):
             return await run.end(FAILED, invalid)  # 쓰기를 시도한 적이 없다
+        run.read_only = invalid is not None
         match action:
             case CreateEvent():
                 return await _create_event(run, calendar, action)
@@ -270,6 +273,8 @@ async def _reconcile_create(
         if _same_created(event, action):
             return await _ok_event(run, event)
         return await run.end(NEEDS_USER)
+    if run.read_only:
+        return await run.end(NEEDS_USER)  # 만료·비승인: 재호출하지 않는다
     # 없다: 같은 ID로 다시 만들어도 중복이 생기지 않으므로 1회 재호출한다.
     try:
         event = await calendar.create_event(action.calendar_id, run.hex_id, _event_draft(action))
@@ -342,6 +347,8 @@ async def _reconcile_modify(
         return await run.end(SUCCEEDED, None, version=current.version)
     if current.version != before:
         return await run.end(NEEDS_USER)  # 모르는 다른 변경이 있다
+    if run.read_only:
+        return await run.end(NEEDS_USER)  # 만료·비승인: 재호출하지 않는다
     # 적용되지 않았다: 같은 if_match로 1회 재호출한다(중복 적용 불가).
     try:
         event = await _call_modify(calendar, action, before)
@@ -365,6 +372,8 @@ async def _reconcile_modify(
 
 async def _send_mail(run: _Run, mail: MailConnector, action: SendMail) -> ExecutionRecord:
     if "draft_id" not in run.ref:
+        if run.read_only:
+            return await run.end(NEEDS_USER)  # 만료·비승인: 새 초안을 만들지 않는다
         # 초안 ID를 기록하기 전이다. 초안이 만들어졌는지 알 수 없지만 발송 전이므로 새로 만든다.
         return await _create_draft_and_send(run, mail, action)
     return await _reconcile_send(run, mail, action)
@@ -461,6 +470,8 @@ async def _reconcile_send(run: _Run, mail: MailConnector, action: SendMail) -> E
         return await _find_sent(run, mail)
     except ConnectorError as e:
         return await run.end(UNKNOWN, e)
+    if run.read_only:
+        return await run.end(NEEDS_USER)  # 초안이 남아 있다(미발송): 만료·비승인이라 보내지 않는다
     if not _same_draft(draft.spec, action):
         return await run.end(NEEDS_USER)  # 초안이 바뀌었거나 내용을 알 수 없다: 보내지 않는다
     # 초안이 남아 있다: 미발송이다. 발송된 초안은 재발송이 거절되므로 1회 재호출은 중복이 아니다.

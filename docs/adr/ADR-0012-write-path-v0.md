@@ -44,7 +44,7 @@
 
 - 대조로도 판단할 수 없으면 `needs_user`. 자동 재시도는 위 표의 "1회 재호출"뿐이다.
 - **실행 소유권(lease)**: 한 `execution` 행은 동시에 한 실행자만 다룬다. `begin`은 행을 만들면서 호출자에게 소유권을 준다. 기존 행(`pending`·`unknown`)에 재진입할 때는 `claim`으로 소유권을 얻어야 하고, 얻지 못하면 외부 호출 없이 현재 기록을 돌려준다. 소유권은 만료 시각을 가지며, 만료 시간은 커넥터 호출 타임아웃×(1+재호출 1회)보다 길게 잡는다. 프로세스 간 시계 차이로 소유권이 겹치지 않도록 lease 부여·비교는 저장소의 시계(SQL 구현은 DB `clock_timestamp()`)로 하고, 호출자는 시각이 아니라 길이(`lease_seconds`)만 넘긴다. 승인 만료 같은 도메인 시각은 주입한 `Clock`을 그대로 쓴다. 소유자가 아닌 실행자의 `record_ref`·`finish`는 반영되지 않는다(조건부 갱신). 같은 프로세스 안의 동시 실행도 같은 규칙으로 막힌다.
-- **시도 표식과 만료**: 첫 외부 쓰기 호출 직전에 `external_ref.attempted = true`(변경·취소는 `before_version`, 메일은 초안 생성 직전 표식)를 기록·커밋한다. 승인이 만료됐거나 `approved`가 아니게 된 뒤의 재진입에서 시도 표식이 없으면 외부 호출 없이 `failed`(`expired`)로 끝내고, 표식이 있으면 대조만 한다(대조 결과에 따른 1회 재호출 포함).
+- **시도 표식과 만료**: 첫 외부 쓰기 호출 직전에 `external_ref.attempted = true`(변경·취소는 `before_version`, 메일은 초안 생성 직전 표식)를 기록·커밋한다. 승인이 만료됐거나 `approved`가 아니게 된 뒤의 재진입에서 시도 표식이 없으면 외부 호출 없이 `failed`(`expired`)로 끝내고, 표식이 있으면 읽기 대조만 한다. 이때는 1회 재호출도 하지 않는다(표식은 호출 직전에 기록되므로 호출이 실제로 나갔는지 알 수 없다). 읽기로 적용이 확인되면 `succeeded`, 확인되지 않으면 `needs_user`로 끝낸다.
 - **초안 재발송 전 내용 확인**: 대조 중 초안을 다시 발송하기 전에 초안의 수신자·제목·본문이 승인된 동작과 같은지 확인하고, 다르면 `needs_user`.
 - `ExecutionStore`는 Protocol이다: `begin(approval_id, owner, lease_seconds) -> (execution, created: bool)`(새 행이면 소유권 포함), `claim(execution_id, owner, lease_seconds) -> bool`, `record_ref(execution_id, owner, external_ref) -> bool`, `finish(execution_id, owner, status, external_ref, error_kind) -> bool`, `get(approval_id)`. `record_ref`는 `external_ref`를 통째로 바꾼다. 4B는 메모리 구현으로 테스트하고, 4A가 SQL 구현을 만든다. 각 메서드는 호출마다 커밋한다.
 

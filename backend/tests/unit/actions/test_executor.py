@@ -500,13 +500,14 @@ async def test_reentry_mail_already_sent(make_env: MakeEnv) -> None:
     assert env.sent_with_header(pending.id.hex) == 1
 
 
-async def test_reentry_after_expiry_still_reconciles(make_env: MakeEnv) -> None:
+async def test_reentry_after_expiry_does_not_recall(make_env: MakeEnv) -> None:
     env = make_env()
     pending = await seed_pending(env, CANCEL)
     await env.store.record_ref(pending.id, DEAD, {"before_version": "v-e1"})
     env.clock.advance(timedelta(hours=1))
     record = await run(env, CANCEL)
-    assert record.status == SUCCEEDED
+    assert record.status == NEEDS_USER
+    assert env.calls("cancel_event") == []
 
 
 @pytest.mark.parametrize("name", list(ACTIONS))
@@ -530,23 +531,96 @@ async def test_reentry_without_marker_and_invalid_approval_makes_no_call(
     assert env.conns.calls.records == []
 
 
-@pytest.mark.parametrize("name", ["create", "update", "mail"])
-async def test_reentry_with_marker_and_expired_approval_reconciles(
+WRITE_CALLS = ("create_event", "update_event", "cancel_event", "create_draft", "send_draft")
+MARKERS: dict[str, dict[str, Any]] = {
+    "create": {"attempted": True},
+    "update": {"before_version": "v-e1"},
+    "cancel": {"before_version": "v-e1"},
+    "mail": {"draft_attempted": True},
+}
+
+
+@pytest.mark.parametrize("why", ["expired", "rejected"])
+@pytest.mark.parametrize("name", list(MARKERS))
+async def test_marker_then_invalid_approval_not_applied_needs_user_without_writes(
+    make_env: MakeEnv, name: str, why: str
+) -> None:
+    env = make_env()
+    pending = await seed_pending(env, ACTIONS[name])
+    await env.store.record_ref(pending.id, DEAD, MARKERS[name])  # 표식 기록 직후 종료
+    if why == "expired":
+        env.clock.advance(timedelta(hours=1))
+        record = await run(env, ACTIONS[name])
+    else:
+        record = await run(env, ACTIONS[name], status="rejected")
+    assert record.status == NEEDS_USER
+    assert env.calls(*WRITE_CALLS) == []
+    assert env.diff().is_empty
+
+
+@pytest.mark.parametrize("name", ["create", "update", "cancel"])
+async def test_marker_then_expired_applied_is_succeeded_by_read(
     make_env: MakeEnv, name: str
 ) -> None:
     env = make_env()
     pending = await seed_pending(env, ACTIONS[name])
-    markers: dict[str, dict[str, Any]] = {
-        "create": {"attempted": True},
-        "update": {"before_version": "v-e1"},
-        "mail": {"draft_attempted": True},
-    }
-    marker = markers[name]
-    await env.store.record_ref(pending.id, DEAD, marker)
+    await env.store.record_ref(pending.id, DEAD, MARKERS[name])
+    if name == "create":
+        await env.calendar.create_event(
+            CALENDAR,
+            pending.id.hex,
+            EventDraft(
+                title=CREATE.title,
+                start=T0,
+                end=T1,
+                description="합성 설명",
+                attendees=(Attendee(email="bob@example.org"),),
+            ),
+        )
+    elif name == "update":
+        await env.calendar.update_event(
+            CALENDAR, EVENT_ID, EventPatch(start=T0, end=T1), if_match="v-e1"
+        )
+    else:
+        await env.calendar.cancel_event(CALENDAR, EVENT_ID, if_match="v-e1")
     env.clock.advance(timedelta(hours=1))
+    before_calls = env.calls(*WRITE_CALLS)
     record = await run(env, ACTIONS[name])
     assert record.status == SUCCEEDED
-    assert writes(env.diff()) == 1
+    assert env.calls(*WRITE_CALLS) == before_calls  # 재호출 없음
+
+
+async def test_mail_expired_reentry_without_draft_id_creates_no_draft(make_env: MakeEnv) -> None:
+    env = make_env()
+    pending = await seed_pending(env, MAIL)
+    await env.store.record_ref(pending.id, DEAD, MARKERS["mail"])
+    env.clock.advance(timedelta(hours=1))
+    record = await run(env, MAIL)
+    assert record.status == NEEDS_USER
+    assert env.conns.calls.records == []
+
+
+async def test_mail_expired_reentry_with_unsent_draft_does_not_send(make_env: MakeEnv) -> None:
+    env = make_env()
+    await _draft_for_resend(env)
+    env.clock.advance(timedelta(hours=1))
+    record = await run(env, MAIL)
+    assert record.status == NEEDS_USER
+    assert env.calls("send_draft", "create_draft") == ["create_draft"]  # 선행 호출뿐
+
+
+async def test_mail_expired_reentry_with_sent_draft_succeeds_by_thread(make_env: MakeEnv) -> None:
+    env = make_env()
+    pending = await seed_pending(env, MAIL)
+    draft = await env.mail.create_draft(mail_spec(pending.id.hex))
+    await env.mail.send_draft(draft.draft_id)
+    await env.store.record_ref(
+        pending.id, DEAD, {"draft_id": draft.draft_id, "thread_id": draft.thread_id}
+    )
+    env.clock.advance(timedelta(hours=1))
+    record = await run(env, MAIL)
+    assert record.status == SUCCEEDED
+    assert env.calls("send_draft", "create_draft") == ["create_draft", "send_draft"]  # 선행만
 
 
 async def test_reentry_is_still_checked_against_hash(make_env: MakeEnv) -> None:
