@@ -68,7 +68,7 @@
 - 3b `orbit.evaldata`: 시나리오 우선 생성기, 세계 모델 `eval/worlds/orbit-v0.toml`(TOML), 데이터셋 `eval/datasets/orbit-eval/v0`(과제 60개, dev 36 / test 24, 근거 공유 묶음 15개). 정답은 구조화된 답(ADR-0010), dev와 test는 근거 일정·메일을 공유하지 않는다. 완료. 개발자 전수 검수 완료(2026-11-11, 60/60 승인, `review.jsonl`).
 - 3c `orbit.evalrunner`: 에피소드 실행, 구조화된 답 채점(텍스트 사실은 보조 지표), 결과 JSONL·설정 지문, 반복 우선 실행, 클러스터 bootstrap 신뢰구간·paired 차이·pass^k, 예산 상한, test 봉인. 완료.
 - 3d `orbit.assistant`: 읽기 전용 비서 경로(ADR-0011). 작업 집합 핸들, 읽기 도구 4개 + `submit_answer`, 외부 콘텐츠 표지, 프롬프트 `assistant-v0.2`, 온도 0. `ScriptedLLM`으로만 검증했다. 완료.
-- 3e 모델 파일럿: OpenRouter API 키(개발자)와 데이터 검수 후 진행.
+- 3e 모델 파일럿: OpenRouter 크레딧 대신 OpenAI 직접 호출로 진행(ADR-0014, 임시). dev 36×3에서 `gpt-6.1-terra`(low) 100%, `gpt-6-luna` 74~76%. 임시 고정 모델 ADR-0015, 결과 `docs/pilot/results-2026-11-11.md`. dev 천장 효과로 8단계 전에 평가 데이터 v1이 필요하다. OpenRouter 연결 후 다제공자 비교 예정.
 
 알려진 한계(v0): test 묶음이 9개라 신뢰구간이 불안정하다. 취소 제외·일정 변경 과제는 캘린더가 최신 상태라 메일 이해보다 도구 사용을 잰다. 텍스트 답 품질은 성공 판정에 들어가지 않는다. 공개 저장소라 test 정답을 누구나 볼 수 있다.
 
