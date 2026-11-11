@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
 from integration.runflow_support import DAY, Harness
+from orbit.runflow.deps import NoConnection
 from orbit.runflow.worker import RECOVER_STALLED, RESUME_RUN
 
 Make = Callable[..., Awaitable[Harness]]
@@ -639,3 +640,20 @@ async def test_expiry_job_is_noop_for_decided_or_finished_runs(make_harness: Mak
         h.write_calls() == []
     )  # 재개 때 이미 만료 시각이 지나 실행기가 거절했다(만료 작업과 무관)
     assert await h.status(run_id) == "succeeded"
+
+
+class _NoConnectionResolver:
+    async def connectors_for(self, workspace_id: uuid.UUID) -> Any:
+        raise NoConnection(f"workspace_id={workspace_id}")
+
+
+async def test_run_fails_with_no_connection_when_workspace_has_no_active_connection(
+    make_harness: Make,
+) -> None:
+    h = await make_harness(move_script())
+    h.deps.resolver = _NoConnectionResolver()
+    run_id = await h.start("점심을 2시로 옮겨줘")
+    await h.work()
+    assert await h.status(run_id) == "failed"
+    assert (await h.run_row(run_id))["error_kind"] == "no_connection"
+    assert h.write_calls() == []

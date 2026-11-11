@@ -101,3 +101,32 @@ export const decisionResponseSchema = z.object({
   status: z.enum(["approved", "rejected"]),
 });
 export type DecisionResponse = z.infer<typeof decisionResponseSchema>;
+
+/** `GET /api/connections`. 토큰 관련 값은 응답에 없다. `mode`가 google일 때만 연결이 필요하다. */
+export const connectionSchema = z.object({
+  id: z.string(),
+  provider: z.string(),
+  status: z.enum(["pending", "active", "revoked", "error"]),
+  account_email: z.string(),
+  scopes: z.array(z.string()),
+  created_at: z.string(),
+});
+export type Connection = z.infer<typeof connectionSchema>;
+
+export const connectionsResponseSchema = z.object({
+  mode: z.enum(["sim", "google"]),
+  connect_available: z.boolean(),
+  connections: z.array(connectionSchema),
+});
+export type ConnectionsResponse = z.infer<typeof connectionsResponseSchema>;
+
+/** `POST /api/connections/google/start`. 화면이 이 주소로 직접 이동한다. */
+export const startConnectionResponseSchema = z.object({ authorization_url: z.string() });
+
+/** `DELETE /api/connections/{id}`. `provider_revoke`는 Google 쪽 철회 결과다. */
+export const disconnectResponseSchema = z.object({
+  id: z.string(),
+  status: z.literal("revoked"),
+  provider_revoke: z.enum(["revoked", "failed", "none"]),
+});
+export type DisconnectResponse = z.infer<typeof disconnectResponseSchema>;
