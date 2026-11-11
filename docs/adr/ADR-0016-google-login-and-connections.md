@@ -18,7 +18,8 @@
 - 로그인 계정과 데이터 연결 계정을 분리한다. `connection` 테이블(workspace_id, user_id, provider=`google`, account_email, account_sub, scopes, status, token 암호문, created_at, revoked_at)을 둔다. RLS·FORCE.
 - `GET /api/connections/google/start` → Gmail·Calendar 범위를 `include_granted_scopes=true`, `access_type=offline`, `prompt=consent`로 요청. 콜백에서 받은 범위가 요청 범위를 모두 포함할 때만 `active`.
 - 범위(v0): Calendar `https://www.googleapis.com/auth/calendar.events`(+ 목록 조회용 `calendar.readonly`), Gmail `gmail.readonly`·`gmail.compose`(초안 생성·발송, SPIKE-005). 정확한 범위 목록은 구현에서 최소화하고 결정 기록에 남긴다.
-- 연결 해제: Google 토큰 철회 호출 → `connection.status=revoked`, 토큰 암호문 삭제 → 연결에 딸린 데이터 삭제 전파(D7-4, 지금은 동기화 데이터가 없어 대상이 없다).
+- 연결 해제: Google 토큰 철회 호출 → `connection.status=revoked`, 토큰 암호문 삭제 → 연결에 딸린 데이터 삭제 전파(D7-4, 지금은 동기화 데이터가 없어 대상이 없다). 철회 호출이 실패해도 로컬 해제와 토큰 삭제는 진행하고, 화면에서 Google 계정 권한 페이지에서 직접 해제하도록 안내한다(서버가 토큰을 보관한 채 재시도하는 것보다 보관하지 않는 쪽을 택한다).
+- Google은 refresh_token 하나를 철회하면 같은 사용자·클라이언트의 권한 전체를 거둘 수 있다고 본다. 그래서 같은 계정의 활성 연결이 있을 때 새로 받은 토큰은 철회하지 않고 버린다.
 
 ### 3. 토큰 봉투 암호화 (D4-5)
 - 리프레시 토큰(와 캐시된 액세스 토큰)은 연결마다 무작위 데이터 키(DEK)로 AES-256-GCM 암호화하고, DEK는 키 암호화 키(KEK)로 감싸 함께 저장한다. 연관 데이터(AAD)에 `connection_id`와 `workspace_id`를 넣어 행 사이 바꿔치기를 막는다.
