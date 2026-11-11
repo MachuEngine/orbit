@@ -1,5 +1,6 @@
 """Run·승인 API (ADR-0012 §4, ADR-0003 조건 2, ADR-0005 조건 1).
 
+- (모든 경로는 `/api` 아래다. 인증은 쿠키 세션, `orbit.api.auth`)
 - `POST /runs`: 대화(없으면 생성), run, 사용자 메시지, `execute_run` 작업 등록을
   한 트랜잭션으로 한다.
 - `GET /runs/{id}`, `GET /runs/{id}/events`(SSE), `GET /approvals/{id}`.

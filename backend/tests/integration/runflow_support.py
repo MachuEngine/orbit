@@ -22,6 +22,7 @@ from sqlalchemy.engine import make_url
 
 from integration.support import WorkspaceFactory
 from orbit.api.app import create_app
+from orbit.auth import issue_session
 from orbit.connectors.contracts import (
     Calendar,
     CalendarConnector,
@@ -135,16 +136,36 @@ class Harness:
     worker_app: procrastinate.App
     client: httpx.AsyncClient
     app_url: str
+    transport: httpx.ASGITransport
+    api_clock: FixedClock
+    api_ids: Uuid7Generator
     run_ids: list[uuid.UUID] = field(default_factory=list)
+    extra_clients: list[httpx.AsyncClient] = field(default_factory=list)
 
     # ---------------------------------------------------------- 요청
 
-    def headers(self, workspace: uuid.UUID | None = None) -> dict[str, str]:
-        return {"X-Orbit-Workspace": str(workspace or self.ws)}
+    def headers(self, client: httpx.AsyncClient | None = None) -> dict[str, str]:
+        """상태를 바꾸는 요청에 붙일 CSRF 헤더. 기본은 로그인한 `self.client`의 쿠키 값이다."""
+        return {"X-CSRF-Token": (client or self.client).cookies.get("orbit_csrf") or ""}
+
+    async def client_for(self, workspace: uuid.UUID) -> httpx.AsyncClient:
+        """다른 워크스페이스에 묶인 세션 쿠키를 가진 클라이언트(세션은 서비스로 직접 발급한다)."""
+        issued = await issue_session(
+            self.db,
+            workspace_id=workspace,
+            clock=self.api_clock,
+            ids=self.api_ids,
+            ttl_seconds=3600,
+        )
+        client = httpx.AsyncClient(transport=self.transport, base_url="http://test")
+        client.cookies.set("orbit_session", issued.token)
+        client.cookies.set("orbit_csrf", issued.csrf_token)
+        self.extra_clients.append(client)
+        return client
 
     async def start(self, message: str) -> uuid.UUID:
         response = await self.client.post(
-            "/runs", json={"message": message}, headers=self.headers()
+            "/api/runs", json={"message": message}, headers=self.headers()
         )
         assert response.status_code == 201, response.text
         run_id = uuid.UUID(response.json()["run_id"])
@@ -152,12 +173,13 @@ class Harness:
         return run_id
 
     async def decide(
-        self, approval_id: uuid.UUID, decision: str, workspace: uuid.UUID | None = None
+        self, approval_id: uuid.UUID, decision: str, client: httpx.AsyncClient | None = None
     ) -> httpx.Response:
-        return await self.client.post(
-            f"/approvals/{approval_id}/decision",
+        who = client or self.client
+        return await who.post(
+            f"/api/approvals/{approval_id}/decision",
             json={"decision": decision},
-            headers=self.headers(workspace),
+            headers=self.headers(who),
         )
 
     async def work(self) -> None:
@@ -174,7 +196,7 @@ class Harness:
     # ---------------------------------------------------------- 조회
 
     async def run_row(self, run_id: uuid.UUID) -> dict[str, Any]:
-        response = await self.client.get(f"/runs/{run_id}", headers=self.headers())
+        response = await self.client.get(f"/api/runs/{run_id}")
         assert response.status_code == 200, response.text
         body: dict[str, Any] = response.json()
         return body
@@ -286,11 +308,13 @@ async def build_harness(
         lease_seconds=lease_seconds,
     )
     worker_app = build_worker_app(app_url, deps)
-    settings = Settings(database_url=SecretStr(app_url), env="dev")
+    settings = Settings(database_url=SecretStr(app_url), env="dev", dev_workspace_id=ws)
     api = create_app(settings, clock=clock, ids=ids)
     async with api.router.lifespan_context(api):
         transport = httpx.ASGITransport(app=api)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            login = await client.post("/api/dev/login")
+            assert login.status_code == 200, login.text
             harness = Harness(
                 db=async_db,
                 ws=ws,
@@ -304,10 +328,15 @@ async def build_harness(
                 worker_app=worker_app,
                 client=client,
                 app_url=app_url,
+                transport=transport,
+                api_clock=clock,
+                api_ids=ids,
             )
             try:
                 yield harness
             finally:
+                for extra in harness.extra_clients:
+                    await extra.aclose()
                 async with async_db.workspace_session(ws) as s:
                     await s.execute(
                         text("DELETE FROM procrastinate_jobs WHERE args->>'workspace_id' = :ws"),
