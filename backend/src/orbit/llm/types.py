@@ -61,12 +61,14 @@ class LLMUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_input_tokens: int = 0
+    reasoning_tokens: int = 0  # output_tokens의 부분집합(추론에 쓴 토큰). 모르면 0
 
     def __add__(self, other: "LLMUsage") -> "LLMUsage":
         return LLMUsage(
             self.input_tokens + other.input_tokens,
             self.output_tokens + other.output_tokens,
             self.cached_input_tokens + other.cached_input_tokens,
+            self.reasoning_tokens + other.reasoning_tokens,
         )
 
 

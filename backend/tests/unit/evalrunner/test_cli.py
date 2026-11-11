@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from orbit.evalrunner.cli import SEAL_FLAG, main
+from orbit.llm.types import LLMResponse, LLMUsage
 
 from .conftest import DATASET_DIR, good_script
 
@@ -92,3 +94,68 @@ def test_error_output_does_not_echo_input_values(
     err = capsys.readouterr().err
     assert "SECRET-MARKER-XYZ" not in err
     assert "DatasetError" in err
+
+
+class _FixedTextLLM:
+    async def complete(self, request: Any) -> LLMResponse:
+        return LLMResponse(
+            text="합성 답변",
+            tool_calls=(),
+            finish_reason="stop",
+            usage=LLMUsage(10, 5),
+            cost_usd=0.001,
+            latency_ms=0,
+            model_id="openai/gpt-6-luna",
+            provider="openai",
+        )
+
+
+def _live_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORBIT_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("ORBIT_LLM_MODEL_ID", "openai/gpt-6-luna")
+    monkeypatch.setenv("ORBIT_OPENAI_API_KEY", "sk-test-SYNTHETIC")  # gitleaks:allow
+    monkeypatch.setenv("ORBIT_LLM_REASONING_EFFORT", "low")
+    monkeypatch.delenv("ORBIT_LLM_PROVIDER_ORDER", raising=False)
+
+
+def _live_args(tmp_path: Path, out: str, *extra: str) -> list[str]:
+    return [
+        "run", "--dataset", str(DATASET_DIR), "--split", "dev", "--sut", "assistant_v0",
+        "--out", str(tmp_path / out), "--live-llm", *extra,
+    ]  # fmt: skip
+
+
+def test_live_llm_records_provider_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _live_env(monkeypatch)
+    monkeypatch.setattr("orbit.evalrunner.cli.build_llm", lambda settings: _FixedTextLLM())
+    args = _live_args(tmp_path, "l.jsonl", "--estimate", "2", "--max-cost-usd", "1")
+    assert main(args) == 0
+    assert '"estimated_episodes"' in capsys.readouterr().out
+    lines = (tmp_path / "l.estimate.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    config = json.loads(lines[0])["config"]
+    assert config["model_id"] == "openai/gpt-6-luna"
+    assert config["llm"] == {
+        "provider": "openai",
+        "reasoning_effort": "low",
+        "temperature_sent": False,
+        "price_source": None,
+    }
+    assert config["experiment_budget"]["max_cost_usd"] == 1
+
+
+def test_live_llm_rejects_bad_settings_without_echoing_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _live_env(monkeypatch)
+    monkeypatch.setenv("ORBIT_LLM_REASONING_EFFORT", "sk-test-SYNTHETIC-bad")  # gitleaks:allow
+    assert main(_live_args(tmp_path, "b.jsonl")) == 2
+    err = capsys.readouterr().err
+    assert "llm_reasoning_effort" in err
+    assert "SYNTHETIC" not in err
+    assert not (tmp_path / "b.jsonl").exists()
+    monkeypatch.setenv("ORBIT_LLM_REASONING_EFFORT", "low")
+    assert main(_live_args(tmp_path, "b.jsonl", "--model-id", "openai/other-2")) == 2
+    assert main([*_live_args(tmp_path, "b.jsonl"), "--llm-script", "x.json"]) == 2

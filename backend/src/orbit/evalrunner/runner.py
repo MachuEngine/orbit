@@ -104,8 +104,9 @@ def _config_dict(
     repeats: int,
     sample: int | None,
     n_tasks: int,
+    llm_config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    config: dict[str, Any] = {
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "dataset": f"{dataset.name}@{dataset.version}",
@@ -122,6 +123,9 @@ def _config_dict(
         "sample": sample,
         "n_tasks": n_tasks,
     }
+    if llm_config is not None:  # 실제 LLM 제공자 설정(ADR-0014). 스크립트 실행에는 없다.
+        config["llm"] = dict(llm_config)
+    return config
 
 
 @dataclass(frozen=True)
@@ -370,6 +374,7 @@ async def run_experiment(
     git_dirty: bool = True,  # git 상태를 모르면 깨끗하다고 가정하지 않는다
     experiment_id: str | None = None,
     allow_sealed_test: bool = False,
+    llm_config: Mapping[str, Any] | None = None,
     sink: ResultSink | None = None,
     monotonic: Callable[[], float] = time.perf_counter,
 ) -> ExperimentSummary:
@@ -419,6 +424,7 @@ async def run_experiment(
         repeats=repeats,
         sample=sample,
         n_tasks=len(tasks),
+        llm_config=llm_config,
     )
     fingerprint = _digest(config)
     exp_id = experiment_id or f"exp-{fingerprint[:12]}"
