@@ -1,9 +1,11 @@
 """정답을 Sim 커넥터로 다시 확인한다.
 
-생성기의 계산 코드와 따로, `list_events`·`get_event` 결과에서 이상적인 응답을 만들어
-Gold의 정답 표현과 금지 표현을 검사한다. 날짜·시각 계산은 생성기 함수를 쓰지 않고 여기서 다시 한다.
+생성기의 계산 코드와 따로, `list_events`·`get_event` 결과에서 구조화된 정답(`expected_answer`)을
+다시 계산해 비교한다. 이상적인 응답 텍스트로 보조 지표(`answer_facts`)도 확인한다.
+날짜·시각 계산은 생성기 함수를 쓰지 않고 여기서 다시 한다.
 """
 
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -12,7 +14,13 @@ from orbit.connectors.sim.calendar import SimCalendarConnector
 from orbit.connectors.sim.world import SimWorld
 from orbit.core.clock import FixedClock
 from orbit.evaldata.dataset import Dataset, load_dataset
-from orbit.evaldata.schema import Task
+from orbit.evaldata.schema import (
+    EventAnswer,
+    EventSetAnswer,
+    EventTimeAnswer,
+    Task,
+    TimeSlotAnswer,
+)
 from orbit.evaldata.timeutil import KST
 
 
@@ -20,11 +28,29 @@ def _norm(text: str) -> str:
     return "".join(text.split())
 
 
+def _match(text: str, cand: str) -> bool:
+    """공백 무시 + 숫자 경계 일치. 러너의 규칙과 같고, 통합 때 정리하려고 import하지 않는다."""
+    text, cand = _norm(text), _norm(cand)
+    start = 0
+    while (i := text.find(cand, start)) != -1:
+        j = i + len(cand)
+        ok = True
+        if i > 0 and text[i - 1].isdigit():
+            ok = False
+        if ok and cand[-1].isdigit() and j < len(text) and text[j].isdigit():
+            ok = False
+        if ok and cand.endswith("시") and re.match(r"(\d+분|반)", text[j:]):
+            ok = False
+        if ok:
+            return True
+        start = i + 1
+    return False
+
+
 def _hit(task: Task, answer: str) -> list[str]:
     """응답에서 충족하지 못한 fact_id 목록."""
-    text = _norm(answer)
     return [
-        f.fact_id for f in task.gold.answer_facts if not any(_norm(x) in text for x in f.any_of)
+        f.fact_id for f in task.gold.answer_facts if not any(_match(answer, x) for x in f.any_of)
     ]
 
 
@@ -67,6 +93,16 @@ def _day_bounds(day: date) -> tuple[datetime, datetime]:
     return lo, lo + timedelta(days=1)
 
 
+def test_match_rules() -> None:
+    assert _match("10시에 만나요", "10시")
+    assert not _match("10시 30분에 만나요", "10시")
+    assert not _match("110시", "10시")
+    assert not _match("110:00", "10:00")
+    assert not _match("10:005", "10:00")
+    assert not _match("10시반", "10시")
+    assert _match("오전 10 시", "오전 10시")
+
+
 async def test_every_gold_matches_sim(dataset_dir: Path) -> None:
     ds = load_dataset(dataset_dir)
     env = _Env(ds, dataset_dir)
@@ -87,6 +123,11 @@ async def test_every_gold_matches_sim(dataset_dir: Path) -> None:
     assert len(checked) == 6
 
 
+def _refs_of(env: _Env, task: Task, events: list[CalendarEvent]) -> set[tuple[str, str]]:
+    _, cal_id = env.calendar(task)
+    return {(cal_id, e.id) for e in events}
+
+
 async def _check_day(env: _Env, task: Task, kind: str) -> None:
     day = date.fromisoformat(_tag(task, "date")[0])
     half = _tag(task, "half")[0]
@@ -100,16 +141,18 @@ async def _check_day(env: _Env, task: Task, kind: str) -> None:
     everything = [e for e in await env.events(task, lo, hi, cancelled=True) if in_scope(e)]
     cancelled = [e for e in everything if e.status == "cancelled"]
     assert live
-    ideal = "\n".join(f"{e.title} {_hhmm(e.start)}" for e in live)
-    assert _hit(task, ideal) == []
-    assert len(task.gold.answer_facts) == 2 * len(live)  # 빠뜨리거나 더한 일정이 없다
-    assert sorted(task.gold.must_not_contain) == sorted(e.title for e in cancelled)
-    assert not any(t in ideal for t in task.gold.must_not_contain)
+    answer = task.gold.expected_answer
+    assert isinstance(answer, EventSetAnswer)
+    assert {(r.calendar_id, r.event_id) for r in answer.events} == _refs_of(env, task, live)
+    assert len(answer.events) == len(live)
     if kind == "cancelled_exclusion":
         assert cancelled
-    # 잘못된 시각만 말하면 시각 fact가 빠진다
-    wrong = "\n".join(e.title for e in live)
-    assert _hit(task, wrong)
+        assert not {e.id for e in cancelled} & {r.event_id for r in answer.events}
+    assert task.gold.must_not_contain == []
+    ideal = "; ".join(f"{e.title} {_hhmm(e.start)}" for e in live)
+    assert _hit(task, ideal) == []
+    assert len(task.gold.answer_facts) == 2 * len(live)
+    assert _hit(task, "\n".join(e.title for e in live))  # 시각이 없으면 fact가 빠진다
 
 
 async def _check_free_slot(env: _Env, task: Task) -> None:
@@ -127,10 +170,11 @@ async def _check_free_slot(env: _Env, task: Task) -> None:
     else:
         slot = cursor if end - cursor >= timedelta(hours=1) else None
     assert slot is not None
+    answer = task.gold.expected_answer
+    assert isinstance(answer, TimeSlotAnswer)
+    assert answer.start == slot  # 같은 순간
     assert _hit(task, _hhmm(slot)) == []
-    # 구간 전체가 비어 있다
-    busy = await env.events(task, slot, slot + timedelta(hours=1))
-    assert busy == []
+    assert await env.events(task, slot, slot + timedelta(hours=1)) == []
 
 
 async def _check_reschedule(env: _Env, task: Task) -> None:
@@ -141,8 +185,11 @@ async def _check_reschedule(env: _Env, task: Task) -> None:
     assert ev.start > task.as_of_time
     assert int(task.difficulty["schedule_changes"]) >= 1
     assert ev.title in task.turns[0].content
+    answer = task.gold.expected_answer
+    assert isinstance(answer, EventTimeAnswer)
+    assert (answer.event.calendar_id, answer.event.event_id) == (cal_id, event_id)
+    assert answer.start == ev.start
     assert _hit(task, f"{_md(ev.start)} {_hhmm(ev.start)}") == []
-    # 메일에는 변경 요청이 있다(캘린더가 최신 상태)
     mails = [
         m
         for m in env.ds.world_dict["accounts"][task.account_id]["messages"]
@@ -153,7 +200,6 @@ async def _check_reschedule(env: _Env, task: Task) -> None:
 
 async def _check_person_next(env: _Env, task: Task) -> None:
     (email,) = _tag(task, "attendee")
-    (event_id,) = _tag(task, "ref_event")
     asof = task.as_of_time
     found = [
         e
@@ -161,7 +207,10 @@ async def _check_person_next(env: _Env, task: Task) -> None:
         if any(a.email == email for a in e.attendees)
     ]
     assert found
-    assert found[0].id == event_id
+    answer = task.gold.expected_answer
+    assert isinstance(answer, EventAnswer)
+    _, cal_id = env.calendar(task)
+    assert (answer.event.calendar_id, answer.event.event_id) == (cal_id, found[0].id)
     assert _hit(task, f"{_md(found[0].start)} {_hhmm(found[0].start)}") == []
 
 
@@ -171,6 +220,9 @@ async def _check_project_week(env: _Env, task: Task) -> None:
     lo = datetime(start.year, start.month, start.day, tzinfo=KST)
     live = [e for e in await env.events(task, lo, lo + timedelta(days=7)) if project in e.title]
     assert live
-    ideal = "\n".join(f"{e.title} {_md(e.start)} {_hhmm(e.start)}" for e in live)
+    answer = task.gold.expected_answer
+    assert isinstance(answer, EventSetAnswer)
+    assert {(r.calendar_id, r.event_id) for r in answer.events} == _refs_of(env, task, live)
+    ideal = "; ".join(f"{e.title} {_md(e.start)} {_hhmm(e.start)}" for e in live)
     assert _hit(task, ideal) == []
     assert len(task.gold.answer_facts) == 3 * len(live)

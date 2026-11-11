@@ -1,14 +1,15 @@
-"""질문과 정답(Gold) 계산. 정답은 최종 캘린더(`EventRec` 목록)에서 코드로 계산한다 (ADR-0009 2절).
+"""질문과 정답(Gold) 계산. 정답은 최종 캘린더(`EventRec` 목록)에서 코드로 계산한다 (ADR-0009, 0010).
 
-일정 조회 유형(읽기 전용) 6종:
-- day_schedule: 특정 날짜(와 오전/오후)의 일정
-- cancelled_exclusion: 위와 같지만 범위 안에 취소된 일정이 있어 `must_not_contain`이 생긴다
-- free_slot: 업무 시간(09~18시 KST) 안에서 가장 이른 1시간 빈 시간
-- reschedule: 메일로 시간이 바뀐 회의의 현재(캘린더 최신) 날짜·시각
-- person_next: 특정 인물과의 다음 회의
-- project_week: 이번/다음 주 특정 프로젝트 회의 전부
+일정 조회 유형(읽기 전용) 6종과 구조화된 정답(`expected_answer`):
+- day_schedule: 특정 날짜(와 오전/오후)의 일정 -> event_set
+- cancelled_exclusion: 위와 같지만 범위 안에 취소된 일정이 있다 -> event_set (취소 일정은 빠진다)
+- project_week: 이번/다음 주 특정 프로젝트 회의 전부 -> event_set
+- person_next: 특정 인물과의 다음 회의 -> event
+- reschedule: 메일로 시간이 바뀐 회의의 현재(캘린더 최신) 시각 -> event_time
+- free_slot: 업무 시간(09~18시 KST) 안에서 가장 이른 1시간 빈 시간 -> time_slot
 
-정답 계산이 불가능하거나 모호하면 `None`을 돌려주고 호출자가 그 명세를 버린다.
+`answer_facts`는 보조 지표다. 정답 계산이 불가능하거나 모호하면 버릴 사유(문자열)를 돌려주고
+호출자가 그 명세를 버린다.
 """
 
 from __future__ import annotations
@@ -20,8 +21,18 @@ from datetime import date, datetime, timedelta
 from orbit.connectors.contracts import CALENDAR_TOOLS, MAIL_TOOLS
 from orbit.evaldata import texts
 from orbit.evaldata.records import NOISE_KINDS, EventRec, MailRec, TaskSpec
-from orbit.evaldata.schema import AnswerFact, Gold, RequiredCall
+from orbit.evaldata.schema import (
+    AnswerFact,
+    EventAnswer,
+    EventRef,
+    EventSetAnswer,
+    EventTimeAnswer,
+    ExpectedAnswer,
+    Gold,
+    TimeSlotAnswer,
+)
 from orbit.evaldata.timeutil import (
+    KST,
     at_local,
     date_forms,
     half_of,
@@ -48,6 +59,16 @@ FORBIDDEN_TOOLS = sorted((CALENDAR_TOOLS | MAIL_TOOLS) - READ_TOOLS)
 WORK_START_HOUR = 9
 WORK_END_HOUR = 18
 
+# 버리는 사유
+EMPTY_SCOPE = "정답 범위가 비어 있음"
+NO_CANCELLED = "범위에 취소 일정이 없음"
+NOON_BOUNDARY = "오전/오후 경계에 걸친 일정"
+IN_PROGRESS = "as_of에 진행 중이거나 막 시작하는 일정"
+AMBIGUOUS_TITLE = "일정 제목이 모호함"
+AMBIGUOUS_NEXT = "다음 회의가 동시에 둘 이상"
+PAST_IN_WEEK = "이번 주 지난 회의가 섞임"
+NOT_FUTURE = "일정이 as_of 이전"
+
 
 @dataclass
 class TaskParts:
@@ -71,10 +92,21 @@ def day_scope(
         and local_date(e.start) == day
         and (half is None or half_of(e.start) == half)
     ]
-    key = lambda e: (e.start, e.id)  # noqa: E731
+
+    def key(e: EventRec) -> tuple[datetime, str]:
+        return (e.start, e.id)
+
     return (
         sorted((e for e in scoped if e.status == "confirmed"), key=key),
         sorted((e for e in scoped if e.status == "cancelled"), key=key),
+    )
+
+
+def straddles_noon(events: list[EventRec], user: str, day: date) -> bool:
+    """그 날 12:00을 걸치는 일정(상태 무관)이 있는가."""
+    noon = at_local(day, 12)
+    return any(
+        e.user == user and local_date(e.start) == day and e.start < noon < e.end for e in events
     )
 
 
@@ -131,29 +163,23 @@ def _date_fact(ev: EventRec) -> tuple[list[str], str]:
     return date_forms(local_date(ev.start)), f"{ev.title} 날짜 {local_date(ev.start).isoformat()}"
 
 
-def _gold(
-    facts: list[tuple[list[str], str]], must_not: list[str], tool: str = "list_events"
-) -> Gold:
+def _ref(wm: WorldModel, ev: EventRec) -> EventRef:
+    return EventRef(calendar_id=wm.user(ev.user).calendar_id, event_id=ev.id)
+
+
+def _event_set(wm: WorldModel, events: list[EventRec]) -> EventSetAnswer:
+    return EventSetAnswer(events=[_ref(wm, e) for e in events])
+
+
+def _gold(facts: list[tuple[list[str], str]], expected: ExpectedAnswer) -> Gold:
     return Gold(
         answer_facts=_facts(facts),
-        must_not_contain=must_not,
+        expected_answer=expected,
+        must_not_contain=[],
         expected_changes=[],
-        required_tool_calls=[RequiredCall(tool=tool, args_subset={})],
+        required_tool_calls=[],
         forbidden_tools=list(FORBIDDEN_TOOLS),
     )
-
-
-def _safe_must_not(
-    cancelled: list[EventRec], events: list[EventRec], facts: list[tuple[list[str], str]], user: str
-) -> list[str] | None:
-    """취소된 일정 제목이 유효 일정 제목이나 정답 표현에 포함되면 오탐이 생기므로 명세를 버린다."""
-    titles = [e.title for e in cancelled]
-    live = [e.title for e in events if e.user == user and e.status == "confirmed"]
-    answers = [form for any_of, _ in facts for form in any_of]
-    for t in titles:
-        if any(t in other for other in live) or any(t in form for form in answers):
-            return None
-    return titles
 
 
 def _difficulty(
@@ -178,7 +204,8 @@ def _difficulty(
     return out
 
 
-def _ref_tags(refs: list[EventRec]) -> list[str]:
+def ref_tags(refs: list[EventRec]) -> list[str]:
+    """정답 근거(일정·메일)를 모두 tags로 남긴다 (ADR-0010 2절)."""
     tags = [f"ref_event:{e.id}" for e in refs]
     seen: list[str] = []
     for e in refs:
@@ -194,28 +221,27 @@ def build_parts(
     mails: list[MailRec],
     wm: WorldModel,
     rng: random.Random,
-) -> TaskParts | None:
-    builder = _BUILDERS[spec.kind]
-    return builder(spec, events, mails, wm, rng)
+) -> TaskParts | str:
+    """질문·정답 조각을 만든다. 버려야 하면 사유 문자열을 돌려준다."""
+    return _BUILDERS[spec.kind](spec, events, mails, wm, rng)
 
 
 def _day_like(
     spec: TaskSpec, events: list[EventRec], mails: list[MailRec], wm: WorldModel, rng: random.Random
-) -> TaskParts | None:
+) -> TaskParts | str:
     target = date.fromisoformat(spec.params["target"])
     half: str | None = spec.params["half"]
     conf, canc = day_scope(events, spec.user, target, half)
     if not conf:
-        return None
+        return EMPTY_SCOPE
     if spec.kind == "cancelled_exclusion" and not canc:
-        return None
+        return NO_CANCELLED
+    if half is not None and straddles_noon(events, spec.user, target):
+        return NOON_BOUNDARY
     facts: list[tuple[list[str], str]] = []
     for e in conf:
         facts.append(([e.title], f"{local_date(e.start).isoformat()} 일정 제목 {e.title}"))
         facts.append(_time_fact(e))
-    must_not = _safe_must_not(canc, events, facts, spec.user)
-    if must_not is None:
-        return None
     scope = when_phrase(local_date(spec.as_of), target, spec.params["explicit"])
     if half:
         scope = f"{scope} {half}"
@@ -228,11 +254,11 @@ def _day_like(
         f"type:{spec.kind}",
         f"date:{target.isoformat()}",
         f"half:{half or 'all'}",
-        *_ref_tags(refs),
+        *ref_tags(refs),
     ]
     return TaskParts(
         question,
-        _gold(facts, must_not),
+        _gold(facts, _event_set(wm, conf)),
         tags,
         _difficulty(refs, mails, spec.user, len(conf), len(canc), {"relative_date": scope}),
     )
@@ -240,20 +266,20 @@ def _day_like(
 
 def _free_slot(
     spec: TaskSpec, events: list[EventRec], mails: list[MailRec], wm: WorldModel, rng: random.Random
-) -> TaskParts | None:
+) -> TaskParts | str:
     target = date.fromisoformat(spec.params["target"])
     conf, canc = day_scope(events, spec.user, target, None)
     slot = earliest_free(events, spec.user, target)
     if not conf or slot is None:
-        return None
+        return EMPTY_SCOPE
     scope = when_phrase(local_date(spec.as_of), target, spec.params["explicit"])
     question = texts.pick(rng, texts.FREE_QUESTIONS).format(scope=scope)
     facts = [(time_forms(slot), f"가장 이른 1시간 빈 시간 시작 {hhmm(slot)}")]
     refs = [*conf, *canc]
-    tags = [f"type:{spec.kind}", f"date:{target.isoformat()}", *_ref_tags(refs)]
+    tags = [f"type:{spec.kind}", f"date:{target.isoformat()}", *ref_tags(refs)]
     return TaskParts(
         question,
-        _gold(facts, []),
+        _gold(facts, TimeSlotAnswer(start=slot.astimezone(KST))),
         tags,
         _difficulty(refs, mails, spec.user, len(conf), len(canc), {"relative_date": scope}),
     )
@@ -261,46 +287,46 @@ def _free_slot(
 
 def _reschedule(
     spec: TaskSpec, events: list[EventRec], mails: list[MailRec], wm: WorldModel, rng: random.Random
-) -> TaskParts | None:
+) -> TaskParts | str:
     ev = next((e for e in events if e.id == spec.params["event_id"]), None)
     if ev is None or ev.status != "confirmed" or ev.start <= spec.as_of:
-        return None
+        return NOT_FUTURE
     if sum(1 for e in events if e.user == ev.user and ev.title in e.title) != 1:
-        return None  # 제목이 겹치면 질문이 모호하다
+        return AMBIGUOUS_TITLE
     facts = [_date_fact(ev), _time_fact(ev)]
     question = texts.pick(rng, texts.RESCHEDULE_QUESTIONS).format(title=ev.title)
-    tags = [f"type:{spec.kind}", *_ref_tags([ev])]
+    tags = [f"type:{spec.kind}", *ref_tags([ev])]
+    expected = EventTimeAnswer(event=_ref(wm, ev), start=ev.start.astimezone(KST))
     return TaskParts(
-        question, _gold(facts, []), tags, _difficulty([ev], mails, spec.user, 1, 0, {})
+        question, _gold(facts, expected), tags, _difficulty([ev], mails, spec.user, 1, 0, {})
     )
 
 
 def _person_next(
     spec: TaskSpec, events: list[EventRec], mails: list[MailRec], wm: WorldModel, rng: random.Random
-) -> TaskParts | None:
+) -> TaskParts | str:
     person = wm.person(spec.params["person"])
-    upcoming = sorted(
-        (
-            e
-            for e in events
-            if e.user == spec.user
-            and e.status == "confirmed"
-            and person.key in e.attendees
-            and e.start >= spec.as_of
-        ),
-        key=lambda e: (e.start, e.id),
-    )
-    if not upcoming or (len(upcoming) > 1 and upcoming[0].start == upcoming[1].start):
-        return None
+    mine = [
+        e
+        for e in events
+        if e.user == spec.user and e.status == "confirmed" and person.key in e.attendees
+    ]
+    if any(e.start <= spec.as_of < e.end for e in mine):
+        return IN_PROGRESS
+    upcoming = sorted((e for e in mine if e.start > spec.as_of), key=lambda e: (e.start, e.id))
+    if not upcoming:
+        return EMPTY_SCOPE
+    if len(upcoming) > 1 and upcoming[0].start == upcoming[1].start:
+        return AMBIGUOUS_NEXT
     nxt = upcoming[0]
     homonym = wm.is_homonym(person)
     who = f"{person.company}의 {person.name}" if homonym else person.name
     question = texts.pick(rng, texts.PERSON_QUESTIONS).format(who=who)
     facts = [_date_fact(nxt), _time_fact(nxt)]
-    tags = [f"type:{spec.kind}", f"attendee:{person.email}", *_ref_tags([nxt])]
+    tags = [f"type:{spec.kind}", f"attendee:{person.email}", *ref_tags([nxt])]
     return TaskParts(
         question,
-        _gold(facts, []),
+        _gold(facts, EventAnswer(event=_ref(wm, nxt))),
         tags,
         _difficulty([nxt], mails, spec.user, len(upcoming), 0, {"homonym": int(homonym)}),
     )
@@ -308,10 +334,11 @@ def _person_next(
 
 def _project_week(
     spec: TaskSpec, events: list[EventRec], mails: list[MailRec], wm: WorldModel, rng: random.Random
-) -> TaskParts | None:
+) -> TaskParts | str:
     project = next(p for p in wm.projects if p.key == spec.params["project"])
     this_week = spec.params["week"] == "this"
-    ws = week_start(local_date(spec.as_of)) + timedelta(days=0 if this_week else 7)
+    offset = {"this": 0, "next": 7, "after_next": 14}[spec.params["week"]]
+    ws = week_start(local_date(spec.as_of)) + timedelta(days=offset)
     we = ws + timedelta(days=7)
     scoped = [
         e
@@ -321,27 +348,24 @@ def _project_week(
     conf = sorted((e for e in scoped if e.status == "confirmed"), key=lambda e: (e.start, e.id))
     canc = [e for e in scoped if e.status == "cancelled"]
     if not conf:
-        return None
+        return EMPTY_SCOPE
     if this_week and any(e.start < spec.as_of for e in scoped):
-        return None  # 이미 지난 회의가 섞이면 '이번 주 회의'가 모호하다
+        return PAST_IN_WEEK  # 이미 지난 회의가 섞이면 '이번 주 회의'가 모호하다
     facts: list[tuple[list[str], str]] = []
     for e in conf:
         facts += [([e.title], f"프로젝트 회의 제목 {e.title}"), _date_fact(e), _time_fact(e)]
-    must_not = _safe_must_not(canc, events, facts, spec.user)
-    if must_not is None:
-        return None
-    week = "이번 주" if this_week else "다음 주"
+    week = {"this": "이번 주", "next": "다음 주", "after_next": "다다음 주"}[spec.params["week"]]
     question = texts.pick(rng, texts.PROJECT_QUESTIONS).format(week=week, project=project.name)
     refs = [*conf, *canc]
     tags = [
         f"type:{spec.kind}",
         f"project:{project.name}",
         f"week_start:{ws.isoformat()}",
-        *_ref_tags(refs),
+        *ref_tags(refs),
     ]
     return TaskParts(
         question,
-        _gold(facts, must_not),
+        _gold(facts, _event_set(wm, conf)),
         tags,
         _difficulty(refs, mails, spec.user, len(conf), len(canc), {"relative_date": week}),
     )

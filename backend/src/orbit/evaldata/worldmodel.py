@@ -54,6 +54,7 @@ class Person(_Model):
     company: str
     role: str
     works_with: list[str]
+    split: Literal["dev", "test", "background"]
 
 
 class Project(_Model):
@@ -123,6 +124,8 @@ class WorldModel(_Model):
                 raise ValueError(f"프로젝트 {proj.key}의 user가 없다")
             if not set(proj.members) <= pset:
                 raise ValueError(f"프로젝트 {proj.key}의 members에 없는 인물이 있다")
+            if not {"dev", "test"} <= {self.person(m).split for m in proj.members}:
+                raise ValueError(f"프로젝트 {proj.key}에는 dev와 test 인물이 모두 있어야 한다")
             for m in proj.members:
                 if proj.user not in self.person(m).works_with:
                     raise ValueError(
@@ -131,6 +134,8 @@ class WorldModel(_Model):
         for r in self.recurring:
             if r.user not in user_keys or not set(r.attendees) <= pset:
                 raise ValueError("recurring의 user·attendees 참조가 올바르지 않다")
+            if any(self.person(a).split != "background" for a in r.attendees):
+                raise ValueError("recurring 참석자는 split이 background인 인물이어야 한다")
             if not 0 <= r.weekday <= 4 or r.every_weeks < 1:
                 raise ValueError("recurring의 weekday는 0~4, every_weeks는 1 이상이어야 한다")
         if abs(self.meta.dev_ratio + self.meta.test_ratio - 1.0) > 1e-9:

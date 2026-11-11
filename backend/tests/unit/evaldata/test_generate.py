@@ -3,14 +3,17 @@
 import json
 import re
 from collections import Counter
+from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 from orbit.connectors.sim.world import SimWorld
 from orbit.core.clock import FixedClock
-from orbit.evaldata.dataset import load_dataset
+from orbit.evaldata.dataset import Dataset, load_dataset
 from orbit.evaldata.generate import generate
 from orbit.evaldata.schema import Gold, Manifest, Task
-from orbit.evaldata.timeutil import time_forms
+from orbit.evaldata.timeutil import KST, kor_when, time_forms
+from orbit.evaldata.worldmodel import load_world_model
 
 from .conftest import COMMITTED_DATASET, SEED, SHA, WORLD_MODEL
 
@@ -49,7 +52,7 @@ def test_scale_and_counts(dataset_dir: Path) -> None:
     c = ds.manifest.counts
     assert c.users == 2
     assert 180 <= c.messages <= 240
-    assert 55 <= c.events <= 90
+    assert 55 <= c.events <= 110
     assert c.tasks == 60 == len(ds.tasks)
     per_type = Counter(t.tags[0] for t in ds.tasks)
     assert per_type == {
@@ -82,8 +85,7 @@ def test_no_split_leakage(dataset_dir: Path) -> None:
         splits.setdefault(t.scenario_id, set()).add(t.split)
     assert all(len(s) == 1 for s in splits.values())
     counts = Counter(t.split for t in ds.tasks)
-    assert 30 <= counts["dev"] <= 42
-    assert counts["test"] >= 18
+    assert (counts["dev"], counts["test"]) == (36, 24)  # dev 비율 0.6
     # 유형마다 dev와 test에 모두 과제가 있다
     by_type = {(t.tags[0], t.split) for t in ds.tasks}
     assert len(by_type) == 12
@@ -103,11 +105,22 @@ def test_task_contract_fields() -> None:
     ]
     assert list(Gold.model_fields) == [
         "answer_facts",
+        "expected_answer",
         "must_not_contain",
         "expected_changes",
         "required_tool_calls",
         "forbidden_tools",
     ]
+
+
+EXPECTED_KIND = {
+    "day_schedule": "event_set",
+    "cancelled_exclusion": "event_set",
+    "project_week": "event_set",
+    "person_next": "event",
+    "reschedule": "event_time",
+    "free_slot": "time_slot",
+}
 
 
 def test_read_only_gold(dataset_dir: Path) -> None:
@@ -124,20 +137,173 @@ def test_read_only_gold(dataset_dir: Path) -> None:
         g = t.gold
         assert g.expected_changes == []
         assert write_tools <= set(g.forbidden_tools)
-        assert g.required_tool_calls
+        assert g.required_tool_calls == []
+        assert g.must_not_contain == []
         assert g.answer_facts
+        assert g.expected_answer is not None
+        assert g.expected_answer.kind == EXPECTED_KIND[t.tags[0].split(":")[1]]
         assert t.as_of_time.utcoffset() is not None
         assert t.turns[0].role == "user"
-        for text in g.must_not_contain:
-            # 정답 표현에 금지 표현이 섞이면 만점 답이 실패한다
-            assert not any(text in form for f in g.answer_facts for form in f.any_of)
 
 
-def test_cancelled_tasks_forbid_cancelled_titles(dataset_dir: Path) -> None:
+def test_expected_answer_serialization(dataset_dir: Path) -> None:
+    """시각은 오프셋이 있는 ISO 8601이고 일정 참조는 {calendar_id, event_id}다."""
+    for line in (dataset_dir / "tasks.jsonl").read_text("utf-8").splitlines():
+        answer = json.loads(line)["gold"]["expected_answer"]
+        for key in ("start",):
+            if key in answer:
+                assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+09:00", answer[key])
+        refs = answer.get("events", [answer["event"]] if "event" in answer else [])
+        assert all(set(r) == {"calendar_id", "event_id"} for r in refs)
+
+
+def test_cancelled_events_are_evidence_but_not_answer(dataset_dir: Path) -> None:
     ds = load_dataset(dataset_dir)
+    events = {e["id"]: e for a in ds.world_dict["accounts"].values() for e in a["events"]}
     cancelled = [t for t in ds.tasks if t.tags[0] == "type:cancelled_exclusion"]
     assert cancelled
-    assert all(t.gold.must_not_contain for t in cancelled)
+    for t in cancelled:
+        answer = t.gold.expected_answer
+        assert answer is not None and answer.kind == "event_set"
+        answered = {r.event_id for r in answer.events}
+        refs = {x.split(":", 1)[1] for x in t.tags if x.startswith("ref_event:")}
+        gone = {i for i in refs if events[i]["status"] == "cancelled"}
+        assert gone and not gone & answered and answered <= refs
+
+
+def _refs(t: Task) -> set[str]:
+    return {x for x in t.tags if x.startswith(("ref_event:", "ref_message:"))}
+
+
+def test_no_shared_evidence_between_splits(dataset_dir: Path) -> None:
+    ds = load_dataset(dataset_dir)
+    owner: dict[str, str] = {}
+    for t in ds.tasks:
+        assert _refs(t)
+        for ref in _refs(t):
+            assert owner.setdefault(ref, t.split) == t.split, ref
+
+
+def test_no_duplicate_answers(dataset_dir: Path) -> None:
+    ds = load_dataset(dataset_dir)
+    prints = [
+        (t.tags[0], json.dumps(t.gold.expected_answer.model_dump(mode="json"), sort_keys=True))
+        for t in ds.tasks
+        if t.gold.expected_answer is not None
+    ]
+    assert len(set(prints)) == len(prints) == 60
+
+
+def test_evidence_is_complete(dataset_dir: Path) -> None:
+    ds = load_dataset(dataset_dir)
+    for t in ds.tasks:
+        acct = ds.world_dict["accounts"][t.account_id]
+        refs = {x.split(":", 1)[1] for x in t.tags if x.startswith("ref_event:")}
+        msgs = {x.split(":", 1)[1] for x in t.tags if x.startswith("ref_message:")}
+        kind = t.tags[0]
+        if kind in ("type:free_slot", "type:day_schedule", "type:cancelled_exclusion"):
+            day = next(x.split(":", 1)[1] for x in t.tags if x.startswith("date:"))
+            same_day = {
+                e["id"]
+                for e in acct["events"]
+                if datetime.fromisoformat(e["start"]).astimezone(KST).date().isoformat() == day
+            }
+            if kind == "type:free_slot":
+                assert refs == same_day  # 그날 업무 시간 안의 모든 일정(취소 포함)
+            else:
+                assert refs <= same_day
+        if kind == "type:reschedule":
+            for th in acct["threads"]:
+                if msgs & set(th["message_ids"]):
+                    assert set(th["message_ids"]) <= msgs  # 관련 메일 전부
+
+
+def test_homonym_company_is_visible_in_data(dataset_dir: Path) -> None:
+    ds = load_dataset(dataset_dir)
+    wm = load_world_model(WORLD_MODEL)
+    by_email = {p.email: p for p in wm.people}
+    homonym_tasks = [t for t in ds.tasks if int(t.difficulty.get("homonym", 0)) == 1]
+    assert homonym_tasks
+    for t in homonym_tasks:
+        (email,) = [x.split(":", 1)[1] for x in t.tags if x.startswith("attendee:")]
+        person = by_email[email]
+        others = [p for p in wm.people if p.name == person.name and p.email != email]
+        assert others
+        assert person.company in t.turns[0].content
+        mails = ds.world_dict["accounts"][t.account_id]["messages"]
+        mine = [m for m in mails if m["from"]["email"] == email]
+        assert any(person.company in m["body_text"] for m in mine)
+        for other in others:
+            theirs = [m for m in mails if m["from"]["email"] == other.email]
+            assert not any(person.company in m["body_text"] + m["subject"] for m in theirs)
+
+
+def test_reschedule_last_confirmation_matches_calendar(dataset_dir: Path) -> None:
+    ds = load_dataset(dataset_dir)
+    pattern = re.compile(r"\d+월 \d+일\([월화수목금토일]\)")
+    checked = 0
+    for t in ds.tasks:
+        if t.tags[0] != "type:reschedule":
+            continue
+        acct = ds.world_dict["accounts"][t.account_id]
+        events = {e["id"]: e for e in acct["events"]}
+        (event_id,) = [x.split(":", 1)[1] for x in t.tags if x.startswith("ref_event:")]
+        ids = {x.split(":", 1)[1] for x in t.tags if x.startswith("ref_message:")}
+        mails = sorted(
+            (m for m in acct["messages"] if m["id"] in ids), key=lambda m: (m["sent_at"], m["id"])
+        )
+        timed = [m for m in mails if pattern.search(m["body_text"])]
+        start = datetime.fromisoformat(events[event_id]["start"])
+        assert kor_when(start) in timed[-1]["body_text"]
+        checked += 1
+    assert checked == 12
+
+
+def _local_events(ds: Dataset, account: str) -> list[dict[str, Any]]:
+    out = []
+    for e in ds.world_dict["accounts"][account]["events"]:
+        out.append(
+            {
+                **e,
+                "s": datetime.fromisoformat(e["start"]).astimezone(KST),
+                "e": datetime.fromisoformat(e["end"]).astimezone(KST),
+            }
+        )
+    return out
+
+
+def test_half_day_tasks_have_no_noon_straddle(dataset_dir: Path) -> None:
+    ds = load_dataset(dataset_dir)
+    checked = 0
+    for t in ds.tasks:
+        half = [x.split(":", 1)[1] for x in t.tags if x.startswith("half:")]
+        if not half or half[0] == "all":
+            continue
+        day = date.fromisoformat(next(x.split(":", 1)[1] for x in t.tags if x.startswith("date:")))
+        noon = datetime(day.year, day.month, day.day, 12, tzinfo=KST)
+        for e in _local_events(ds, t.account_id):
+            if e["s"].date() == day:
+                assert not e["s"] < noon < e["e"]
+        checked += 1
+    assert checked > 0
+
+
+def test_person_next_has_no_in_progress_meeting(dataset_dir: Path) -> None:
+    ds = load_dataset(dataset_dir)
+    for t in ds.tasks:
+        if t.tags[0] != "type:person_next":
+            continue
+        (email,) = [x.split(":", 1)[1] for x in t.tags if x.startswith("attendee:")]
+        for e in _local_events(ds, t.account_id):
+            if e["status"] == "confirmed" and any(a["email"] == email for a in e["attendees"]):
+                assert not e["s"] <= t.as_of_time < e["e"]
+
+
+def test_manifest_notes_state_limits(dataset_dir: Path) -> None:
+    notes = load_dataset(dataset_dir).manifest.notes
+    assert "test 봉인은 러너의 확인 플래그 수준" in notes
+    assert "공개 저장소" in notes
+    assert "선택되지 않은 시나리오" in notes
 
 
 def test_synthetic_data_only(dataset_dir: Path) -> None:

@@ -58,3 +58,4 @@ class TaskSpec:
     user: str
     as_of: datetime
     params: dict[str, Any]
+    split: str = ""  # 계획된 분할(dev/test). 시나리오를 만들 때 정해진다

@@ -34,6 +34,15 @@ class Dataset:
     review: dict[str, ReviewEntry] = field(default_factory=dict)
 
 
+def describe_error(exc: ValidationError | json.JSONDecodeError) -> str:
+    """입력값을 싣지 않고 오류 위치와 유형만 적는다(정답이나 본문이 있을 수 있다)."""
+    if isinstance(exc, json.JSONDecodeError):
+        return f"JSON 구문 오류: {exc.msg} (줄 {exc.lineno}, 열 {exc.colno})"
+    return "; ".join(
+        f"{'.'.join(str(p) for p in e['loc']) or '(최상위)'}: {e['type']}" for e in exc.errors()
+    )
+
+
 def dumps_json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
@@ -72,7 +81,9 @@ def _read_jsonl(path: Path, parse: Callable[[Any], Any]) -> list[Any]:
         try:
             items.append(parse(json.loads(line)))
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise DatasetError(f"{path.name} {lineno}번째 줄이 올바르지 않다: {exc}") from exc
+            raise DatasetError(
+                f"{path.name} {lineno}번째 줄이 올바르지 않다: {describe_error(exc)}"
+            ) from exc
     return items
 
 
@@ -91,11 +102,11 @@ def load_dataset(path: str | Path, *, include_excluded: bool = False) -> Dataset
     try:
         manifest = Manifest.model_validate_json(_read_text(root / MANIFEST))
     except ValidationError as exc:
-        raise DatasetError(f"manifest.json이 올바르지 않다: {exc}") from exc
+        raise DatasetError(f"manifest.json이 올바르지 않다: {describe_error(exc)}") from exc
     try:
         world = json.loads(_read_text(root / WORLD))
     except json.JSONDecodeError as exc:
-        raise DatasetError(f"world.json이 올바른 JSON이 아니다: {exc}") from exc
+        raise DatasetError(f"world.json이 올바른 JSON이 아니다: {describe_error(exc)}") from exc
     tasks: list[Task] = _read_jsonl(root / TASKS, Task.model_validate)
     review = read_review(root)
     problems = validate_dataset(manifest, world, tasks, review)

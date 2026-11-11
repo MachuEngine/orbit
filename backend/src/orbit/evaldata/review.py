@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from orbit.evaldata.dataset import (
     REVIEW,
     DatasetError,
+    describe_error,
     dumps_jsonl,
     load_dataset,
     read_review,
@@ -117,7 +118,9 @@ def _read_decisions(path: Path) -> list[ReviewEntry]:
         try:
             entries.append(ReviewEntry.model_validate(json.loads(line)))
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise DatasetError(f"결정 파일 {lineno}번째 줄이 올바르지 않다: {exc}") from exc
+            raise DatasetError(
+                f"결정 파일 {lineno}번째 줄이 올바르지 않다: {describe_error(exc)}"
+            ) from exc
     return entries
 
 

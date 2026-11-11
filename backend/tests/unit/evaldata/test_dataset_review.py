@@ -48,6 +48,24 @@ def test_naive_as_of_rejected(ds_copy: Path) -> None:
         load_dataset(ds_copy)
 
 
+def test_error_message_does_not_echo_input(ds_copy: Path, tmp_path: Path) -> None:
+    secret = "SECRET-QUESTION-TEXT"
+
+    def mutate(rows: list[dict[str, Any]]) -> None:
+        rows[0]["turns"] = [{"role": secret, "content": secret}]
+
+    _rewrite_tasks(ds_copy, mutate)
+    with pytest.raises(DatasetError) as info:
+        load_dataset(ds_copy)
+    assert "turns" in str(info.value)
+    assert secret not in str(info.value)
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(json.dumps({"task_id": "day-001", "decision": secret}) + "\n", "utf-8")
+    with pytest.raises(DatasetError) as info2:
+        apply_decisions(ds_copy, bad)
+    assert secret not in str(info2.value)
+
+
 def test_scenario_in_both_splits_rejected(ds_copy: Path) -> None:
     def mutate(rows: list[dict[str, Any]]) -> None:
         first = rows[0]

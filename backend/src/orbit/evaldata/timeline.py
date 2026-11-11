@@ -5,6 +5,15 @@
 - 모든 메일과 일정 갱신은 스냅샷 시각(`window.snapshot`) 이전이다.
 - 시나리오는 4종이다: agenda(하루 일정), reschedule(메일로 시간 변경), cancel(취소와 비슷한 제목),
   projperson(프로젝트 주간 회의와 인물). 시나리오 하나가 만든 과제는 같은 split에 들어간다.
+
+분할 계획 (ADR-0010 2절): dev와 test 과제가 정답 근거(일정·메일)를 공유하지 않도록 시나리오를
+만들기 전에 근거가 놓일 자리를 나눈다.
+- 날짜: (사용자, 날짜)마다 소유 split이 정해져 있고 그 날의 일정은 소유 split의 시나리오만 만든다.
+  하루 일정·빈 시간·취소 제외 과제의 근거가 그 날 일정 전체이기 때문이다.
+- 프로젝트 주: (프로젝트, 주)마다 소유 split이 있다. 프로젝트 주간 과제의 근거가 그 주의
+  프로젝트 일정 전체이기 때문이다.
+- 인물: 세계 모델의 `split`이 정한 인물은 그 split 시나리오의 일정에만 참석한다. 인물의 다음
+  회의 과제의 근거가 그 인물의 가장 이른 다가오는 일정이기 때문이다.
 """
 
 from __future__ import annotations
@@ -39,7 +48,52 @@ class Builder:
         self._thr_n = {u.key: 0 for u in wm.users}
         self._scn_n: dict[str, int] = {}
         self._user_rr: dict[str, int] = {}
+        self._person_by_email = {p.email: p for p in wm.people}
         self.pp_overrides: list[tuple[Project, Person]] = []
+        # 분할 계획에 쓰는 평일 목록 (as_of 다음 날부터 일정 종료일까지)
+        w = wm.window
+        first = w.asof_start + timedelta(days=1)
+        self.days = [
+            first + timedelta(days=i)
+            for i in range((w.event_end - first).days + 1)
+            if (first + timedelta(days=i)).weekday() < 5
+        ]
+        self._day_index = {d: i for i, d in enumerate(self.days)}
+        # 아직 과제가 쓰지 않은 칸을 우선 고르기 위한 기록 (정답 지문 중복을 줄인다)
+        self.used_days: set[tuple[str, date]] = set()
+        self.used_cells: set[tuple[str, int]] = set()
+        self.used_persons: set[str] = set()
+
+    # ------------------------------------------------------------ 분할 계획
+
+    def day_owner(self, user: str, day: date) -> str | None:
+        """(사용자, 날짜)의 소유 split. 계획 범위 밖의 날은 None이다."""
+        i = self._day_index.get(day)
+        if i is None:
+            return None
+        u = [x.key for x in self.wm.users].index(user)
+        return "test" if (i + 2 * u) % 5 in (1, 3) else "dev"
+
+    def week_index(self, day: date) -> int:
+        return (week_start(day) - week_start(self.wm.window.asof_start)).days // 7
+
+    def cell_owner(self, project: Project, day: date) -> str:
+        """(프로젝트, 주)의 소유 split."""
+        p = [x.key for x in self.wm.projects].index(project.key)
+        return "test" if (p + self.week_index(day)) % 5 in (1, 3) else "dev"
+
+    def owned(self, user: str, day: date, split: str, project: Project | None = None) -> bool:
+        if self.day_owner(user, day) != split:
+            return False
+        return project is None or self.cell_owner(project, day) == split
+
+    def split_people(self, user: str, split: str, pool: list[str] | None = None) -> list[str]:
+        keys = pool if pool is not None else [p.key for p in self.wm.people]
+        return [
+            k
+            for k in keys
+            if self.wm.person(k).split == split and user in self.wm.person(k).works_with
+        ]
 
     # ------------------------------------------------------------ 기본 도구
 
@@ -71,7 +125,7 @@ class Builder:
         return [e for e in self.events if e.user == user]
 
     def rand_time(self, lo: datetime, hi: datetime) -> datetime:
-        """[lo, hi] 안의 업무 시간대 시각."""
+        """[lo, hi] 안의 업무 시간대(평일) 시각."""
         if hi <= lo:
             return lo
         days = (local_date(hi) - local_date(lo)).days
@@ -108,11 +162,6 @@ class Builder:
             if all(end <= b0 or start >= b1 for b0, b1 in busy):
                 cands.append(start)
         return self.rng.choice(cands) if cands else None
-
-    def weekday_between(self, lo: date, hi: date) -> date | None:
-        days = [lo + timedelta(days=i) for i in range((hi - lo).days + 1)]
-        days = [d for d in days if d.weekday() < 5]
-        return self.rng.choice(days) if days else None
 
     def add_event(
         self,
@@ -164,6 +213,9 @@ class Builder:
         scenario_id: str,
         event: EventRec | None = None,
     ) -> MailRec:
+        person = self._person_by_email.get(sender[1])
+        if person is not None:  # 인물이 보낸 메일은 서명에 소속을 적는다 (동명이인 구분 근거)
+            body = f"{body}\n\n-- \n{person.name} / {person.company}"
         self._mail_n[user] += 1
         mail = MailRec(
             id=f"msg-{user}-{self._mail_n[user]:04d}",
@@ -238,27 +290,36 @@ class Builder:
         hour, minute = self.rng.choice([(8, 30), (9, 0), (9, 30)])
         return at_local(day, hour, minute)
 
-    def pick_target(self, asof: datetime) -> tuple[date, bool] | None:
-        """as_of 이후의 평일 목표 날짜. (날짜, 명시적 날짜로 말할지)."""
+    def pick_target(
+        self, asof: datetime, user: str, split: str, project: Project | None = None
+    ) -> tuple[date, bool] | None:
+        """as_of 이후 평일 중 split이 소유한 날. (날짜, 명시적 날짜로 말할지)."""
         a = local_date(asof)
-        options: list[tuple[date, bool]] = []
-        if a.weekday() < 4:
-            options.append((a + timedelta(days=1), False))  # 내일
         next_mon = week_start(a) + timedelta(days=7)
-        options.append((next_mon + timedelta(days=self.rng.randrange(5)), False))  # 다음 주 N요일
+        groups: list[tuple[list[date], bool]] = []
+        if a.weekday() < 4:
+            groups.append(([a + timedelta(days=1)], False))  # 내일
+        groups.append(([next_mon + timedelta(days=i) for i in range(5)], False))  # 다음 주 N요일
         if a.weekday() <= 2:
-            later = self.rng.randint(2, 4 - a.weekday())
-            options.append((a + timedelta(days=later), False))  # 이번 주 N요일
-        explicit = self.weekday_between(a + timedelta(days=1), self.wm.window.event_end)
-        if explicit is not None:
-            options.append((explicit, True))
-        target, is_explicit = self.rng.choice(options)
-        if target > self.wm.window.event_end:
+            groups.append(
+                ([a + timedelta(days=i) for i in range(2, 5 - a.weekday())], False)
+            )  # 이번 주 N요일
+        groups.append(([d for d in self.days if d > a], True))  # 'M월 D일'
+        usable: list[tuple[list[date], bool]] = []
+        for candidates, explicit in groups:
+            mine = [d for d in candidates if self.owned(user, d, split, project)]
+            mine = [d for d in mine if (user, d) not in self.used_days] or mine
+            if mine:
+                usable.append((mine, explicit))
+        if not usable:
             return None
-        return target, is_explicit
+        days, explicit = self.rng.choice(usable)
+        day = self.rng.choice(days)
+        self.used_days.add((user, day))
+        return day, explicit
 
-    def pick_attendees(self, user: str, count: int, pool: list[str] | None = None) -> list[str]:
-        keys = pool or [p.key for p in self.wm.people if user in p.works_with]
+    def pick_attendees(self, user: str, count: int, split: str, pool: list[str]) -> list[str]:
+        keys = self.split_people(user, split, pool)
         return self.rng.sample(keys, min(count, len(keys)))
 
     def invite_window(self, start: datetime) -> tuple[datetime, datetime]:
@@ -274,50 +335,45 @@ class Builder:
             sid = f"scn-recurring-{rec.user}"
             first = w.event_start + timedelta(days=(rec.weekday - w.event_start.weekday()) % 7)
             hh, mm = (int(x) for x in rec.start.split(":"))
-            events: list[EventRec] = []
             day = first
             while day <= w.event_end:
-                events.append(
-                    self.add_event(
-                        rec.user,
-                        rec.title,
-                        at_local(day, hh, mm),
-                        rec.duration_min,
-                        list(rec.attendees),
-                        rec.user,
-                        sid,
-                        location=rec.location,
-                    )
+                self.add_event(
+                    rec.user,
+                    rec.title,
+                    at_local(day, hh, mm),
+                    rec.duration_min,
+                    list(rec.attendees),
+                    rec.user,
+                    sid,
+                    location=rec.location,
                 )
                 day += timedelta(weeks=rec.every_weeks)
+            # 안내 메일은 반복 일정 전체에 대한 것이라 특정 일정의 근거로 연결하지 않는다.
             me = self.contact(rec.user)
             first_att = self.contact(rec.attendees[0])
             rule = f"격주 {'월화수목금'[rec.weekday]}요일 {hh:02d}:{mm:02d}"
             body = texts.series_notice(self.rng, first_att[0], me[0], rec.title, rule)
-            sent = at_local(w.mail_start, 8, 30)
-            mail = self.add_mail(
+            self.add_mail(
                 rec.user,
                 self.new_thread(rec.user),
                 me,
                 [first_att],
                 f"[반복 일정] {rec.title}",
                 body,
-                sent,
+                at_local(w.mail_start, 8, 30),
                 ["SENT"],
                 "series",
                 sid,
             )
-            for ev in events:
-                ev.msg_ids.append(mail.id)
 
 
 # ---------------------------------------------------------------- 시나리오
 
 
-def scn_agenda(b: Builder, user: User) -> list[TaskSpec]:
+def scn_agenda(b: Builder, user: User, split: str) -> list[TaskSpec]:
     """하루에 일정 2개. 오전·오후 조회와 가장 이른 빈 시간 과제를 만든다."""
     asof = b.pick_asof()
-    picked = b.pick_target(asof)
+    picked = b.pick_target(asof, user.key, split)
     if picked is None:
         return []
     target, explicit = picked
@@ -325,17 +381,17 @@ def scn_agenda(b: Builder, user: User) -> list[TaskSpec]:
     first_start = b.free_start(user.key, target, 60, 9 * 60, 11 * 60 + 30)
     if first_start is None:
         return []
-    first = _agenda_event(b, user, target, first_start, 60, sid)
+    first = _agenda_event(b, user, target, first_start, 60, sid, split)
     dur = b.rng.choice([30, 60, 90])
     second_start = b.free_start(user.key, target, dur)
     if second_start is None:
         b.events.remove(first)
         return []
-    second = _agenda_event(b, user, target, second_start, dur, sid)
+    second = _agenda_event(b, user, target, second_start, dur, sid, split)
     for ev in (first, second):
         lo, hi = b.invite_window(ev.start)
         b.touch(ev, b.invite_mail(ev, b.rand_time(lo, hi)).sent_at)
-    halves = sorted({_half(ev.start) for ev in (first, second)})
+    halves = sorted({half_of(ev.start) for ev in (first, second)})
     half = b.rng.choice([None, *halves])
     params = {"target": target.isoformat(), "explicit": explicit, "half": half}
     return [
@@ -346,48 +402,59 @@ def scn_agenda(b: Builder, user: User) -> list[TaskSpec]:
     ]
 
 
-def _half(start: datetime) -> str:
-    return half_of(start)
-
-
 def _agenda_event(
-    b: Builder, user: User, day: date, start: datetime, dur: int, sid: str
+    b: Builder, user: User, day: date, start: datetime, dur: int, sid: str, split: str
 ) -> EventRec:
-    attendees = b.pick_attendees(user.key, b.rng.choice([1, 2]))
+    pool = [p.key for p in b.wm.people]
+    attendees = b.pick_attendees(user.key, b.rng.choice([1, 2]), split, pool)
     organizer = b.rng.choice([attendees[0], user.key])
     return b.add_event(
         user.key, b.generic_title(user.key, day), start, dur, attendees, organizer, sid
     )
 
 
-def scn_reschedule(b: Builder, user: User) -> list[TaskSpec]:
+def scn_reschedule(b: Builder, user: User, split: str) -> list[TaskSpec]:
     """메일 요청으로 일정 시간이 1~2번 바뀐다. 캘린더에는 최신 시간이 반영돼 있다."""
     w = b.wm.window
     asof = b.pick_asof()
     a = local_date(asof)
     floor = w.asof_start + timedelta(days=1)
-    final_day = b.weekday_between(a + timedelta(days=1), min(a + timedelta(days=9), w.event_end))
-    if final_day is None:
+    project = b.rng.choice([p for p in b.wm.projects if p.user == user.key])
+    members = b.split_people(user.key, split, project.members)
+    if not members:
         return []
+    final_days = [
+        d
+        for d in b.days
+        if a + timedelta(days=1) <= d <= min(a + timedelta(days=9), w.event_end)
+        and b.owned(user.key, d, split, project)
+    ]
+    if not final_days:
+        return []
+    final_day = b.rng.choice(final_days)
     changes = b.rng.choice([1, 1, 2])
     dur = b.rng.choice([30, 60, 90])
     final = b.free_start(user.key, final_day, dur)
     if final is None:
         return []
-    projects = [p for p in b.wm.projects if p.user == user.key]
-    project = b.rng.choice(projects)
-    person = b.wm.person(b.rng.choice(project.members))
+    person = b.wm.person(b.rng.choice(members))
     sid = b.next_scenario_id("reschedule")
-    # 과거 시각: 최종 시각과 서로 다른 시각을 날짜 범위 안에서 고른다.
+    # 과거 시각: 최종 시각과 다른 시각을 날짜 범위 안에서 고른다. 메일에만 있고 캘린더에는 없다.
     times: list[datetime] = []
     for _ in range(changes):
         for _try in range(20):
-            day = b.weekday_between(
-                max(floor, final_day - timedelta(days=3)), final_day + timedelta(days=3)
+            lo_day, hi_day = (
+                max(floor, final_day - timedelta(days=3)),
+                final_day + timedelta(days=3),
             )
-            if day is None or day > w.event_end:
+            days = [
+                lo_day + timedelta(days=i)
+                for i in range((hi_day - lo_day).days + 1)
+                if (lo_day + timedelta(days=i)).weekday() < 5
+            ]
+            if not days:
                 continue
-            cand = at_local(day, b.rng.randint(9, 16), b.rng.choice([0, 30]))
+            cand = at_local(b.rng.choice(days), b.rng.randint(9, 16), b.rng.choice([0, 30]))
             if cand != final and cand not in times:
                 times.append(cand)
                 break
@@ -395,19 +462,15 @@ def scn_reschedule(b: Builder, user: User) -> list[TaskSpec]:
             return []
     path = [*times, final]  # path[0]은 처음 초대 시각, path[-1]은 최종
     title = b.project_title(user.key, project)
+    extra = b.pick_attendees(user.key, 1, split, [m for m in members if m != person.key])
     ev = b.add_event(
-        user.key, title, path[0], dur, [person.key], person.key, sid, project=project.key
+        user.key, title, path[0], dur, [person.key, *extra], person.key, sid, project=project.key
     )
-    ev.attendees = [
-        person.key,
-        *b.pick_attendees(user.key, 1, [m for m in project.members if m != person.key]),
-    ]
     lo = max(b.mail_lo(), min(path) - timedelta(days=12))
     stamps = b.sorted_times(changes + 1, lo, b.mail_hi() - timedelta(hours=4))
     me, other = b.contact(user.key), b.contact(person.key)
     thread = b.new_thread(user.key)
     invite = b.invite_mail(ev, stamps[0], thread=thread)
-    last = invite.sent_at
     for i in range(changes):
         body = texts.change_request(
             b.rng, me[0], other[0], title, kor_when(path[i]), kor_when(path[i + 1])
@@ -425,7 +488,12 @@ def scn_reschedule(b: Builder, user: User) -> list[TaskSpec]:
             sid,
             ev,
         )
-        reply_at = min(req.sent_at + timedelta(hours=b.rng.randint(1, 3)), b.mail_hi())
+        # 확인 메일은 다음 변경 요청보다 먼저여야 시간순 마지막 메일이 최종 일정이 된다.
+        reply_at = req.sent_at + timedelta(hours=b.rng.randint(1, 3))
+        reply_at = min(reply_at, b.mail_hi())
+        if i + 2 < len(stamps):
+            reply_at = min(reply_at, stamps[i + 2] - timedelta(minutes=10))
+        reply_at = max(reply_at, req.sent_at + timedelta(minutes=5))
         reply = b.add_mail(
             user.key,
             thread,
@@ -439,24 +507,24 @@ def scn_reschedule(b: Builder, user: User) -> list[TaskSpec]:
             sid,
             ev,
         )
-        last = reply.sent_at
-        b.touch(ev, last)
+        b.touch(ev, reply.sent_at)
     ev.start, ev.end = final, final + timedelta(minutes=dur)
     ev.changes = changes
     return [TaskSpec("reschedule", sid, user.key, asof, {"event_id": ev.id})]
 
 
-def scn_cancel(b: Builder, user: User) -> list[TaskSpec]:
+def scn_cancel(b: Builder, user: User, split: str) -> list[TaskSpec]:
     """취소된 일정(1차)과 비슷한 제목의 유효한 일정(2차)이 같은 날, 같은 오전·오후에 있다."""
     asof = b.pick_asof()
-    picked = b.pick_target(asof)
-    if picked is None:
+    project = b.rng.choice([p for p in b.wm.projects if p.user == user.key])
+    members = b.split_people(user.key, split, project.members)
+    picked = b.pick_target(asof, user.key, split, project)
+    if picked is None or not members:
         return []
     target, explicit = picked
     half = b.rng.choice(["오전", "오후"])
     lo_min, hi_min = (9 * 60, 12 * 60) if half == "오전" else (13 * 60, 18 * 60)
-    project = b.rng.choice([p for p in b.wm.projects if p.user == user.key])
-    person = b.wm.person(b.rng.choice(project.members))
+    person = b.wm.person(b.rng.choice(members))
     sid = b.next_scenario_id("cancel")
     base = b.project_title(user.key, project)
     s1 = b.free_start(user.key, target, 60, lo_min, hi_min)
@@ -513,29 +581,49 @@ def scn_cancel(b: Builder, user: User) -> list[TaskSpec]:
     ]
 
 
-def scn_projperson(b: Builder, user: User) -> list[TaskSpec]:
-    """프로젝트 회의 2개가 같은 주에 있고 같은 인물이 참석한다."""
+def scn_projperson(b: Builder, user: User, split: str) -> list[TaskSpec]:
+    """프로젝트 회의 2개가 같은 주에 있고 같은 인물이 참석한다.
+
+    (프로젝트, 주) 칸은 아직 쓰지 않은 것을 우선한다. 같은 칸의 프로젝트 주간 과제는 정답이 같아
+    중복으로 버려지기 때문이다. 주는 as_of 기준 이번 주(0)·다음 주(1)·다다음 주(2)다.
+    """
     w = b.wm.window
-    overridden = bool(b.pp_overrides)
-    if overridden:
-        project, person = b.pp_overrides[0]
-        user = b.wm.user(project.user)
+    override = next((o for o in b.pp_overrides if o[1].split == split), None)
+    if override is not None:
+        user = b.wm.user(override[0].user)
+        projects = [override[0]]
     else:
-        project = b.rng.choice([p for p in b.wm.projects if p.user == user.key])
-        person = b.wm.person(b.rng.choice(project.members))
+        projects = [p for p in b.wm.projects if p.user == user.key]
     asof = b.pick_asof()
     a = local_date(asof)
-    this_week = a.weekday() <= 2 and b.rng.random() < 0.4
-    if this_week:
-        pool = [a + timedelta(days=i) for i in range(1, 5 - a.weekday())]
-    else:
-        monday = week_start(a) + timedelta(days=7)
-        pool = [monday + timedelta(days=i) for i in range(5)]
-    pool = [d for d in pool if d <= w.event_end]
-    if len(pool) < 2:
+    cells: list[tuple[Project, int, list[date]]] = []
+    for project in projects:
+        if not b.split_people(user.key, split, project.members):
+            continue
+        for week in range(3):
+            pool = [
+                d
+                for d in b.days
+                if b.week_index(d) == week
+                and d > a
+                and d <= w.event_end
+                and b.owned(user.key, d, split, project)
+            ]
+            if len(pool) >= 2:
+                cells.append((project, week, pool))
+    if not cells:
         return []
+    fresh = [c for c in cells if (c[0].key, c[1]) not in b.used_cells]
+    project, week, pool = b.rng.choice(fresh or cells)
+    members = b.split_people(user.key, split, project.members)
+    if override is not None:
+        person = override[1]
+    else:
+        unused = [m for m in members if m not in b.used_persons]
+        person = b.wm.person(b.rng.choice(unused or members))
     days = sorted(b.rng.sample(pool, 2))
     sid = b.next_scenario_id("projperson")
+    homonym = b.wm.is_homonym(person)
     created: list[EventRec] = []
     for day in days:
         dur = b.rng.choice([30, 60, 90])
@@ -544,7 +632,8 @@ def scn_projperson(b: Builder, user: User) -> list[TaskSpec]:
             for ev in created:
                 b.events.remove(ev)
             return []
-        extra = b.pick_attendees(user.key, 1, [m for m in project.members if m != person.key])
+        extra = b.pick_attendees(user.key, 1, split, [m for m in members if m != person.key])
+        organizer = person.key if homonym else b.rng.choice([person.key, user.key])
         created.append(
             b.add_event(
                 user.key,
@@ -552,19 +641,21 @@ def scn_projperson(b: Builder, user: User) -> list[TaskSpec]:
                 start,
                 dur,
                 [person.key, *extra],
-                b.rng.choice([person.key, user.key]),
+                organizer,
                 sid,
                 project=project.key,
             )
         )
-    if overridden:
-        b.pp_overrides.pop(0)
+    if override is not None:
+        b.pp_overrides.remove(override)
+    b.used_cells.add((project.key, week))
+    b.used_persons.add(person.key)
     for ev in created:
         lo, hi = b.invite_window(ev.start)
         b.touch(ev, b.invite_mail(ev, b.rand_time(lo, hi)).sent_at)
-    week = "this" if this_week else "next"
+    week_name = ("this", "next", "after_next")[week]
     return [
-        TaskSpec("project_week", sid, user.key, asof, {"project": project.key, "week": week}),
+        TaskSpec("project_week", sid, user.key, asof, {"project": project.key, "week": week_name}),
         TaskSpec("person_next", sid, user.key, asof, {"person": person.key}),
     ]
 
@@ -577,18 +668,20 @@ SCENARIO_FUNCS = {
 }
 
 
-def run_scenarios(b: Builder, scenario: str, count: int) -> list[TaskSpec]:
-    """시나리오를 `count`개 만든다. 배치에 실패하면 새로 시도한다."""
+def run_scenarios(b: Builder, scenario: str, count: int, split: str) -> list[TaskSpec]:
+    """`split` 소유의 시나리오를 `count`개 만든다. 배치에 실패하면 새로 시도한다."""
     specs: list[TaskSpec] = []
     made = 0
     attempts = 0
     while made < count:
         attempts += 1
-        if attempts > count * 50 + 50:
-            raise RuntimeError(f"시나리오 {scenario}를 만들지 못했다")
-        user = b.next_user(scenario)
-        got = SCENARIO_FUNCS[scenario](b, user)
+        if attempts > count * 100 + 100:
+            raise RuntimeError(f"시나리오 {scenario}({split})를 만들지 못했다")
+        user = b.next_user(f"{scenario}-{split}")
+        got = SCENARIO_FUNCS[scenario](b, user, split)
         if got:
+            for spec in got:
+                spec.split = split
             specs.extend(got)
             made += 1
     return specs
@@ -635,9 +728,7 @@ def add_noise(b: Builder) -> None:
     for _ in range(t.deadlines):
         project = rng.choice(wm.projects)
         sender = b.contact(rng.choice(project.members))
-        due = b.weekday_between(wm.window.asof_start, wm.window.event_end)
-        if due is None:
-            raise RuntimeError("마감 날짜를 고를 수 없다")
+        due = rng.choice([d for d in b.days if d >= wm.window.asof_start])
         subject, body = texts.deadline(
             rng, project.name, texts.pick(rng, texts.DEADLINE_ITEMS), f"{due.month}월 {due.day}일"
         )

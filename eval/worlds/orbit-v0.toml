@@ -50,9 +50,12 @@ calendar_id = "cal-jihoon-main"
 calendar_name = "오지훈 기본"
 
 # ---- 인물 20명. 김민수는 동명이인(회사·주소가 다르다) ----
+# split: 그 인물이 참석하는 일정은 해당 분할(dev/test)의 시나리오만 만든다(ADR-0010 2절).
+# background는 반복 일정에만 참석하고 어떤 과제의 정답에도 쓰이지 않는다.
 
 [[people]]
 key = "kim_minsu_hanbit"
+split = "dev"
 name = "김민수"
 email = "minsu.kim@hanbitlab.example.org"
 company = "한빛랩"
@@ -61,6 +64,7 @@ works_with = ["seoyeon"]
 
 [[people]]
 key = "kim_minsu_nuri"
+split = "test"
 name = "김민수"
 email = "minsu.kim@nuri.example.com"
 company = "누리컴퍼니"
@@ -69,6 +73,7 @@ works_with = ["seoyeon"]
 
 [[people]]
 key = "park_jisu"
+split = "dev"
 name = "박지수"
 email = "jisu.park@hanbitlab.example.org"
 company = "한빛랩"
@@ -77,6 +82,7 @@ works_with = ["seoyeon"]
 
 [[people]]
 key = "lee_doyun"
+split = "dev"
 name = "이도윤"
 email = "doyun.lee@nuri.example.com"
 company = "누리컴퍼니"
@@ -85,6 +91,7 @@ works_with = ["seoyeon"]
 
 [[people]]
 key = "choi_yuna"
+split = "test"
 name = "최유나"
 email = "yuna.choi@hanbitlab.example.org"
 company = "한빛랩"
@@ -93,6 +100,7 @@ works_with = ["seoyeon"]
 
 [[people]]
 key = "jung_hajun"
+split = "background"
 name = "정하준"
 email = "hajun.jung@example.org"
 company = "프리랜서"
@@ -101,6 +109,7 @@ works_with = ["seoyeon"]
 
 [[people]]
 key = "kang_seoah"
+split = "dev"
 name = "강서아"
 email = "seoah.kang@bluepine.example.com"
 company = "블루파인"
@@ -109,6 +118,7 @@ works_with = ["seoyeon"]
 
 [[people]]
 key = "yoon_taeho"
+split = "dev"
 name = "윤태호"
 email = "taeho.yoon@bluepine.example.com"
 company = "블루파인"
@@ -117,6 +127,7 @@ works_with = ["seoyeon"]
 
 [[people]]
 key = "han_sora"
+split = "test"
 name = "한소라"
 email = "sora.han@example.org"
 company = "프리랜서"
@@ -125,6 +136,7 @@ works_with = ["seoyeon", "jihoon"]
 
 [[people]]
 key = "im_nayeon"
+split = "test"
 name = "임나연"
 email = "nayeon.im@bluepine.example.com"
 company = "블루파인"
@@ -133,6 +145,7 @@ works_with = ["seoyeon"]
 
 [[people]]
 key = "song_minjae"
+split = "dev"
 name = "송민재"
 email = "minjae.song@datafield.test"
 company = "데이터필드"
@@ -141,6 +154,7 @@ works_with = ["jihoon"]
 
 [[people]]
 key = "jo_eunbi"
+split = "dev"
 name = "조은비"
 email = "eunbi.jo@datafield.test"
 company = "데이터필드"
@@ -149,6 +163,7 @@ works_with = ["jihoon"]
 
 [[people]]
 key = "bae_junseo"
+split = "test"
 name = "배준서"
 email = "junseo.bae@datafield.test"
 company = "데이터필드"
@@ -157,6 +172,7 @@ works_with = ["jihoon"]
 
 [[people]]
 key = "kwon_haeun"
+split = "test"
 name = "권하은"
 email = "haeun.kwon@datafield.test"
 company = "데이터필드"
@@ -165,6 +181,7 @@ works_with = ["jihoon", "seoyeon"]
 
 [[people]]
 key = "hong_yerin"
+split = "dev"
 name = "홍예린"
 email = "yerin.hong@cloudnest.example.com"
 company = "클라우드네스트"
@@ -173,6 +190,7 @@ works_with = ["jihoon"]
 
 [[people]]
 key = "seo_jaemin"
+split = "dev"
 name = "서재민"
 email = "jaemin.seo@cloudnest.example.com"
 company = "클라우드네스트"
@@ -181,6 +199,7 @@ works_with = ["jihoon"]
 
 [[people]]
 key = "nam_dohyun"
+split = "dev"
 name = "남도현"
 email = "dohyun.nam@cloudnest.example.com"
 company = "클라우드네스트"
@@ -189,6 +208,7 @@ works_with = ["jihoon"]
 
 [[people]]
 key = "shin_jiho"
+split = "test"
 name = "신지호"
 email = "jiho.shin@cloudnest.example.com"
 company = "클라우드네스트"
@@ -197,6 +217,7 @@ works_with = ["jihoon"]
 
 [[people]]
 key = "ahn_chaewon"
+split = "test"
 name = "안채원"
 email = "chaewon.ahn@example.org"
 company = "프리랜서"
@@ -205,6 +226,7 @@ works_with = ["jihoon"]
 
 [[people]]
 key = "moon_siwoo"
+split = "background"
 name = "문시우"
 email = "siwoo.moon@example.org"
 company = "프리랜서"
