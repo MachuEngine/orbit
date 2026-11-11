@@ -30,6 +30,7 @@ def config_fingerprint(
     }
     if llm_info is not None:
         del payload["temperature"]
-        payload["llm"] = dict(llm_info)
+        # 워커 경로는 provider_items를 저장하지 않아 추론 항목을 되돌리지 않는다.
+        payload["llm"] = {**llm_info, "reasoning_items_roundtrip": False}
     text = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()

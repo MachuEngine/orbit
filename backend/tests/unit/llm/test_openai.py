@@ -484,3 +484,35 @@ def test_declared_model_matches_date_suffix() -> None:
     assert is_declared_model(d, d + "-20261101")
     assert not is_declared_model(d, d + "-mini")
     assert not is_declared_model(d, "openai/gpt-6.1-terra")
+
+
+def test_provider_items_are_hidden_from_repr() -> None:
+    from orbit.llm.types import LLMResponse, LLMUsage
+
+    item = {"type": "reasoning", "encrypted_content": "SECRET-ENC"}
+    msg = Message(role="assistant", provider_items=(item,))
+    resp = LLMResponse(
+        text=None,
+        tool_calls=(),
+        finish_reason="stop",
+        usage=LLMUsage(),
+        cost_usd=None,
+        latency_ms=0,
+        model_id=None,
+        provider=None,
+        provider_items=(item,),
+    )
+    assert "SECRET-ENC" not in repr(msg)
+    assert "SECRET-ENC" not in repr(resp)
+    assert msg.provider_items == (item,)
+
+
+def test_worker_fingerprint_records_no_roundtrip() -> None:
+    from orbit.runflow.fingerprint import config_fingerprint
+
+    info = llm_config_info(_settings(llm_reasoning_effort="low"))
+    assert info["reasoning_items_roundtrip"] is True  # 평가 경로
+    worker = config_fingerprint(MODEL, info)
+    assert worker == config_fingerprint(MODEL, {**info, "reasoning_items_roundtrip": False})
+    other = llm_config_info(_settings(llm_reasoning_effort="low", llm_send_temperature=True))
+    assert worker != config_fingerprint(MODEL, other)

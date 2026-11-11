@@ -26,7 +26,7 @@ class Message:
     tool_calls: tuple[ToolCall, ...] = ()  # role == "assistant"일 때 모델이 낸 호출
     # 제공자가 다음 요청에 그대로 되돌려 달라는 항목(OpenAI 추론 항목 등). 불투명 값이며
     # 해당 제공자 어댑터만 해석한다. 그래프 상태·DB에는 저장하지 않는다.
-    provider_items: tuple[dict[str, Any], ...] = ()
+    provider_items: tuple[dict[str, Any], ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -87,4 +87,6 @@ class LLMResponse:
     provider: str | None  # 실제 응답한 제공자. 응답에 없으면 None
     retries: int = 0  # 이 호출에서 일어난 재시도 횟수(사용량·지연은 재시도를 합산한 값)
     cost_incomplete: bool = False  # 비용을 모르는 실패 시도가 섞여 cost_usd가 하한일 수 있음
-    provider_items: tuple[dict[str, Any], ...] = ()  # `Message.provider_items`로 되돌릴 항목
+    provider_items: tuple[dict[str, Any], ...] = field(
+        default=(), repr=False
+    )  # `Message.provider_items`로 되돌릴 항목
