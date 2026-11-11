@@ -15,18 +15,22 @@ def rec(
     fp: str = "fp",
     dataset: str = "d@1",
     split: str = "dev",
+    repeats: int = 2,
 ) -> dict[str, Any]:
     return {
         "task_id": task,
         "repeat": repeat,
         "config_fingerprint": fp,
-        "config": {"dataset": dataset, "split": split},
+        "config": {"dataset": dataset, "split": split, "repeats": repeats},
         "outcome": {"success": ok, "failure_type": None if ok else (failure or "wrong_answer")},
     }
 
 
 def make(pattern: dict[str, list[bool]]) -> list[dict[str, Any]]:
-    return [rec(t, i + 1, ok) for t, v in pattern.items() for i, ok in enumerate(v)]
+    repeats = max(len(v) for v in pattern.values())
+    return [
+        rec(t, i + 1, ok, repeats=repeats) for t, v in pattern.items() for i, ok in enumerate(v)
+    ]
 
 
 def test_success_rate_point_estimate_is_mean_of_task_rates() -> None:
@@ -175,3 +179,20 @@ def test_state_diff_mismatch_count_and_model_mismatch_rejection(tmp_path: Path) 
     assert len(stats.load_results(path)) == 2
     with pytest.raises(stats.ResultsError, match="모델"):
         stats.load_results(path, reject_model_mismatch=True)
+
+
+def test_expected_repeats_come_from_config_not_from_data() -> None:
+    # 모든 과제가 1회만 돌았지만 설정은 3회였다: 전부 불완전이므로 통계에 쓸 과제가 없다
+    records = [rec("a", 1, True, repeats=3), rec("b", 1, False, repeats=3)]
+    with pytest.raises(stats.ResultsError, match="과제가 없다"):
+        stats.success_rate(records, resamples=10)
+    assert stats.success_rate(records, resamples=10, include_incomplete=True).n_tasks == 2
+
+
+def test_config_repeats_must_exist_and_agree() -> None:
+    with pytest.raises(stats.ResultsError, match="repeats"):
+        stats.success_rate([rec("a", 1, True, repeats=2), rec("b", 1, True, repeats=3)])
+    bare = rec("a", 1, True)
+    del bare["config"]["repeats"]
+    with pytest.raises(stats.ResultsError, match="repeats"):
+        stats.success_rate([bare])

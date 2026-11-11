@@ -1,10 +1,17 @@
 """코드 채점 (ADR-0009 §3, D1-3). 순수 함수만 둔다. LLM Judge는 v0에 없다.
 
 - `answer_facts`: 모든 사실이 충족돼야 한다. 사실 하나는 `any_of` 중 하나가 응답에 들어 있으면
-  충족이다. 비교는 NFKC 정규화 + 대소문자 무시 + 부분 일치이고, 공백은 없앤다. 단 숫자와 숫자
-  사이의 공백은 한 칸으로 남긴다("1 2시"가 "12시"로 합쳐지지 않게). 일치 위치 바로 앞 글자나
-  바로 뒤 글자가 숫자면(후보 가장자리 글자와 무관) 일치가 아니다("2시"는 "12시"에,
-  "10시"는 "10시 30분"에 일치하지 않는다).
+  충족이다. 응답은 NFKC·소문자로 바꾸고 연속 공백을 한 칸으로만 줄인다. 후보는 공백을 지운 뒤
+  글자 사이마다 공백 0개 이상을 허용하는 정규식으로 찾는다("오후5시"와 "오후 5시"가 서로
+  일치). 후보 안에서 숫자와 숫자 사이는 공백을 허용하지 않는다("12시"가 "1 2시"에 일치하지
+  않게). 일치 위치마다 다음을 보고, 거부되면 다음 위치를 계속 찾는다.
+  - 앞: 바로 앞 글자가 숫자면 거부("2시"는 "12시"에 일치하지 않는다).
+  - 뒤: 후보가 숫자로 끝나고 바로 뒤 글자가 숫자면 거부("14:00"은 "14:001"에 일치하지 않는다).
+    후보가 숫자로 끝나지 않으면 바로 뒤가 숫자여도 새 단위로 보고 일치다("11월 16일"은
+    "11월16일17시"에 일치).
+  - 시 단위 연속: 후보가 "시"로 끝나고 뒤따르는 문자열이 "[공백] 숫자 분" 또는
+    "[공백] 반"이면 거부("10시"는 "10시 30분", "10시반"에 일치하지 않는다).
+  날짜 뒤 시각이 오는 응답("11/16 17:00")을 거부하지 않으려고 공백 뒤 숫자는 경계로 보지 않는다.
 - `must_not_contain`: 같은 규칙으로 하나라도 응답에 있으면 실패(`wrong_answer`).
 - `expected_changes`: `None`이면 검사하지 않는다. `[]`이면 정규화 diff가 비어야 한다.
   비어 있지 않은 기대는 v0에서 채점하지 않는다. 다른 검사가 모두 통과하면 에피소드는
@@ -61,19 +68,43 @@ def normalize_text(text: str) -> str:
     return _WS.sub(squeeze, t)
 
 
-def contains(text: str, candidate: str) -> bool:
-    """정규화한 `candidate`가 정규화한 `text`에 숫자 경계를 지켜 들어 있는지 본다."""
-    t, c = normalize_text(text), normalize_text(candidate)
+_SI_CONTINUES = re.compile(r"\s*(\d+\s*분|반)")
+
+
+def _candidate_pattern(candidate: str) -> re.Pattern[str] | None:
+    c = normalize_text(candidate)  # 공백 제거(숫자-숫자 사이만 한 칸 유지)
     if not c:
+        return None
+    parts: list[str] = []
+    for i, ch in enumerate(c):
+        if i > 0:
+            prev = c[i - 1]
+            if ch == " " or prev == " ":
+                pass  # 숫자-숫자 공백은 `\s+` 하나로 쓴다
+            elif not (prev.isdecimal() and ch.isdecimal()):
+                parts.append(r"\s*")
+        parts.append(r"\s+" if ch == " " else re.escape(ch))
+    return re.compile("".join(parts))
+
+
+def contains(text: str, candidate: str) -> bool:
+    """`candidate`가 `text`에 경계 규칙(모듈 docstring)을 지켜 들어 있는지 본다."""
+    pattern = _candidate_pattern(candidate)
+    if pattern is None:
         return False
-    start = t.find(c)
-    while start != -1:
-        end = start + len(c)
-        before_ok = not (start > 0 and t[start - 1].isdecimal())
-        after_ok = not (end < len(t) and t[end].isdecimal())
-        if before_ok and after_ok:
+    t = _WS.sub(" ", unicodedata.normalize("NFKC", text).casefold())
+    c = normalize_text(candidate)
+    pos = 0
+    while (m := pattern.search(t, pos)) is not None:
+        start, end = m.span()
+        rejected = (
+            (start > 0 and t[start - 1].isdecimal())
+            or (c[-1].isdecimal() and end < len(t) and t[end].isdecimal())
+            or (c.endswith("시") and _SI_CONTINUES.match(t, end) is not None)
+        )
+        if not rejected:
             return True
-        start = t.find(c, start + 1)
+        pos = start + 1
     return False
 
 

@@ -20,7 +20,6 @@ CASES = [
     # (후보, 응답, 일치해야 하는가)
     ("2시", "12시에 만납니다", False),
     ("2시", "오후 2시에 만납니다", True),
-    ("12시", "1 2시에 만납니다", False),  # 공백 제거로 숫자가 붙으면 안 된다
     ("11월 1일", "11월 12일입니다", False),
     ("11월 12일", "11월 12일입니다", True),
     ("3시", "13시입니다", False),
@@ -31,6 +30,19 @@ CASES = [
     ("오전 10시", "오전 10시 30분입니다", False),
     ("10시", "10시에 회의가 있습니다", True),
     ("오전 10시", "오전 10시에 회의가 있습니다", True),
+    ("11월 16일", "11월 16일 17시입니다", True),
+    ("11월 16일", "11월16일17시입니다", True),
+    ("10시", "10시30분입니다", False),
+    ("10시", "10시 반입니다", False),
+    ("10시", "10시반입니다", False),
+    ("2시", "11월 16일 2시입니다", True),
+    ("2시", "12시와 2시입니다", True),
+    ("오후5시", "오후 5시입니다", True),
+    ("오후 5시", "오후5시입니다", True),
+    ("11/16", "11/16 17:00입니다", True),
+    ("2026-11-16", "2026-11-16 17:00입니다", True),
+    ("17:00", "11/16 17:00입니다", True),
+    ("14:00", "14:001입니다", False),
 ]
 
 
@@ -44,10 +56,9 @@ def test_number_boundary_in_answer_facts_and_must_not_contain(
     assert check_must_not_contain(gold, response) is (not expected)
 
 
-def test_digit_separating_whitespace_is_kept_but_other_whitespace_is_dropped() -> None:
-    assert contains("1 2시", "1 2시")  # 같은 표기는 일치
-    assert not contains("1 2시", "12시")
+def test_whitespace_is_flexible_between_characters_but_not_between_digits() -> None:
     assert contains("회의는   오후\t2 시", "오후 2시")
+    assert not contains("1 2시", "12시")  # 후보 안 숫자 사이에는 공백을 허용하지 않는다
 
 
 def test_second_occurrence_is_checked_after_a_rejected_one() -> None:

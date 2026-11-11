@@ -6,9 +6,9 @@
   `ceil((1 - a/2) * B) - 1`번째 값을 쓴다(a는 유의수준).
 - 시드를 고정하면 결과가 같다(`random.Random(seed)`).
 - `outcome.success`가 `None`인 에피소드(채점 불가)는 성공률 분모에서 빼고 개수를 따로 보고한다.
-- 에피소드 수가 가장 많은 과제의 수(기대 반복 수)보다 적은 과제는 기본적으로 성공률·CI에서
-  제외하고 개수를 보고한다(`include_incomplete=True`로 포함). 누적 상한 중단 같은 부분 실행을
-  완주한 과제와 섞지 않으려는 것이다.
+- 에피소드 수가 기대 반복 수(결과 행의 `config.repeats`, 행마다 다르거나 없으면 오류)보다 적은
+  과제는 기본적으로 성공률·CI에서 제외하고 개수를 보고한다(`include_incomplete=True`로 포함).
+  누적 상한 중단 같은 부분 실행을 완주한 과제와 섞지 않으려는 것이다.
 - `(task_id, repeat)`가 겹치는 결과는 오류다.
 """
 
@@ -98,9 +98,17 @@ class TaskRates:
     n_unscored_episodes: int
 
 
+def _expected_repeats(records: Sequence[Record]) -> int:
+    values = {(r.get("config") or {}).get("repeats") for r in records}
+    only = next(iter(values))
+    if len(values) != 1 or not isinstance(only, int):
+        raise ResultsError("config.repeats가 없거나 행마다 다르다")
+    return only
+
+
 def _task_rates(records: Sequence[Record], include_incomplete: bool) -> TaskRates:
     per_task = _per_task(records)
-    expected = max(len(v) for v in per_task.values())
+    expected = _expected_repeats(records)
     rates: dict[str, float] = {}
     incomplete = unscored_tasks = 0
     for t, v in per_task.items():

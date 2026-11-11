@@ -48,14 +48,28 @@ def _git(*args: str) -> str | None:
     return out.stdout
 
 
-def _git_state() -> tuple[str, bool]:
+def _git_state(out_dir: Path | None = None) -> tuple[str, bool]:
     """(HEAD SHA, 작업 트리에 추적 파일 변경이 있는가). git을 쓸 수 없으면 ("unknown", True).
 
-    추적하지 않는 파일(결과 출력 디렉터리 등)은 변경으로 보지 않는다.
+    추적하지 않는 파일은 `backend/src`, `eval/` 아래에 있을 때만 변경으로 본다(`out_dir` 제외).
     """
     sha = (_git("rev-parse", "HEAD") or "").strip() or "unknown"
     status = _git("status", "--porcelain", "--untracked-files=no")
-    return sha, status is None or bool(status.strip())
+    if status is None or status.strip():
+        return sha, True
+    # 코드가 있는 곳(`backend/src`, `eval/`)의 추적하지 않는 파일도 변경으로 본다.
+    # 결과 출력 폴더는 제외한다.
+    specs = [":(top)backend/src", ":(top)eval"]
+    top = (_git("rev-parse", "--show-toplevel") or "").strip()
+    if out_dir is not None and top:
+        try:
+            rel = out_dir.resolve().relative_to(Path(top).resolve())
+        except ValueError:
+            rel = None
+        if rel is not None and str(rel) != ".":
+            specs.append(f":(top,exclude){rel.as_posix()}")
+    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *specs)
+    return sha, untracked is None or bool(untracked.strip())
 
 
 def _load_fault_plan(path: str | None) -> FaultPlanSpec:
@@ -116,7 +130,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"이미 있는 파일에는 쓰지 않는다: {sink_path}", file=sys.stderr)
         return 2
     llm_factory = load_script(args.llm_script) if args.llm_script else scripted_llm_factory({})
-    sha, dirty = _git_state()  # 출력 파일을 만들기 전에 읽는다
+    sha, dirty = _git_state(out.parent)  # 출력 파일을 만들기 전에 읽는다
     common: dict[str, Any] = {
         "split": args.split,
         "sut_factory": lambda: create_sut(args.sut),
