@@ -27,6 +27,17 @@ async def delete_run(session: AsyncSession, *, workspace_id: uuid.UUID, run_id: 
     `RunHasActiveExecution`을 낸다(외부 쓰기 결과가 확정되기 전에 기록을 없애지 않는다).
     Procrastinate 작업은 args의 `run_id`가 같은 `todo` 작업만 지운다(`doing`은 건드리지 않는다).
     """
+    # run 행을 먼저 잠근다. `SqlExecutionStore.begin`이 FOR KEY SHARE로 같은 행을 잠그므로 둘이
+    # 직렬화되어, 검사 뒤에 실행 행이 새로 생겨 고아로 남는 일이 없다.
+    locked = (
+        await session.execute(
+            text("SELECT 1 FROM run WHERE id = :id AND workspace_id = :ws FOR UPDATE"),
+            {"id": run_id, "ws": workspace_id},
+        )
+    ).first()
+    if locked is None:
+        # 없거나 다른 워크스페이스의 run이다. 체크포인트도 지우지 않는다.
+        return False
     active = (
         await session.execute(
             text(

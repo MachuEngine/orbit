@@ -1,5 +1,6 @@
 """Procrastinate 작업 등록·멈춘 작업 복구·run 삭제 전파 (ADR-0005, ADR-0006, ADR-0012)."""
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator, Iterator
 
@@ -10,10 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from integration.records_support import RECORD_TABLES, new_clock, new_run, seed_all_tables
 from integration.support import WorkspaceFactory
+from orbit.core.clock import FixedClock
 from orbit.core.ids import Uuid7Generator
 from orbit.db.session import AsyncDatabase
+from orbit.records.approvals import create_tool_call_with_approval, decide_approval
 from orbit.records.deletion import CHECKPOINT_TABLES, delete_run
-from orbit.records.errors import InvalidJobArgs, RunHasActiveExecution
+from orbit.records.errors import ApprovalNotApproved, InvalidJobArgs, RunHasActiveExecution
 from orbit.records.executions import SqlExecutionStore
 from orbit.records.jobs import (
     defer_job,
@@ -415,3 +418,112 @@ async def test_delete_run_keeps_doing_job(
             await s.execute(
                 text("DELETE FROM procrastinate_workers WHERE id = :w"), {"w": worker_id}
             )
+
+
+async def _approved_run(
+    db: AsyncDatabase, workspaces: WorkspaceFactory, clock: FixedClock, ids: Uuid7Generator
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    """실행 기록이 아직 없는 승인 완료 run을 만들고 (workspace_id, run_id, approval_id)를 준다."""
+    ws, run_id = await new_run(db, workspaces, clock, ids)
+    async with db.workspace_session(ws) as s:
+        _, approval, _ = await create_tool_call_with_approval(
+            s,
+            workspace_id=ws,
+            run_id=run_id,
+            tool_call_id=ids.next(),
+            tool_name="create_event",
+            args={"title": "synthetic"},
+            args_hash="h-1",
+            provenance={},
+            clock=clock,
+            ids=ids,
+        )
+        assert await decide_approval(
+            s, workspace_id=ws, approval_id=approval.id, approve=True, clock=clock
+        )
+    return ws, run_id, approval.id
+
+
+async def _count(db: AsyncDatabase, ws: uuid.UUID, table: str) -> int:
+    async with db.workspace_session(ws) as s:
+        return int(
+            (await s.execute(text(f"SELECT count(*) FROM {table}"))).scalar_one()  # noqa: S608
+        )
+
+
+async def test_begin_waits_for_delete_run_and_leaves_no_orphan(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    """삭제 트랜잭션이 run을 잠그고 있는 동안 begin은 기다리고, 삭제가 커밋되면 실패한다."""
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id, approval_id = await _approved_run(async_db, workspaces, clock, ids)
+    store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
+
+    async with async_db.workspace_session(ws) as s:
+        assert await delete_run(s, workspace_id=ws, run_id=run_id) is True  # 아직 커밋 전
+        task = asyncio.ensure_future(store.begin(approval_id, ids.next(), 60))
+        await asyncio.sleep(0.5)
+        assert not task.done()  # run 잠금 때문에 대기 중
+    with pytest.raises(ApprovalNotApproved):
+        await task
+    assert await _count(async_db, ws, "execution") == 0
+    assert await _count(async_db, ws, "run") == 0
+
+
+async def test_delete_run_waits_for_begin_lock_and_is_refused(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    """begin이 run을 잠그고 있는 동안 삭제는 기다리고, 실행 행이 생긴 뒤에는 거부된다."""
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id, approval_id = await _approved_run(async_db, workspaces, clock, ids)
+
+    async with async_db.workspace_session(ws) as holder:
+        # begin과 같은 잠금을 쥔 채로(커밋 전) 삭제를 시작한다.
+        await holder.execute(text("SELECT 1 FROM run WHERE id = :id FOR KEY SHARE"), {"id": run_id})
+
+        async def delete() -> bool:
+            async with async_db.workspace_session(ws) as s:
+                return await delete_run(s, workspace_id=ws, run_id=run_id)
+
+        task = asyncio.ensure_future(delete())
+        await asyncio.sleep(0.5)
+        assert not task.done()
+    assert await task is True  # 잠금이 풀리고 실행 행이 없었으므로 삭제된다
+    assert await _count(async_db, ws, "run") == 0
+    assert approval_id is not None
+
+
+async def test_concurrent_delete_and_begin_never_orphan_execution(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    for _ in range(6):
+        ws, run_id, approval_id = await _approved_run(async_db, workspaces, clock, ids)
+        store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
+
+        async def delete(ws: uuid.UUID = ws, run_id: uuid.UUID = run_id) -> bool:
+            try:
+                async with async_db.workspace_session(ws) as s:
+                    return await delete_run(s, workspace_id=ws, run_id=run_id)
+            except RunHasActiveExecution:
+                return False
+
+        async def begin(
+            store: SqlExecutionStore = store, approval_id: uuid.UUID = approval_id
+        ) -> bool:
+            try:
+                await store.begin(approval_id, ids.next(), 60)
+            except ApprovalNotApproved:
+                return False
+            return True
+
+        deleted, began = await asyncio.gather(delete(), begin())
+        assert deleted != began  # 둘 중 하나만 성공한다
+        runs, executions = (
+            await _count(async_db, ws, "run"),
+            await _count(async_db, ws, "execution"),
+        )
+        assert (runs, executions) == ((0, 0) if deleted else (1, 1))

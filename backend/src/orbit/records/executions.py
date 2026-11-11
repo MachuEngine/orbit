@@ -7,6 +7,7 @@ Protocol 자체는 4B가 `orbit.actions`에 정의한다. 여기서는 같은 �
 - `begin`: `approval_id` 유일 제약으로 `pending` 행을 선기록한다. 이미 있으면
   기존 행과 False를 준다. `approved`가 아닌 approval에는 행을 만들지 않는다(DB 쪽 두 번째 방어선).
   새 행이면 호출자(owner)에게 lease(소유권)를 준다. 기존 행이면 소유권을 바꾸지 않는다.
+- `begin`은 해당 run 행을 `FOR KEY SHARE`로 잠가 `delete_run`과 직렬화된다.
 - `claim`: 기존 행에 재진입할 때 lease를 얻는다(조건부 갱신). 얻지 못하면 False.
 - `record_ref`, `finish`: lease 소유자이고 lease가 유효하며 상태가 `pending`·`unknown`일 때만
   반영한다. 아니면 예외 없이 False. `finish`는 어떤 상태로 끝나도 lease를 비운다.
@@ -70,6 +71,16 @@ class SqlExecutionStore:
     ) -> tuple[ExecutionRecord, bool]:
         async with self._db.workspace_session(self._ws) as s:
             now = self._clock.now()
+            # 같은 run의 delete_run(FOR UPDATE)과 직렬화한다. 삭제가 먼저면 approval이 사라져
+            # 아래에서 ApprovalNotApproved가 되고, begin이 먼저면 삭제가 활성 실행으로 거부된다.
+            await s.execute(
+                text(
+                    "SELECT 1 FROM run r JOIN approval a"
+                    " ON a.run_id = r.id AND a.workspace_id = r.workspace_id"
+                    " WHERE a.id = :approval AND r.workspace_id = :ws FOR KEY SHARE OF r"
+                ),
+                {"approval": approval_id, "ws": self._ws},
+            )
             inserted = (
                 await s.execute(
                     text(
