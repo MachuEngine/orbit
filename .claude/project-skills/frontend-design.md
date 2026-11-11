@@ -1,6 +1,6 @@
 # Orbit 보충 규칙
 
-> `SKILL.md`(Anthropic 원본)의 원칙 위에 Orbit 화면에만 해당하는 규칙을 더한다. 둘이 충돌하면 이 문서가 우선한다. 화면 검토는 `.claude/skills/design-review/SKILL.md`를 따른다.
+> `.claude/skills/frontend-design/SKILL.md`(Anthropic 원본, 하네스 스킬 팩 `ui-design`)의 원칙 위에 Orbit 화면에만 해당하는 규칙을 더한다. 둘이 충돌하면 이 문서가 우선한다. 화면 검토는 `.claude/skills/design-review/SKILL.md`와 `.claude/project-skills/design-review.md`를 따른다. 코드 규칙은 `.claude/skills/frontend-react/SKILL.md`를 따른다.
 
 ## 1. Orbit 화면의 성격
 - Orbit은 마케팅 페이지가 아니라 **매일 쓰는 작업 도구**다. 채팅과 승인 화면은 표현보다 정확성, 읽기 쉬움, 일관성을 우선한다.
