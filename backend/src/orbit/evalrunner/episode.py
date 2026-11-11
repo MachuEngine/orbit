@@ -17,6 +17,8 @@ from orbit.core.clock import Clock
 from orbit.llm.interface import LLM, RecordingLLM, UsageRecord, UsageRecorder
 from orbit.llm.types import LLMRequest, LLMResponse
 
+STEP_DEFINITION = "llm_calls+connector_calls/v1"
+
 
 @dataclass(frozen=True)
 class Budget:
@@ -36,6 +38,7 @@ class Budget:
             "max_steps": self.max_steps,
             "max_tokens": self.max_tokens,
             "max_seconds": self.max_seconds,
+            "step_definition": STEP_DEFINITION,  # 단계 정의가 바뀌면 설정 지문이 달라진다
         }
 
 
@@ -57,6 +60,8 @@ class StepCounter:
     - `consume()`: 다음 동작 1단계를 더해도 한도 이내인지 검사한다. 넘으면 `BudgetExceeded`.
       상태를 바꾸지 않으므로 평가 대상이 동작 직전에 불러야 한다.
     - `has_room()`: `consume()`과 같은 검사를 예외 없이 한다.
+    LLM 재시도(`LLMResponse.retries`)는 단계가 아니다. 재시도에서 쓴 토큰은 토큰 예산에만 들어간다.
+
     - `verify()`: 에피소드 뒤에 러너가 쓴다. 이미 쓴 단계·토큰이 한도를 넘었는지 본다.
     """
 
@@ -190,6 +195,8 @@ class Episode:
 class EpisodeOutput:
     final_text: str
     structured: dict[str, Any] | None = None
+    # 단계 여유가 없어 최종 텍스트를 받지 못했다. 이때 텍스트 지표는 기록하지 않는다.
+    text_skipped: bool = False
 
 
 class SystemUnderTest(Protocol):

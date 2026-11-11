@@ -150,6 +150,7 @@ class EpisodeResult:
     providers: tuple[str, ...]
     model_mismatch: bool
     latency_ms: int
+    text_skipped: bool = False  # 최종 텍스트를 받지 못해 텍스트 지표가 없다
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -182,6 +183,7 @@ class EpisodeResult:
             },
             "model_mismatch": self.model_mismatch,
             "latency_ms": self.latency_ms,
+            "text_skipped": self.text_skipped,
         }
 
     def to_json_line(self) -> str:
@@ -292,6 +294,7 @@ async def run_episode(
             k: (v if k in ("forbidden_tools", "state_diff") else None)
             for k, v in score.checks.items()
         }
+    text_skipped = output is not None and output.text_skipped
     return EpisodeResult(
         experiment_id=experiment_id,
         config=config,
@@ -306,7 +309,7 @@ async def run_episode(
         state_diff_match=score.state_diff_match,
         checks=checks,
         unscored=score.unscored,
-        text_fact_recall=None if error_type is not None else score.text_fact_recall,
+        text_fact_recall=None if error_type is not None or text_skipped else score.text_fact_recall,
         answer_ids=answer_ids(output.structured) if output is not None else None,
         trajectory=tuple(c.tool for c in calls),
         llm_calls=len(recorder.records),
@@ -317,6 +320,7 @@ async def run_episode(
         providers=providers,
         model_mismatch=mismatch,
         latency_ms=latency_ms,
+        text_skipped=text_skipped,
     )
 
 

@@ -117,7 +117,9 @@ class AssistantV0SUT:
         text, structured = await assistant.run(
             [t.content for t in episode.task.turns if t.role == "user"]
         )
-        return EpisodeOutput(final_text=text, structured=structured)
+        return EpisodeOutput(
+            final_text=text, structured=structured, text_skipped=assistant.text_skipped
+        )
 
 
 SutFactory = Callable[[], SystemUnderTest]

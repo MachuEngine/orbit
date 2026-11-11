@@ -191,6 +191,7 @@ async def test_final_text_call_skipped_at_step_limit_keeps_submission(tmp_path: 
     )
     assert outcome(summary) == {tid: (True, None) for tid in EXPECTED}  # budget_exceeded 아님
     assert all(r.llm_calls == 2 for r in summary.results)
+    assert all(r.text_skipped for r in summary.results)
 
 
 async def test_final_text_call_runs_when_step_room_exists(tmp_path: Path) -> None:
@@ -202,3 +203,31 @@ async def test_final_text_call_runs_when_step_room_exists(tmp_path: Path) -> Non
     )
     assert outcome(summary) == {tid: (True, None) for tid in EXPECTED}
     assert all(r.llm_calls == 3 for r in summary.results)
+    assert not any(r.text_skipped for r in summary.results)
+
+
+TEAM_DAY = call(
+    "list_events", time_min="2026-11-13T00:00:00+09:00", time_max="2026-11-14T00:00:00+09:00"
+)
+TEAM_SUBMIT = {"kind": "event_set", "events": ["E1"]}
+
+
+async def test_skipped_text_has_no_text_fact_recall(dataset: Dataset) -> None:
+    from orbit.evalrunner.episode import Budget
+
+    scr = {"t-002": [step(calls=[TEAM_DAY]), {**step(None), "structured": TEAM_SUBMIT}]}
+    tight = await run(dataset, scr, sut="assistant_v0", repeats=1, budget=Budget(max_steps=5))
+    r = next(x for x in tight.results if x.task_id == "t-002")
+    assert r.success is True and r.text_skipped is True
+    assert r.text_fact_recall is None  # 텍스트를 받지 못한 것이지 0점이 아니다
+    assert r.to_dict()["text_skipped"] is True
+
+    scr["t-002"].append(step("모레는 팀 회고가 있습니다."))
+    roomy = await run(dataset, scr, sut="assistant_v0", repeats=1, budget=Budget(max_steps=6))
+    r = next(x for x in roomy.results if x.task_id == "t-002")
+    assert r.text_skipped is False and r.text_fact_recall == 1.0
+
+
+async def test_step_definition_is_in_config_fingerprint(tmp_path: Path) -> None:
+    summary = await run(make_dataset(tmp_path), script(SUBMITS), sut="assistant_v0", repeats=1)
+    assert summary.results[0].config["budget"]["step_definition"] == "llm_calls+connector_calls/v1"
