@@ -6,8 +6,15 @@
 - 정확한 결과 목록 대신 "포함/미포함"으로 단언한다(실제 계정에는 다른 메일이 있을 수 있다).
 - 검색어는 Gmail 단어 단위 검색에서도 성립하도록 공백으로 나뉜 완전한 토큰이나 제목 전체를 쓴다.
 - 부분 문자열·형태소 일치, 정확한 결과 목록, 초안 제외 같은 Sim 동작은 단위 테스트에서 검사한다.
-- 검색 색인 지연이 있는 구현체는 팩토리나 이 파일의 `search`에서 재시도를 두어야 한다.
+- 직접 만든 항목이 검색에 나타나기를 기다려야 하는 단언(긍정)은 `wait_for_search` 헬퍼(픽스처
+  `wait_search`)를 거친다. 부정 단언은 긍정 대조군이 먼저 색인된 것을 확인한 뒤 한다.
+  Sim에서는 첫 시도에 통과하고 실제로 기다리지 않는다(sleep 주입).
+- 계약: Adapter는 지원 부분집합 밖의 검색어를 서버 호출 전에 검증해 `InvalidQuery`를 던져야 한다
+  (ADR-0008 4절). 아래 `InvalidQuery` 파라미터 목록이 그 계약이다.
 """
+
+import asyncio
+from collections.abc import Awaitable, Callable
 
 import pytest
 
@@ -22,7 +29,7 @@ from orbit.connectors.contracts import (
 )
 from orbit.connectors.sim.world import SimWorld
 
-from .conftest import MailFactory
+from .conftest import MAIL_FACTORIES, MailFactory
 
 ALICE = "acct-alice"
 BOB = "acct-bob"
@@ -46,6 +53,54 @@ ATTACHMENT_NAME = "report.pdf"
 @pytest.fixture
 def mail(mail_factory: MailFactory, minimal_world: SimWorld) -> MailConnector:
     return mail_factory(minimal_world, ALICE)
+
+
+Predicate = Callable[[list[MessageSummary]], bool]
+SleepFn = Callable[[float], Awaitable[None]]
+WaitSearch = Callable[[MailConnector, str, Predicate], Awaitable[list[MessageSummary]]]
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+async def wait_for_search(
+    mail: MailConnector,
+    query: str,
+    predicate: Predicate,
+    *,
+    timeout_s: float = 10.0,
+    interval_s: float = 0.5,
+    sleep: SleepFn = asyncio.sleep,
+) -> list[MessageSummary]:
+    """`predicate`가 참이 될 때까지 검색을 반복한다. 시간 초과면 AssertionError.
+
+    대기는 주입한 `sleep`으로 한다. 시각을 읽지 않고 시도 횟수로 제한한다.
+    """
+    attempts = int(timeout_s / interval_s) + 1
+    found: list[MessageSummary] = []
+    for attempt in range(attempts):
+        found = list((await mail.search_messages(query, max_results=50)).messages)
+        if predicate(found):
+            return found
+        if attempt < attempts - 1:
+            await sleep(interval_s)
+    raise AssertionError(f"{timeout_s}초 안에 {query!r} 검색 결과가 조건을 만족하지 않았다")
+
+
+def has_subject(subject: str) -> Predicate:
+    return lambda found: any(m.subject == subject for m in found)
+
+
+@pytest.fixture
+def wait_search(mail_factory: MailFactory) -> WaitSearch:
+    # Sim은 기다리지 않는다. 실제 어댑터는 실제로 대기한다.
+    sleep: SleepFn = _no_sleep if mail_factory is MAIL_FACTORIES.get("sim") else asyncio.sleep
+
+    async def wait(mail: MailConnector, query: str, predicate: Predicate) -> list[MessageSummary]:
+        return await wait_for_search(mail, query, predicate, sleep=sleep)
+
+    return wait
 
 
 async def subjects_of(mail: MailConnector, query: str) -> list[str]:
@@ -135,17 +190,19 @@ async def test_results_are_newest_first(mail: MailConnector) -> None:
     assert times == sorted(times, reverse=True)
 
 
-async def test_keywords_and_phrase_match_subject_or_body(mail: MailConnector) -> None:
+async def test_keywords_and_phrase_match_subject_or_body(
+    mail: MailConnector, wait_search: WaitSearch
+) -> None:
     token = "zebraquartz"
-    draft = await mail.create_draft(
-        spec(subject=f"키워드 {token} 제목", body_text="alpha beta gamma delta")
-    )
+    subject = f"키워드 {token} 제목"
+    draft = await mail.create_draft(spec(subject=subject, body_text="alpha beta gamma delta"))
     await mail.send_draft(draft.draft_id)
-    assert f"키워드 {token} 제목" in await subjects_of(mail, token)  # 제목 토큰
-    assert f"키워드 {token} 제목" in await subjects_of(mail, "gamma")  # 본문 토큰
-    assert f"키워드 {token} 제목" in await subjects_of(mail, f'"alpha beta" {token}')
-    assert f"키워드 {token} 제목" not in await subjects_of(mail, f'"beta alpha" {token}')
-    assert f"키워드 {token} 제목" not in await subjects_of(mail, f"{token} missingtokenxyz")
+    await wait_search(mail, token, has_subject(subject))  # 제목 토큰
+    await wait_search(mail, "gamma", has_subject(subject))  # 본문 토큰
+    await wait_search(mail, f'"alpha beta" {token}', has_subject(subject))
+    # 긍정 대조군이 색인된 뒤의 부정 단언
+    assert subject not in await subjects_of(mail, f'"beta alpha" {token}')
+    assert subject not in await subjects_of(mail, f"{token} missingtokenxyz")
 
 
 async def test_conditions_are_anded_and_case_insensitive(mail: MailConnector) -> None:
@@ -156,9 +213,9 @@ async def test_conditions_are_anded_and_case_insensitive(mail: MailConnector) ->
     assert not {SUBJ_INQUIRY, SUBJ_REPORT} & set(none)
 
 
-async def test_in_drafts_finds_created_draft(mail: MailConnector) -> None:
+async def test_in_drafts_finds_created_draft(mail: MailConnector, wait_search: WaitSearch) -> None:
     await mail.create_draft(spec(subject="유일한초안제목 zebradraft"))
-    assert "유일한초안제목 zebradraft" in await subjects_of(mail, "in:drafts zebradraft")
+    await wait_search(mail, "in:drafts zebradraft", has_subject("유일한초안제목 zebradraft"))
 
 
 @pytest.mark.parametrize(
@@ -286,7 +343,7 @@ async def test_get_missing_draft_raises_not_found(mail: MailConnector) -> None:
         await mail.get_draft("drf-does-not-exist")
 
 
-async def test_send_draft_full_flow(mail: MailConnector) -> None:
+async def test_send_draft_full_flow(mail: MailConnector, wait_search: WaitSearch) -> None:
     draft = await mail.create_draft(spec())
     sent = await mail.send_draft(draft.draft_id)
 
@@ -311,11 +368,14 @@ async def test_send_draft_full_flow(mail: MailConnector) -> None:
     assert len(matched) == 1
 
     # 보낸편지함 검색으로도 찾을 수 있다.
-    found = [
-        m
-        for m in (await mail.search_messages("in:sent", max_results=50)).messages
-        if m.subject == "계약 테스트 메일" and m.thread_id == draft.thread_id
-    ]
+    hits = await wait_search(
+        mail,
+        "in:sent",
+        lambda found: any(
+            m.subject == "계약 테스트 메일" and m.thread_id == draft.thread_id for m in found
+        ),
+    )
+    found = [m for m in hits if m.subject == "계약 테스트 메일" and m.thread_id == draft.thread_id]
     assert len(found) == 1
     assert await mail.get_message(found[0].id) is not None
 
@@ -333,6 +393,7 @@ async def test_send_to_self_also_gets_inbox_label(mail: MailConnector) -> None:
     draft = await mail.create_draft(spec(to=(Address(email=ALICE_ADDR),)))
     sent = await mail.send_draft(draft.draft_id)
     assert "SENT" in sent.labels
+    # SPIKE-005 실측: 본인에게 보낸 `drafts.send` 응답의 labelIds가 UNREAD, SENT, INBOX였다.
     assert "INBOX" in sent.labels
 
 
@@ -358,10 +419,18 @@ async def test_delete_missing_draft_raises_not_found(mail: MailConnector) -> Non
         await mail.delete_draft("drf-does-not-exist")
 
 
-async def test_deleted_draft_leaves_no_sent_mail(mail: MailConnector) -> None:
-    draft = await mail.create_draft(spec(subject="삭제될초안제목 zebradeleted"))
-    await mail.delete_draft(draft.draft_id)
-    assert "삭제될초안제목 zebradeleted" not in await subjects_of(mail, "in:sent zebradeleted")
+async def test_deleted_draft_leaves_no_sent_mail(
+    mail: MailConnector, wait_search: WaitSearch
+) -> None:
+    deleted = await mail.create_draft(spec(subject="삭제될초안제목 zebradeleted"))
+    control = await mail.create_draft(spec(subject="대조군메일제목 zebradeleted"))
+    await mail.delete_draft(deleted.draft_id)
+    await mail.send_draft(control.draft_id)
+    # 대조군이 색인된 것을 확인한 뒤에 삭제된 초안의 부재를 단언한다.
+    found = await wait_search(
+        mail, "in:sent zebradeleted", has_subject("대조군메일제목 zebradeleted")
+    )
+    assert "삭제될초안제목 zebradeleted" not in [m.subject for m in found]
 
 
 async def test_other_accounts_drafts_and_sent_messages_are_not_found(
