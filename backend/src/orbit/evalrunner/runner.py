@@ -156,6 +156,8 @@ class EpisodeResult:
     model_mismatch: bool
     latency_ms: int
     text_skipped: bool = False  # 최종 텍스트를 받지 못해 텍스트 지표가 없다
+    cached_input_tokens: int = 0
+    reasoning_tokens: int = 0  # output_tokens의 부분집합(추론에 쓴 토큰)
     length_finishes: int = 0  # 출력 토큰 한도로 끝난 LLM 응답 수(finish_reason == "length")
 
     def to_dict(self) -> dict[str, Any]:
@@ -183,6 +185,8 @@ class EpisodeResult:
                 "llm_calls": self.llm_calls,
                 "input_tokens": self.input_tokens,
                 "output_tokens": self.output_tokens,
+                "cached_input_tokens": self.cached_input_tokens,
+                "reasoning_tokens": self.reasoning_tokens,
                 "cost_usd": self.cost_usd,
                 "models": list(self.models),
                 "providers": list(self.providers),
@@ -322,6 +326,8 @@ async def run_episode(
         llm_calls=len(recorder.records),
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
+        cached_input_tokens=usage.cached_input_tokens,
+        reasoning_tokens=usage.reasoning_tokens,
         cost_usd=cost,
         models=models,
         providers=providers,
@@ -488,6 +494,7 @@ class Estimate:
     repeats: int
     mean_input_tokens: float
     mean_output_tokens: float
+    mean_reasoning_tokens: float  # output_tokens의 부분집합
     mean_cost_usd: float | None  # 비용을 모르는 에피소드가 있으면 None
     estimated_episodes: int
     estimated_total_tokens: float
@@ -523,6 +530,7 @@ async def estimate_experiment(
             repeats=repeats,
             mean_input_tokens=mean_in,
             mean_output_tokens=mean_out,
+            mean_reasoning_tokens=sum(r.reasoning_tokens for r in results) / count,
             mean_cost_usd=mean_cost,
             estimated_episodes=episodes,
             estimated_total_tokens=(mean_in + mean_out) * episodes,

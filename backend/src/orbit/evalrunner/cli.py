@@ -189,6 +189,7 @@ def _run(args: argparse.Namespace) -> int:
         "experiment_id": args.experiment_id,
         "allow_sealed_test": args.allow_test,
     }
+    sink_path.parent.mkdir(parents=True, exist_ok=True)  # 결과 폴더가 없으면 만든다
     with sink_path.open("x", encoding="utf-8") as fh:
 
         def sink(result: Any) -> None:

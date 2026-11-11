@@ -136,6 +136,7 @@ class UsageRecord:
     cost_incomplete: bool = False
     model_id_missing: bool = False  # 응답에 모델 ID가 없었다
     finish_reason: str | None = None  # 응답이 있을 때만
+    reasoning_tokens: int = 0  # output_tokens의 부분집합
 
 
 class UsageRecorder:
@@ -153,7 +154,9 @@ class UsageRecorder:
     def total_usage(self) -> LLMUsage:
         total = LLMUsage()
         for r in self._records:
-            total = total + LLMUsage(r.input_tokens, r.output_tokens, r.cached_input_tokens)
+            total = total + LLMUsage(
+                r.input_tokens, r.output_tokens, r.cached_input_tokens, r.reasoning_tokens
+            )
         return total
 
     @property
@@ -193,6 +196,7 @@ class RecordingLLM:
                     input_tokens=exc.usage.input_tokens,
                     output_tokens=exc.usage.output_tokens,
                     cached_input_tokens=exc.usage.cached_input_tokens,
+                    reasoning_tokens=exc.usage.reasoning_tokens,
                     cost_usd=exc.cost_usd,
                     latency_ms=None,
                     retries=exc.retries,
@@ -209,6 +213,7 @@ class RecordingLLM:
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,
                 cached_input_tokens=response.usage.cached_input_tokens,
+                reasoning_tokens=response.usage.reasoning_tokens,
                 cost_usd=response.cost_usd,
                 latency_ms=response.latency_ms,
                 retries=response.retries,
