@@ -82,6 +82,13 @@
 
 완료 조건: 강제 종료·동시 승인 상황에서도 외부 쓰기 1번, 승인 없는 쓰기 0번.
 
+진행(2026-11-11, 브랜치 `stage-4/write-path`, ADR-0012): 3e(모델 파일럿)보다 먼저 진행했다(개발자 결정).
+- 4A `orbit.records`: 마이그레이션 0002(run, run_event, run_message, tool_call, approval, execution; RLS·FORCE·열 단위 권한), 조건부 승인, 실행 선기록·실행 소유권(lease, DB 시계), Procrastinate 같은 트랜잭션 등록, 멈춘 작업 복구, run 삭제 전파.
+- 4B `orbit.actions`: 쓰기 동작 4종, 인자 해시, 인자 출처 분류, 실행기와 결과 불명 대조(클라이언트 지정 ID, `if_match`, 초안 발송), 만료·비승인 재진입은 읽기 대조만.
+- 4C `orbit.runflow`·`orbit.api`: LangGraph 쓰기 Run 그래프(step 멱등, interrupt 노드 분리), Procrastinate 워커, Run·승인 API와 SSE, 개발용 임시 인증(`ORBIT_ENV=dev`에서만).
+- 통합 테스트: 승인 없는 쓰기 0, S4(쓰기 직후 종료 후 재시도)·S7(동시 승인)·결과 불명 대조에서 쓰기 정확히 1번, 체크포인트·작업 인자에 원문 없음.
+- 미검증: 실제 LLM, 실제 서버(uvicorn)의 SSE 점진 전송, 실제 교착 재현, 메일 결과 불명의 통합 시나리오(단위 테스트만), Google에서의 동작(6단계).
+
 ### 5단계. 웹 수직 슬라이스 (H1)
 1. 프론트엔드 스택 ADR, UX/UI 스킬 작성
 2. 채팅 화면 → API → 응답 스트리밍

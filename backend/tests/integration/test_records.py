@@ -1,0 +1,594 @@
+"""run·이벤트·승인·실행 기록 통합 테스트 (ADR-0012 4A). 실제 PostgreSQL이 필요하다."""
+
+import asyncio
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import pytest
+from sqlalchemy import text
+
+from integration.records_support import LEASE_SECONDS, new_clock, new_run, seed_all_tables
+from integration.support import WorkspaceFactory
+from orbit.core.ids import Uuid7Generator
+from orbit.db.session import AsyncDatabase
+from orbit.records.approvals import (
+    create_tool_call_with_approval,
+    decide_approval,
+    expire_approval,
+    expire_due_approvals,
+    get_approval,
+)
+from orbit.records.errors import (
+    ApprovalNotApproved,
+    IdempotencyConflict,
+    InvalidTransition,
+    RecordNotFound,
+)
+from orbit.records.executions import SqlExecutionStore
+from orbit.records.runs import (
+    append_event,
+    append_message,
+    get_run,
+    list_events,
+    list_messages,
+    transition_run,
+)
+
+CONCURRENCY = 8
+
+
+# run 상태 전이 ----------------------------------------------------------------
+
+
+async def test_run_transitions_allowed_and_rejected(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+
+    async def go(to: str, error_kind: str | None = None) -> str:
+        async with async_db.workspace_session(ws) as s:
+            rec = await transition_run(
+                s,
+                workspace_id=ws,
+                run_id=run_id,
+                to_status=to,
+                clock=clock,
+                error_kind=error_kind,
+            )
+            return rec.status
+
+    # queued는 바로 succeeded로 갈 수 없다.
+    with pytest.raises(InvalidTransition):
+        await go("succeeded")
+    assert await go("running") == "running"
+    assert await go("waiting_approval") == "waiting_approval"
+    with pytest.raises(InvalidTransition):
+        await go("succeeded")  # waiting_approval -> succeeded 불가
+    assert await go("running") == "running"
+    clock.advance(timedelta(seconds=5))
+    assert await go("failed", "tool_error") == "failed"
+
+    async with async_db.workspace_session(ws) as s:
+        run = await get_run(s, workspace_id=ws, run_id=run_id)
+    assert run is not None
+    assert (run.status, run.error_kind, run.updated_at) == ("failed", "tool_error", clock.now())
+
+    # 종료 상태에서는 나갈 수 없다.
+    for target in ("running", "cancelled", "failed"):
+        with pytest.raises(InvalidTransition):
+            await go(target, "x" if target == "failed" else None)
+
+
+async def test_run_transition_argument_and_missing_rules(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    async with async_db.workspace_session(ws) as s:
+        with pytest.raises(ValueError):
+            await transition_run(s, workspace_id=ws, run_id=run_id, to_status="failed", clock=clock)
+        with pytest.raises(ValueError):
+            await transition_run(
+                s,
+                workspace_id=ws,
+                run_id=run_id,
+                to_status="running",
+                clock=clock,
+                error_kind="x",
+            )
+        with pytest.raises(InvalidTransition):
+            await transition_run(s, workspace_id=ws, run_id=run_id, to_status="queued", clock=clock)
+        with pytest.raises(RecordNotFound):
+            await transition_run(
+                s, workspace_id=ws, run_id=ids.next(), to_status="running", clock=clock
+            )
+
+
+async def test_concurrent_transitions_only_one_wins(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+
+    async def attempt(to: str) -> bool:
+        try:
+            async with async_db.workspace_session(ws) as s:
+                await transition_run(
+                    s,
+                    workspace_id=ws,
+                    run_id=run_id,
+                    to_status=to,
+                    clock=clock,
+                    error_kind="e" if to == "failed" else None,
+                )
+            return True
+        except InvalidTransition:
+            return False
+
+    results = await asyncio.gather(attempt("running"), attempt("cancelled"), attempt("failed"))
+    # queued -> {running, cancelled, failed}는 모두 허용되지만, 첫 전이가 끝난 뒤에는
+    # running -> cancelled/failed도 허용된다. 어떤 순서여도 마지막 상태는 허용된 경로여야 한다.
+    async with async_db.workspace_session(ws) as s:
+        run = await get_run(s, workspace_id=ws, run_id=run_id)
+    assert run is not None
+    assert run.status in {"running", "cancelled", "failed"}
+    assert any(results)
+
+
+# run_event / run_message --------------------------------------------------------
+
+
+async def test_events_seq_monotonic_and_after_seq(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    other_ws, other_run = await new_run(async_db, workspaces, clock, ids)
+
+    async with async_db.workspace_session(ws) as s:
+        seqs = [
+            (
+                await append_event(
+                    s,
+                    workspace_id=ws,
+                    run_id=run_id,
+                    type="t",
+                    payload={"n": i},
+                    clock=clock,
+                )
+            ).seq
+            for i in range(3)
+        ]
+    async with async_db.workspace_session(other_ws) as s:
+        first_of_other = await append_event(
+            s, workspace_id=other_ws, run_id=other_run, type="t", payload={}, clock=clock
+        )
+    assert seqs == [1, 2, 3]
+    assert first_of_other.seq == 1  # run마다 1부터
+
+    async with async_db.workspace_session(ws) as s:
+        after = await list_events(s, workspace_id=ws, run_id=run_id, after_seq=1)
+        assert [(e.seq, e.payload) for e in after] == [(2, {"n": 1}), (3, {"n": 2})]
+        assert await list_events(s, workspace_id=ws, run_id=run_id, after_seq=3) == []
+        limited = await list_events(s, workspace_id=ws, run_id=run_id, limit=2)
+        assert [e.seq for e in limited] == [1, 2]
+        with pytest.raises(RecordNotFound):
+            await append_event(
+                s, workspace_id=ws, run_id=ids.next(), type="t", payload={}, clock=clock
+            )
+
+
+async def test_concurrent_event_and_message_append_have_gapless_seq(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+
+    async def add_event(i: int) -> int:
+        async with async_db.workspace_session(ws) as s:
+            ev = await append_event(
+                s, workspace_id=ws, run_id=run_id, type="t", payload={"i": i}, clock=clock
+            )
+            return ev.seq
+
+    async def add_message(i: int) -> int:
+        async with async_db.workspace_session(ws) as s:
+            msg = await append_message(
+                s,
+                workspace_id=ws,
+                run_id=run_id,
+                role="assistant",
+                content={"i": i},
+                clock=clock,
+            )
+            return msg.seq
+
+    event_seqs, message_seqs = await asyncio.gather(
+        asyncio.gather(*(add_event(i) for i in range(CONCURRENCY))),
+        asyncio.gather(*(add_message(i) for i in range(CONCURRENCY))),
+    )
+    assert sorted(event_seqs) == list(range(1, CONCURRENCY + 1))
+    assert sorted(message_seqs) == list(range(1, CONCURRENCY + 1))
+
+    async with async_db.workspace_session(ws) as s:
+        events = await list_events(s, workspace_id=ws, run_id=run_id)
+        messages = await list_messages(s, workspace_id=ws, run_id=run_id, after_seq=2)
+    assert [e.seq for e in events] == list(range(1, CONCURRENCY + 1))
+    assert [m.seq for m in messages] == list(range(3, CONCURRENCY + 1))
+
+
+async def test_message_role_is_checked(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    async with async_db.workspace_session(ws) as s:
+        with pytest.raises(ValueError):
+            await append_message(
+                s, workspace_id=ws, run_id=run_id, role="admin", content={}, clock=clock
+            )
+
+
+# tool_call / approval ------------------------------------------------------------
+
+
+async def _create_call(
+    db: AsyncDatabase,
+    ws: uuid.UUID,
+    run_id: uuid.UUID,
+    call_id: uuid.UUID,
+    ids: Uuid7Generator,
+    clock: Any,
+    args_hash: str = "h-1",
+) -> tuple[uuid.UUID, uuid.UUID, bool]:
+    async with db.workspace_session(ws) as s:
+        call, approval, created = await create_tool_call_with_approval(
+            s,
+            workspace_id=ws,
+            run_id=run_id,
+            tool_call_id=call_id,
+            tool_name="create_event",
+            args={"title": "synthetic"},
+            args_hash=args_hash,
+            provenance={"attendees": {}},
+            clock=clock,
+            ids=ids,
+        )
+    return call.id, approval.id, created
+
+
+async def test_tool_call_and_approval_are_idempotent(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    call_id = ids.next()
+
+    first = await _create_call(async_db, ws, run_id, call_id, ids, clock)
+    second = await _create_call(async_db, ws, run_id, call_id, ids, clock)
+    assert first[2] is True
+    assert second == (first[0], first[1], False)
+
+    # 같은 키에 다른 인자 해시는 거부한다.
+    with pytest.raises(IdempotencyConflict):
+        await _create_call(async_db, ws, run_id, call_id, ids, clock, args_hash="h-2")
+
+    async with async_db.workspace_session(ws) as s:
+        approval = await get_approval(s, workspace_id=ws, approval_id=first[1])
+        counts = (
+            await s.execute(
+                text("SELECT (SELECT count(*) FROM tool_call), (SELECT count(*) FROM approval)")
+            )
+        ).one()
+    assert approval is not None
+    assert (approval.status, approval.args_hash, approval.expires_at) == (
+        "pending",
+        "h-1",
+        clock.now() + timedelta(minutes=15),
+    )
+    assert tuple(counts) == (1, 1)
+
+
+async def test_concurrent_create_same_key_makes_one_approval(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    call_id = ids.next()
+    results = await asyncio.gather(
+        *(_create_call(async_db, ws, run_id, call_id, ids, clock) for _ in range(CONCURRENCY))
+    )
+    assert len({(r[0], r[1]) for r in results}) == 1
+    assert sum(r[2] for r in results) == 1
+
+
+async def test_concurrent_decisions_only_one_succeeds(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    _, approval_id, _ = await _create_call(async_db, ws, run_id, ids.next(), ids, clock)
+
+    async def decide(approve: bool) -> bool:
+        async with async_db.workspace_session(ws) as s:
+            return await decide_approval(
+                s, workspace_id=ws, approval_id=approval_id, approve=approve, clock=clock
+            )
+
+    results = await asyncio.gather(*(decide(i % 2 == 0) for i in range(CONCURRENCY)))
+    assert sum(results) == 1
+    async with async_db.workspace_session(ws) as s:
+        approval = await get_approval(s, workspace_id=ws, approval_id=approval_id)
+    assert approval is not None
+    assert approval.status in {"approved", "rejected"}
+    assert approval.decided_at == clock.now()
+    assert await decide(True) is False  # 이미 결정된 승인
+
+
+async def test_decision_after_expiry_fails_and_expire_marks_expired(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    _, late_id, _ = await _create_call(async_db, ws, run_id, ids.next(), ids, clock)
+    _, ok_id, _ = await _create_call(async_db, ws, run_id, ids.next(), ids, clock)
+
+    async with async_db.workspace_session(ws) as s:
+        # 만료 직전(1초 전)에는 결정된다.
+        clock.advance(timedelta(minutes=15) - timedelta(seconds=1))
+        assert await decide_approval(
+            s, workspace_id=ws, approval_id=ok_id, approve=True, clock=clock
+        )
+        # 만료 시각 정각부터는 결정할 수 없다(expires_at > now).
+        clock.advance(timedelta(seconds=1))
+        assert not await decide_approval(
+            s, workspace_id=ws, approval_id=late_id, approve=True, clock=clock
+        )
+        # 아직 만료 처리 전이라 pending이다. 만료 처리는 한 번만 성공한다.
+        late = await get_approval(s, workspace_id=ws, approval_id=late_id)
+        assert late is not None and late.status == "pending"
+        assert await expire_approval(s, workspace_id=ws, approval_id=late_id, clock=clock)
+        assert not await expire_approval(s, workspace_id=ws, approval_id=late_id, clock=clock)
+        late = await get_approval(s, workspace_id=ws, approval_id=late_id)
+        assert late is not None and (late.status, late.decided_at) == ("expired", clock.now())
+        assert not await decide_approval(
+            s, workspace_id=ws, approval_id=late_id, approve=True, clock=clock
+        )
+        # 이미 승인된 것은 만료 처리 대상이 아니다.
+        assert not await expire_approval(s, workspace_id=ws, approval_id=ok_id, clock=clock)
+        assert await expire_due_approvals(s, workspace_id=ws, clock=clock) == []
+
+
+async def test_expire_due_approvals_bulk(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    created = [(await _create_call(async_db, ws, run_id, ids.next(), ids, clock))[1] for _ in "ab"]
+    clock.advance(timedelta(minutes=16))
+    async with async_db.workspace_session(ws) as s:
+        expired = await expire_due_approvals(s, workspace_id=ws, clock=clock)
+    assert sorted(expired) == sorted(created)
+
+
+# ExecutionStore -------------------------------------------------------------------
+
+
+async def _approved(
+    db: AsyncDatabase, ws: uuid.UUID, run_id: uuid.UUID, ids: Uuid7Generator, clock: Any
+) -> uuid.UUID:
+    _, approval_id, _ = await _create_call(db, ws, run_id, ids.next(), ids, clock)
+    async with db.workspace_session(ws) as s:
+        assert await decide_approval(
+            s, workspace_id=ws, approval_id=approval_id, approve=True, clock=clock
+        )
+    return approval_id
+
+
+async def test_execution_store_begin_is_single_row_under_concurrency(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    approval_id = await _approved(async_db, ws, run_id, ids, clock)
+    store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
+    owners = [ids.next() for _ in range(CONCURRENCY)]
+
+    results = await asyncio.gather(*(store.begin(approval_id, o, LEASE_SECONDS) for o in owners))
+    assert sum(created for _, created in results) == 1
+    assert len({rec.id for rec, _ in results}) == 1
+    # 새 행을 만든 호출자만 소유권을 갖는다. 기존 행을 본 호출은 소유권을 바꾸지 못한다.
+    winner = next(rec for rec, created in results if created)
+    assert winner.lease_owner in owners
+    final = await store.get(approval_id)
+    assert final is not None and final.lease_owner == winner.lease_owner
+    async with async_db.workspace_session(ws) as s:
+        count = (await s.execute(text("SELECT count(*) FROM execution"))).scalar_one()
+    assert count == 1
+
+
+async def test_execution_store_requires_approved_approval(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    ws, run_id = await new_run(async_db, workspaces, clock, ids)
+    _, approval_id, _ = await _create_call(async_db, ws, run_id, ids.next(), ids, clock)
+    store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
+    until = LEASE_SECONDS
+
+    with pytest.raises(ApprovalNotApproved):  # pending
+        await store.begin(approval_id, ids.next(), until)
+    async with async_db.workspace_session(ws) as s:
+        assert await decide_approval(
+            s, workspace_id=ws, approval_id=approval_id, approve=False, clock=clock
+        )
+    with pytest.raises(ApprovalNotApproved):  # rejected
+        await store.begin(approval_id, ids.next(), until)
+    with pytest.raises(ApprovalNotApproved):  # 없는 승인
+        await store.begin(ids.next(), ids.next(), until)
+    assert await store.get(approval_id) is None
+
+
+async def test_execution_store_lifecycle_with_lease(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids)
+    ws, owner = seeded.workspace_id, seeded.owner
+    store = SqlExecutionStore(async_db, ws, clock=clock, ids=ids)
+
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None and rec.id == seeded.execution_id
+    assert (rec.status, rec.external_ref, rec.error_kind) == ("pending", None, None)
+    assert rec.lease_owner == owner and rec.lease_expires_at is not None
+    # 기존 행에 begin해도 소유권은 바뀌지 않는다.
+    again, created = await store.begin(seeded.approval_id, ids.next(), 2 * LEASE_SECONDS)
+    assert (again, created) == (rec, False)
+
+    assert await store.record_ref(rec.id, owner, {"draft_id": "d-1"})
+    got = await store.get(seeded.approval_id)
+    assert got is not None and got.external_ref == {"draft_id": "d-1"}
+
+    # 결과 불명 -> unknown은 lease를 비워 다음 재진입이 바로 claim할 수 있다.
+    assert await store.finish(rec.id, owner, "unknown", None, None)
+    unknown = await store.get(seeded.approval_id)
+    assert unknown is not None
+    assert (unknown.status, unknown.lease_owner, unknown.lease_expires_at) == (
+        "unknown",
+        None,
+        None,
+    )
+    assert not await store.record_ref(rec.id, owner, {"x": 1})  # 이전 소유자는 더 쓸 수 없다
+    second = ids.next()
+    assert await store.claim(rec.id, second, LEASE_SECONDS)  # 즉시 claim 가능
+    assert await store.record_ref(rec.id, second, {"draft_id": "d-1", "thread_id": "t-1"})
+    assert await store.finish(rec.id, second, "succeeded", None, None)
+    done = await store.get(seeded.approval_id)
+    assert done is not None
+    assert (done.status, done.external_ref, done.error_kind) == (
+        "succeeded",
+        {"draft_id": "d-1", "thread_id": "t-1"},
+        None,
+    )
+    assert (done.lease_owner, done.lease_expires_at) == (None, None)
+
+    # 끝난 행은 어떤 쓰기도 반영되지 않는다.
+    assert not await store.finish(rec.id, second, "succeeded", None, None)
+    assert not await store.finish(rec.id, second, "failed", None, "NotFound")
+    assert not await store.record_ref(rec.id, second, {"draft_id": "other"})
+    assert not await store.claim(rec.id, second, LEASE_SECONDS)
+    assert not await store.finish(ids.next(), second, "failed", None, "NotFound")
+    with pytest.raises(ValueError):
+        await store.finish(rec.id, second, "pending", None, None)
+    assert await store.get(seeded.approval_id) == done
+
+
+async def test_execution_failure_kind_is_recorded(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids)
+    store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
+    assert await store.finish(
+        seeded.execution_id, seeded.owner, "failed", None, "PreconditionFailed"
+    )
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None and (rec.status, rec.error_kind) == ("failed", "PreconditionFailed")
+
+
+async def test_concurrent_claim_only_one_succeeds(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    # 짧은 lease(DB 시계 기준)가 만료된 뒤 여러 실행자가 동시에 claim한다.
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids, lease_seconds=0.1)
+    store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
+    await asyncio.sleep(0.3)
+    owners = [ids.next() for _ in range(CONCURRENCY)]
+    results = await asyncio.gather(
+        *(store.claim(seeded.execution_id, o, LEASE_SECONDS) for o in owners)
+    )
+    assert sum(results) == 1
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None
+    assert rec.lease_owner == owners[results.index(True)]
+
+
+async def test_lease_uses_db_clock_not_injected_clock(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    """주입 Clock을 움직여도 lease 판단은 그대로고, 실제(DB) 시간이 지나야 만료된다."""
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids, lease_seconds=0.5)
+    store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
+    first, other = seeded.owner, ids.next()
+    eid = seeded.execution_id
+
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None and rec.lease_expires_at is not None
+    # lease 만료 시각은 DB 시각 기준이라 주입 Clock(2026-03-01)과 무관하다.
+    assert rec.lease_expires_at > datetime.now(UTC)  # 아직 유효(0.5초 이내)
+
+    # 주입 Clock을 1년 뒤로 옮겨도 유효한 lease는 그대로다.
+    clock.advance(timedelta(days=365))
+    assert not await store.claim(eid, other, LEASE_SECONDS)
+    assert not await store.record_ref(eid, other, {"x": 1})
+    assert not await store.finish(eid, other, "succeeded", None, None)
+
+    # 실제 시간이 지나 lease가 만료되면 소유자의 쓰기가 거부되고 다른 owner가 claim한다.
+    await asyncio.sleep(0.8)
+    assert not await store.record_ref(eid, first, {"x": 1})
+    assert not await store.finish(eid, first, "succeeded", None, None)
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None and (rec.status, rec.external_ref) == ("pending", None)
+    assert await store.claim(eid, other, LEASE_SECONDS)
+    assert not await store.finish(eid, first, "succeeded", None, None)
+    assert await store.record_ref(eid, other, {"draft_id": "d-2"})
+    assert await store.finish(eid, other, "needs_user", None, None)
+    rec = await store.get(seeded.approval_id)
+    assert rec is not None
+    assert (rec.status, rec.external_ref, rec.lease_owner) == (
+        "needs_user",
+        {"draft_id": "d-2"},
+        None,
+    )
+
+
+async def test_claim_by_owner_extends_and_non_owner_is_rejected(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory
+) -> None:
+    clock = new_clock()
+    ids = Uuid7Generator(clock)
+    seeded = await seed_all_tables(async_db, workspaces, clock, ids)
+    store = SqlExecutionStore(async_db, seeded.workspace_id, clock=clock, ids=ids)
+    other, eid = ids.next(), seeded.execution_id
+    before = await store.get(seeded.approval_id)
+    assert before is not None and before.lease_expires_at is not None
+
+    assert not await store.claim(eid, other, LEASE_SECONDS)
+    assert not await store.record_ref(eid, other, {"x": 1})
+    assert not await store.finish(eid, other, "succeeded", None, None)
+    assert await store.claim(eid, seeded.owner, 2 * LEASE_SECONDS)  # 소유자는 연장
+    after = await store.get(seeded.approval_id)
+    assert after is not None and after.lease_expires_at is not None
+    assert after.lease_expires_at > before.lease_expires_at
+    assert (after.status, after.external_ref, after.lease_owner) == ("pending", None, seeded.owner)
