@@ -61,11 +61,16 @@
 4. 평가 러너 v0: JSONL 결과, 설정 지문, 반복 실행, 신뢰구간, 예산 상한
 5. 모델 파일럿 → 고정 모델 ADR
 
-진행 메모(3c, 브랜치 `stage-3c/evalrunner`): `orbit.evalrunner` v0 구현. 러너·채점·통계·CLI·기준 SUT(`scripted_tool`, `noop`)와 `ScriptedLLM` 기반 결정성 테스트까지 완료. 과제 형식을 읽는 경계는 `evalrunner/task_source.py` 한 모듈이고, 3b(`orbit.evaldata.schema`)와 통합할 때 이 모듈의 파싱 부분을 교체한다. `expected_changes`가 비어 있지 않은 과제는 v0에서 채점하지 않고 `unscored`로 기록한다.
-
 완료 조건: 같은 설정으로 다시 돌리면 같은 범위의 결과가 나온다. 모델이 고정된다.
 
-진행 메모(3b, 평가 데이터 생성기 v0): `orbit.evaldata`와 `eval/worlds/orbit-v0.toml`, 생성 데이터셋 `eval/datasets/orbit-eval/v0`(과제 60개)를 만들었다. 리뷰 1회차에서 ADR-0010에 맞춰 정답을 구조화된 답(`expected_answer`: event_set·event·event_time·time_slot)으로 바꾸고, 정답 근거(일정·메일)를 공유하는 과제가 dev와 test에 걸치지 않도록 날짜·프로젝트 주·인물을 미리 나눠 시나리오를 만들었다(정답 지문 중복은 제거). 동명이인은 메일 서명의 소속으로 구분한다. 세계 모델은 의존성을 늘리지 않으려고 YAML 대신 TOML(`tomllib`)로 썼다. 사람 검수 전이며 `python -m orbit.evaldata.review export`로 검수표를 만든다. 분할 비율 0.6/0.4는 D2-3 미결정 상태의 임시값이다. 2회차에서 과제에 `cluster_id`(근거 공유 묶음)를 넣고, 날짜 소유를 시드 기반으로 바꿨으며, 동명이인·변경 2회 과제가 dev·test 양쪽에 있는지 생성 단계에서 검사한다. 러너(3c)는 `expected_answer` 기준 채점으로 맞춘 뒤 통합한다.
+진행(2026-11-11, 브랜치 `stage-3/eval-foundation`)
+- 3a `orbit.llm`: 내부 LLM 인터페이스, `ScriptedLLM`, `OpenRouterLLM`(제공자 라우팅 고정, 실제 응답 모델 검증, 비용 미상 표시). 완료.
+- 3b `orbit.evaldata`: 시나리오 우선 생성기, 세계 모델 `eval/worlds/orbit-v0.toml`(TOML), 데이터셋 `eval/datasets/orbit-eval/v0`(과제 60개, dev 36 / test 24, 근거 공유 묶음 15개). 정답은 구조화된 답(ADR-0010), dev와 test는 근거 일정·메일을 공유하지 않는다. 완료, **사람 검수 대기**.
+- 3c `orbit.evalrunner`: 에피소드 실행, 구조화된 답 채점(텍스트 사실은 보조 지표), 결과 JSONL·설정 지문, 반복 우선 실행, 클러스터 bootstrap 신뢰구간·paired 차이·pass^k, 예산 상한, test 봉인. 완료.
+- 3d `orbit.assistant`: 읽기 전용 비서 경로(ADR-0011). 작업 집합 핸들, 읽기 도구 4개 + `submit_answer`, 외부 콘텐츠 표지, 프롬프트 `assistant-v0.2`, 온도 0. `ScriptedLLM`으로만 검증했다. 완료.
+- 3e 모델 파일럿: OpenRouter API 키(개발자)와 데이터 검수 후 진행.
+
+알려진 한계(v0): test 묶음이 9개라 신뢰구간이 불안정하다. 취소 제외·일정 변경 과제는 캘린더가 최신 상태라 메일 이해보다 도구 사용을 잰다. 텍스트 답 품질은 성공 판정에 들어가지 않는다. 공개 저장소라 test 정답을 누구나 볼 수 있다.
 
 ### 4단계. Run 실행과 승인 (쓰기 경로)
 1. `run`·`approval`·`execution`·`run_event` 테이블
