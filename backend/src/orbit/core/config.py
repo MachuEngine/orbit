@@ -29,17 +29,34 @@ class LLMSettings(BaseSettings):
 
     - `ORBIT_LLM_MODEL_ID`: 고정 모델 ID (D9-3). 형식 검증은 `orbit.llm.model_id`가 한다.
     - `ORBIT_LLM_PROVIDER_ORDER`: 쉼표로 구분한 제공자 우선순위 (D9-4).
-    - `ORBIT_OPENROUTER_API_KEY`: 기본값 없음.
+    - `ORBIT_LLM_ACCEPTED_RESPONSE_MODEL_IDS`: 쉼표 구분. 요청 ID와 다르지만 같은 모델로
+      인정할 응답 모델 ID 목록. 기본은 빈 값.
+    - `ORBIT_OPENROUTER_API_KEY`: 기본값 없음, 빈 값 거절.
     """
 
     model_config = SettingsConfigDict(env_prefix="ORBIT_", extra="ignore")
 
     llm_model_id: str
     llm_provider_order: Annotated[list[str], NoDecode]
-    openrouter_api_key: SecretStr
+    openrouter_api_key: SecretStr = Field(min_length=1)
+    llm_accepted_response_model_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     llm_timeout_seconds: float = Field(default=60.0, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
+
+    @field_validator("openrouter_base_url")
+    @classmethod
+    def _require_https(cls, value: str) -> str:
+        if not value.startswith("https://"):
+            raise ValueError("OpenRouter base URL은 https://만 허용한다")
+        return value
+
+    @field_validator("llm_accepted_response_model_ids", mode="before")
+    @classmethod
+    def _split_accepted_ids(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
 
     @field_validator("llm_provider_order", mode="before")
     @classmethod

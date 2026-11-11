@@ -22,14 +22,23 @@ class LLMError(Exception):
         # 실패하기까지 재시도에서 쓴 양. 재시도 래퍼가 채운다.
         self.retries: int = 0
         self.usage: LLMUsage = LLMUsage()
+        # 이 시도(재시도 래퍼를 거치면 전체)에서 알려진 비용. 모르면 None.
+        self.cost_usd: float | None = None
+        self.cost_incomplete: bool = False
+        # 응답을 받았다면 실제 응답 모델·제공자(식별자일 뿐 원문이 아니다).
+        self.response_model_id: str | None = None
+        self.response_provider: str | None = None
 
 
 class TransientLLMError(LLMError):
     """재시도할 가치가 있는 일시 오류(429, 5xx, 타임아웃, 연결 오류)."""
 
-    def __init__(self, message: str, *, usage: LLMUsage | None = None) -> None:
+    def __init__(
+        self, message: str, *, usage: LLMUsage | None = None, cost_usd: float | None = None
+    ) -> None:
         super().__init__(message)
-        self.attempt_usage: LLMUsage = usage or LLMUsage()
+        self.usage = usage or LLMUsage()
+        self.cost_usd = cost_usd
 
 
 class LLMTimeoutError(TransientLLMError):
@@ -70,30 +79,41 @@ async def run_with_retry(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     monotonic: Callable[[], float] = time.perf_counter,
 ) -> LLMResponse:
-    """`call`을 부르고 일시 오류만 재시도한다. 사용량·지연은 시도 전체를 합산한다."""
+    """`call`을 부르고 일시 오류만 재시도한다. 토큰·비용·지연은 시도 전체를 합산한다.
+
+    실패한 시도의 비용을 알 수 없으면(`exc.cost_usd is None`) 합계에 넣지 못하므로
+    `cost_incomplete=True`로 표시한다. 과소 집계를 숨기지 않기 위해서다.
+    """
     started = monotonic()
     extra_usage = LLMUsage()
+    extra_cost = 0.0
+    incomplete = False
     retries = 0
     while True:
         try:
             response = await call()
-        except TransientLLMError as exc:
-            extra_usage = extra_usage + exc.attempt_usage
-            if retries >= policy.max_retries:
-                exc.retries = retries
-                exc.usage = extra_usage
-                raise
-            await sleep(policy.backoff_seconds * (2**retries))
-            retries += 1
-            continue
         except LLMError as exc:
+            extra_usage = extra_usage + exc.usage
+            if exc.cost_usd is None:
+                incomplete = True
+            else:
+                extra_cost += exc.cost_usd
+            if isinstance(exc, TransientLLMError) and retries < policy.max_retries:
+                await sleep(policy.backoff_seconds * (2**retries))
+                retries += 1
+                continue
             exc.retries = retries
             exc.usage = extra_usage
+            exc.cost_incomplete = incomplete
+            exc.cost_usd = None if incomplete else extra_cost
             raise
         elapsed_ms = round((monotonic() - started) * 1000)
+        cost = None if response.cost_usd is None else response.cost_usd + extra_cost
         return dataclasses.replace(
             response,
             usage=response.usage + extra_usage,
+            cost_usd=cost,
+            cost_incomplete=incomplete or response.cost_incomplete,
             latency_ms=elapsed_ms,
             retries=retries,
         )
@@ -104,7 +124,7 @@ class UsageRecord:
     """호출 한 건의 측정값. 프롬프트·응답 원문 필드는 일부러 없다."""
 
     purpose: Purpose
-    model_id: str | None  # 실패해서 응답이 없으면 None
+    model_id: str | None  # 응답이 없거나 응답에 모델 ID가 없으면 None
     provider: str | None
     input_tokens: int
     output_tokens: int
@@ -113,6 +133,8 @@ class UsageRecord:
     latency_ms: int | None
     retries: int
     error_type: str | None = None  # 실패 시 예외 클래스 이름만
+    cost_incomplete: bool = False
+    model_id_missing: bool = False  # 응답에 모델 ID가 없었다
 
 
 class UsageRecorder:
@@ -135,9 +157,19 @@ class UsageRecorder:
 
     @property
     def total_cost_usd(self) -> float | None:
-        """모든 성공 호출의 비용 합. 하나라도 비용을 모르면 None(과소 집계를 숨기지 않는다)."""
-        if any(r.cost_usd is None and r.error_type is None for r in self._records):
+        """모든 호출(실패 포함)의 비용 합.
+
+        비용을 모르는 호출(`cost_usd is None`, 실패해서 비용을 못 받은 호출 포함)이나 비용이
+        불완전한(`cost_incomplete`) 호출이 하나라도 있으면 None을 돌려준다. 과소 집계를
+        합계처럼 보이게 하지 않으려는 것이다. 알려진 부분 합이 필요하면 `known_cost_usd`를 쓴다.
+        """
+        if any(r.cost_usd is None or r.cost_incomplete for r in self._records):
             return None
+        return self.known_cost_usd
+
+    @property
+    def known_cost_usd(self) -> float:
+        """비용을 아는 호출만 합한 하한값."""
         return sum(r.cost_usd for r in self._records if r.cost_usd is not None)
 
 
@@ -155,15 +187,16 @@ class RecordingLLM:
             self._recorder.record(
                 UsageRecord(
                     purpose=request.purpose,
-                    model_id=None,
-                    provider=None,
+                    model_id=exc.response_model_id,
+                    provider=exc.response_provider,
                     input_tokens=exc.usage.input_tokens,
                     output_tokens=exc.usage.output_tokens,
                     cached_input_tokens=exc.usage.cached_input_tokens,
-                    cost_usd=None,
+                    cost_usd=exc.cost_usd,
                     latency_ms=None,
                     retries=exc.retries,
                     error_type=type(exc).__name__,
+                    cost_incomplete=exc.cost_incomplete or exc.cost_usd is None,
                 )
             )
             raise
@@ -178,6 +211,8 @@ class RecordingLLM:
                 cost_usd=response.cost_usd,
                 latency_ms=response.latency_ms,
                 retries=response.retries,
+                cost_incomplete=response.cost_incomplete,
+                model_id_missing=response.model_id is None,
             )
         )
         return response
