@@ -179,16 +179,16 @@ class YieldingStore(InMemoryExecutionStore):
     """모든 저장소 호출에서 제어를 넘겨 동시 실행이 실제로 끼어들게 한다."""
 
     async def begin(
-        self, approval_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime
+        self, approval_id: uuid.UUID, owner: uuid.UUID, lease_seconds: float
     ) -> tuple[ExecutionRecord, bool]:
         await asyncio.sleep(0)
-        result = await super().begin(approval_id, owner, lease_until)
+        result = await super().begin(approval_id, owner, lease_seconds)
         await asyncio.sleep(0)
         return result
 
-    async def claim(self, execution_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime) -> bool:
+    async def claim(self, execution_id: uuid.UUID, owner: uuid.UUID, lease_seconds: float) -> bool:
         await asyncio.sleep(0)
-        result = await super().claim(execution_id, owner, lease_until)
+        result = await super().claim(execution_id, owner, lease_seconds)
         await asyncio.sleep(0)
         return result
 
@@ -249,9 +249,7 @@ async def test_two_owners_on_same_pending_row_write_once(make_env: MakeEnv, name
 
 async def test_active_lease_blocks_other_executor_until_expiry(make_env: MakeEnv) -> None:
     env = make_env()
-    record, _ = await env.store.begin(
-        uuid.UUID(int=1), DEAD, NOW + timedelta(minutes=5)
-    )  # 다른 실행자가 소유 중
+    record, _ = await env.store.begin(uuid.UUID(int=1), DEAD, 300.0)  # 다른 실행자가 소유 중
     blocked = await run(env, MAIL)
     assert blocked.id == record.id and blocked.status == PENDING
     assert env.conns.calls.records == []
@@ -379,7 +377,7 @@ def mail_spec(execution_hex: str, **overrides: Any) -> DraftSpec:
 
 async def seed_pending(env: Env, action: WriteAction) -> ExecutionRecord:
     """프로세스가 `begin` 직후 종료된 상태를 만든다."""
-    record, created = await env.store.begin(uuid.UUID(int=1), DEAD, NOW - timedelta(seconds=1))
+    record, created = await env.store.begin(uuid.UUID(int=1), DEAD, 0.0)
     assert created and record.status == PENDING
     return record
 

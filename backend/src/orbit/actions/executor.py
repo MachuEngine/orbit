@@ -25,7 +25,7 @@ import dataclasses
 import unicodedata
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from orbit.actions.hashing import args_hash, normalize_email
@@ -137,9 +137,9 @@ async def execute_approved(
     mail: MailConnector,
     store: ExecutionStore,
     clock: Clock,
-    lease_duration: timedelta = timedelta(minutes=5),
+    lease_seconds: float = 300.0,
 ) -> ExecutionRecord:
-    """`lease_duration`은 커넥터 호출 타임아웃×(1+재호출 1회)보다 길게 잡는다."""
+    """`lease_seconds`는 커넥터 호출 타임아웃×(1+재호출 1회)보다 길게 잡는다."""
     if args_hash(action) != approval.args_hash:
         raise ApprovalRejected("hash_mismatch")
     now = clock.now()
@@ -158,11 +158,11 @@ async def execute_approved(
         return existing
 
     owner = uuid.uuid4()
-    record, created = await store.begin(approval.id, owner, now + lease_duration)
+    record, created = await store.begin(approval.id, owner, lease_seconds)
     if not created:
         if record.status in TERMINAL:
             return record
-        if not await store.claim(record.id, owner, clock.now() + lease_duration):
+        if not await store.claim(record.id, owner, lease_seconds):
             return await _current(store, approval.id, record)
         record = await _current(store, approval.id, record)
     run = _Run(store, record, owner)

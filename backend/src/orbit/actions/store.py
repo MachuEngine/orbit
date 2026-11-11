@@ -9,7 +9,7 @@ import copy
 import dataclasses
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from orbit.core.clock import Clock
@@ -36,7 +36,7 @@ class ExecutionRecord:
 
 class ExecutionStore(Protocol):
     async def begin(
-        self, approval_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime
+        self, approval_id: uuid.UUID, owner: uuid.UUID, lease_seconds: float
     ) -> tuple[ExecutionRecord, bool]:
         """`approval_id`당 한 행을 `pending`으로 만들고 `owner`에게 소유권을 준다.
 
@@ -44,7 +44,7 @@ class ExecutionStore(Protocol):
         """
         ...
 
-    async def claim(self, execution_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime) -> bool:
+    async def claim(self, execution_id: uuid.UUID, owner: uuid.UUID, lease_seconds: float) -> bool:
         """`pending`·`unknown` 행의 소유권을 얻는다. 비어 있거나 만료됐거나 내 것일 때만 성공."""
         ...
 
@@ -93,7 +93,7 @@ class InMemoryExecutionStore:
         return record.lease_owner == owner and record.status not in TERMINAL
 
     async def begin(
-        self, approval_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime
+        self, approval_id: uuid.UUID, owner: uuid.UUID, lease_seconds: float
     ) -> tuple[ExecutionRecord, bool]:
         with self._mutex:
             existing = self._by_approval.get(approval_id)
@@ -106,13 +106,13 @@ class InMemoryExecutionStore:
                 external_ref={},
                 error_kind=None,
                 lease_owner=owner,
-                lease_expires_at=lease_until,
+                lease_expires_at=self._clock.now() + timedelta(seconds=lease_seconds),
             )
             self._by_approval[approval_id] = record
             self._approval_of[record.id] = approval_id
             return self._copy(record), True
 
-    async def claim(self, execution_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime) -> bool:
+    async def claim(self, execution_id: uuid.UUID, owner: uuid.UUID, lease_seconds: float) -> bool:
         with self._mutex:
             record = self._current(execution_id)
             if record.status in TERMINAL:
@@ -125,7 +125,11 @@ class InMemoryExecutionStore:
             )
             if not free:
                 return False
-            self._update(execution_id, lease_owner=owner, lease_expires_at=lease_until)
+            self._update(
+                execution_id,
+                lease_owner=owner,
+                lease_expires_at=self._clock.now() + timedelta(seconds=lease_seconds),
+            )
             return True
 
     async def record_ref(
