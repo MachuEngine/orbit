@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit 팔레트 후보 비교 (후보, 개발자 선택 전)</title>
+<style>
+.harbor.light{--bg:#F4F7F7;--surface:#FFFFFF;--text:#132122;--text-muted:#4A5B5C;--border:#788A8B;--divider:#D9E1E1;--accent:#0B6B6B;--on-accent:#FFFFFF;--focus:#0A5F9E;--info:#2B5F9E;--warning:#8A5300;--danger:#B3261E;--success:#1B7A3E;--error:#B3261E;}
+.harbor.dark{--bg:#101617;--surface:#172021;--text:#E7EEEE;--text-muted:#A3B3B4;--border:#6B7F80;--divider:#2A3637;--accent:#4FC3BD;--on-accent:#07201F;--focus:#7DD8D3;--info:#8DB8F0;--warning:#F2B24C;--danger:#FF8A80;--success:#5FD18A;--error:#FF8A80;}
+.ledger.light{--bg:#F5F6F8;--surface:#FFFFFF;--text:#151B26;--text-muted:#4D5666;--border:#7A8494;--divider:#DCE0E6;--accent:#24478F;--on-accent:#FFFFFF;--focus:#0B57D0;--info:#24478F;--warning:#8A5100;--danger:#B3261E;--success:#1E7A3C;--error:#B3261E;}
+.ledger.dark{--bg:#0F131A;--surface:#171C25;--text:#E8ECF2;--text-muted:#A5AFBE;--border:#6E7A8C;--divider:#2A3140;--accent:#8FAEF2;--on-accent:#0C1530;--focus:#B5CBFF;--info:#8FAEF2;--warning:#F0B44D;--danger:#FF8F85;--success:#62CF8C;--error:#FF8F85;}
+.graphite.light{--bg:#F4F5F6;--surface:#FFFFFF;--text:#17191C;--text-muted:#51565D;--border:#7E848C;--divider:#DEE0E3;--accent:#2E3640;--on-accent:#FFFFFF;--focus:#0B63CE;--info:#1F5F99;--warning:#8A5100;--danger:#B3261E;--success:#1E7A3C;--error:#B3261E;}
+.graphite.dark{--bg:#16181B;--surface:#1E2125;--text:#ECEEF0;--text-muted:#A9AEB5;--border:#747A83;--divider:#2E3237;--accent:#D4D9DF;--on-accent:#14171A;--focus:#6AA8FF;--info:#8DB8F0;--warning:#F0B44D;--danger:#FF8F85;--success:#62CF8C;--error:#FF8F85;}
+
+:root { --f-pretendard: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+        --f-plex: "IBM Plex Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+        --f-system: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; }
+body { margin: 0; font-family: var(--f-plex); background: #E9EAEC; color: #17191C; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+body[data-font="pretendard"] { --font: var(--f-pretendard); }
+body[data-font="plex"] { --font: var(--f-plex); }
+body[data-font="system"] { --font: var(--f-system); }
+.top { padding: 16px 24px; background: #FFFFFF; border-bottom: 1px solid #C9CCD1; }
+.top h1 { margin: 0 0 4px; font-size: 1.25rem; font-family: var(--f-system); }
+.top p { margin: 4px 0; font-size: 0.875rem; font-family: var(--f-system); }
+.top label { margin-right: 16px; font-family: var(--f-system); font-size: 0.9375rem; }
+#fontnote { padding: 8px 12px; background: #FFF4D6; border: 1px solid #8A5100; border-radius: 6px; color: #3D2400; }
+.cols { display: grid; grid-template-columns: repeat(3, minmax(320px, 1fr)); gap: 20px; padding: 20px 24px; }
+.col h2 { margin: 0 0 8px; font-size: 1.125rem; font-family: var(--f-system); }
+.cell { margin-bottom: 20px; border-radius: 12px; overflow: hidden; border: 1px solid #C9CCD1; }
+.cell-title { margin: 0; padding: 6px 16px; font-size: 0.75rem; font-family: var(--f-system); font-weight: 500; background: #D5D8DC; color: #17191C; }
+.screen { font-family: var(--font, var(--f-plex)); background: var(--bg); color: var(--text); padding: 16px; font-size: 0.9375rem; }
+.screen * { box-sizing: border-box; }
+.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.muted { color: var(--text-muted); }
+.msg { max-width: 44em; margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; }
+.msg p { margin: 0; }
+.msg.user { background: var(--accent); color: var(--on-accent); margin-left: 2.5em; }
+.msg.bot { background: var(--surface); border: 1px solid var(--divider); }
+.approval { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin: 0 0 14px; }
+.approval header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.approval h4 { margin: 0; font-size: 1.125rem; font-weight: 600; line-height: 1.35; }
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 0.8125rem; font-weight: 600; padding: 1px 8px 1px 6px; border: 1px solid currentColor; border-radius: 9999px; }
+.badge.irreversible { color: var(--danger); }
+.badge.warn { color: var(--warning); }
+.approval dl { margin: 10px 0; display: grid; grid-template-columns: 5em 1fr; gap: 6px 8px; }
+.approval dt { color: var(--text-muted); font-size: 0.875rem; }
+.approval dd { margin: 0; }
+.recips { list-style: none; margin: 0; padding: 0; }
+.recips li { margin: 0 0 6px; }
+.recips .flag { border-left: 3px solid var(--warning); padding-left: 8px; }
+.why { margin: 2px 0 0; font-size: 0.875rem; color: var(--warning); }
+summary { cursor: pointer; color: var(--accent); text-decoration: underline; }
+summary:focus-visible, .btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.remain { display: flex; align-items: center; gap: 6px; font-size: 0.875rem; color: var(--text-muted); margin-bottom: 12px; }
+.approval footer { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn { font: inherit; font-weight: 600; min-height: 40px; padding: 6px 18px; border-radius: 8px; cursor: pointer; }
+.btn.primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent); }
+.btn.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.states { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 0.875rem; }
+.s { display: flex; align-items: flex-start; gap: 8px; background: var(--surface); border: 1px solid var(--divider); border-radius: 8px; padding: 6px 10px; }
+.s svg { flex: none; margin-top: 3px; }
+.s.info { color: var(--info); }
+.s.warn { color: var(--warning); }
+.s.danger { color: var(--danger); }
+.s.success { color: var(--success); }
+.s.error { color: var(--error); }
+@media (max-width: 1100px) { .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body data-font="plex">
+<div class="top">
+  <h1>Orbit 팔레트 후보 3개 (후보, 개발자 선택 전)</h1>
+  <p>각 팔레트의 밝은 모드와 어두운 모드를 같은 화면 조각으로 비교한다. 모든 색은 <code>brand-guide.md</code>의 대비표와 같은 값이다. 이 페이지는 외부 리소스를 불러오지 않는다.</p>
+  <p><strong>글꼴</strong>:
+    <label><input type="radio" name="font" value="plex" checked> IBM Plex Sans KR 후보</label>
+    <label><input type="radio" name="font" value="pretendard"> Pretendard 후보</label>
+    <label><input type="radio" name="font" value="system"> 시스템 대체 글꼴</label>
+  </p>
+  <p id="fontnote" role="status"></p>
+</div>
+<main class="cols">
+<div class="col"><h2>하버 (청록)</h2>
+<section class="cell harbor light" aria-label="하버 (청록) 밝은 모드">
+  <h3 class="cell-title">하버 (청록) 밝은 모드</h3>
+  <div class="screen">
+    <div class="msg user"><p>내일 오후에 박민준 씨와 30분 미팅 잡고, 지난 메일 내용 정리해서 보내 줘.</p></div>
+    <div class="msg bot"><p>내일 일정을 확인했습니다. <span class="num">11월 12일 (목)</span> 빈 시간은 <span class="num">14:30–15:00</span>, <span class="num">16:00–17:30</span>입니다. 첫 번째 시간으로 일정을 잡고 메일 초안을 만들었습니다. 보내기 전에 아래 내용을 확인하세요.</p></div>
+
+    <article class="approval" aria-label="메일 보내기 승인">
+      <header>
+        <h4>메일 보내기</h4>
+        <span class="badge irreversible"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음</span></span>
+      </header>
+      <dl>
+        <dt>받는 사람</dt>
+        <dd>
+          <ul class="recips">
+            <li>김서연 &lt;seoyeon.kim@example.com&gt; <span class="muted">(직접 입력)</span></li>
+            <li class="flag">
+              <span class="badge warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처</span></span>
+              park.minjun@example.net
+              <p class="why">메일 본문에서 가져온 주소입니다. 처음 보는 수신자인지 확인하세요.</p>
+            </li>
+          </ul>
+        </dd>
+        <dt>제목</dt><dd>11월 12일 미팅 안내와 지난 논의 정리</dd>
+        <dt>본문</dt><dd><details><summary>펼쳐 보기</summary><p>안녕하세요. 내일 <span class="num">14:30</span>에 미팅을 진행하려 합니다. 지난 논의 내용을 아래에 정리했습니다. (합성 예시 문장)</p></details></dd>
+      </dl>
+      <div class="remain"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.8V10l2.8 1.8"/></svg><span>남은 시간 <b class="num">04:32</b></span></div>
+      <footer>
+        <button class="btn primary" type="button">보내기</button>
+        <button class="btn secondary" type="button">실행하지 않기</button>
+      </footer>
+    </article>
+
+    <ul class="states" aria-label="의미 색 상태">
+      <li class="s info"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.2v.1" stroke-linecap="round"/></svg><span>일반 정보: 일정 2개를 찾았습니다.</span></li>
+      <li class="s warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처: 메일 본문에서 온 값입니다.</span></li>
+      <li class="s danger"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음: 보낸 메일은 회수할 수 없습니다.</span></li>
+      <li class="s success"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="m6.5 10.3 2.3 2.3 4.7-5"/></svg><span>성공: 메일을 보냈습니다.</span></li>
+      <li class="s error"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="m7.5 7.5 5 5M12.5 7.5l-5 5"/></svg><span>오류: 메일을 보내지 못했습니다. 다시 시도하세요.</span></li>
+    </ul>
+  </div>
+</section>
+<section class="cell harbor dark" aria-label="하버 (청록) 어두운 모드">
+  <h3 class="cell-title">하버 (청록) 어두운 모드</h3>
+  <div class="screen">
+    <div class="msg user"><p>내일 오후에 박민준 씨와 30분 미팅 잡고, 지난 메일 내용 정리해서 보내 줘.</p></div>
+    <div class="msg bot"><p>내일 일정을 확인했습니다. <span class="num">11월 12일 (목)</span> 빈 시간은 <span class="num">14:30–15:00</span>, <span class="num">16:00–17:30</span>입니다. 첫 번째 시간으로 일정을 잡고 메일 초안을 만들었습니다. 보내기 전에 아래 내용을 확인하세요.</p></div>
+
+    <article class="approval" aria-label="메일 보내기 승인">
+      <header>
+        <h4>메일 보내기</h4>
+        <span class="badge irreversible"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음</span></span>
+      </header>
+      <dl>
+        <dt>받는 사람</dt>
+        <dd>
+          <ul class="recips">
+            <li>김서연 &lt;seoyeon.kim@example.com&gt; <span class="muted">(직접 입력)</span></li>
+            <li class="flag">
+              <span class="badge warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처</span></span>
+              park.minjun@example.net
+              <p class="why">메일 본문에서 가져온 주소입니다. 처음 보는 수신자인지 확인하세요.</p>
+            </li>
+          </ul>
+        </dd>
+        <dt>제목</dt><dd>11월 12일 미팅 안내와 지난 논의 정리</dd>
+        <dt>본문</dt><dd><details><summary>펼쳐 보기</summary><p>안녕하세요. 내일 <span class="num">14:30</span>에 미팅을 진행하려 합니다. 지난 논의 내용을 아래에 정리했습니다. (합성 예시 문장)</p></details></dd>
+      </dl>
+      <div class="remain"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.8V10l2.8 1.8"/></svg><span>남은 시간 <b class="num">04:32</b></span></div>
+      <footer>
+        <button class="btn primary" type="button">보내기</button>
+        <button class="btn secondary" type="button">실행하지 않기</button>
+      </footer>
+    </article>
+
+    <ul class="states" aria-label="의미 색 상태">
+      <li class="s info"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.2v.1" stroke-linecap="round"/></svg><span>일반 정보: 일정 2개를 찾았습니다.</span></li>
+      <li class="s warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처: 메일 본문에서 온 값입니다.</span></li>
+      <li class="s danger"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음: 보낸 메일은 회수할 수 없습니다.</span></li>
+      <li class="s success"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="m6.5 10.3 2.3 2.3 4.7-5"/></svg><span>성공: 메일을 보냈습니다.</span></li>
+      <li class="s error"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="m7.5 7.5 5 5M12.5 7.5l-5 5"/></svg><span>오류: 메일을 보내지 못했습니다. 다시 시도하세요.</span></li>
+    </ul>
+  </div>
+</section></div>
+<div class="col"><h2>장부 (남색)</h2>
+<section class="cell ledger light" aria-label="장부 (남색) 밝은 모드">
+  <h3 class="cell-title">장부 (남색) 밝은 모드</h3>
+  <div class="screen">
+    <div class="msg user"><p>내일 오후에 박민준 씨와 30분 미팅 잡고, 지난 메일 내용 정리해서 보내 줘.</p></div>
+    <div class="msg bot"><p>내일 일정을 확인했습니다. <span class="num">11월 12일 (목)</span> 빈 시간은 <span class="num">14:30–15:00</span>, <span class="num">16:00–17:30</span>입니다. 첫 번째 시간으로 일정을 잡고 메일 초안을 만들었습니다. 보내기 전에 아래 내용을 확인하세요.</p></div>
+
+    <article class="approval" aria-label="메일 보내기 승인">
+      <header>
+        <h4>메일 보내기</h4>
+        <span class="badge irreversible"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음</span></span>
+      </header>
+      <dl>
+        <dt>받는 사람</dt>
+        <dd>
+          <ul class="recips">
+            <li>김서연 &lt;seoyeon.kim@example.com&gt; <span class="muted">(직접 입력)</span></li>
+            <li class="flag">
+              <span class="badge warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처</span></span>
+              park.minjun@example.net
+              <p class="why">메일 본문에서 가져온 주소입니다. 처음 보는 수신자인지 확인하세요.</p>
+            </li>
+          </ul>
+        </dd>
+        <dt>제목</dt><dd>11월 12일 미팅 안내와 지난 논의 정리</dd>
+        <dt>본문</dt><dd><details><summary>펼쳐 보기</summary><p>안녕하세요. 내일 <span class="num">14:30</span>에 미팅을 진행하려 합니다. 지난 논의 내용을 아래에 정리했습니다. (합성 예시 문장)</p></details></dd>
+      </dl>
+      <div class="remain"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.8V10l2.8 1.8"/></svg><span>남은 시간 <b class="num">04:32</b></span></div>
+      <footer>
+        <button class="btn primary" type="button">보내기</button>
+        <button class="btn secondary" type="button">실행하지 않기</button>
+      </footer>
+    </article>
+
+    <ul class="states" aria-label="의미 색 상태">
+      <li class="s info"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.2v.1" stroke-linecap="round"/></svg><span>일반 정보: 일정 2개를 찾았습니다.</span></li>
+      <li class="s warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처: 메일 본문에서 온 값입니다.</span></li>
+      <li class="s danger"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음: 보낸 메일은 회수할 수 없습니다.</span></li>
+      <li class="s success"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="m6.5 10.3 2.3 2.3 4.7-5"/></svg><span>성공: 메일을 보냈습니다.</span></li>
+      <li class="s error"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="m7.5 7.5 5 5M12.5 7.5l-5 5"/></svg><span>오류: 메일을 보내지 못했습니다. 다시 시도하세요.</span></li>
+    </ul>
+  </div>
+</section>
+<section class="cell ledger dark" aria-label="장부 (남색) 어두운 모드">
+  <h3 class="cell-title">장부 (남색) 어두운 모드</h3>
+  <div class="screen">
+    <div class="msg user"><p>내일 오후에 박민준 씨와 30분 미팅 잡고, 지난 메일 내용 정리해서 보내 줘.</p></div>
+    <div class="msg bot"><p>내일 일정을 확인했습니다. <span class="num">11월 12일 (목)</span> 빈 시간은 <span class="num">14:30–15:00</span>, <span class="num">16:00–17:30</span>입니다. 첫 번째 시간으로 일정을 잡고 메일 초안을 만들었습니다. 보내기 전에 아래 내용을 확인하세요.</p></div>
+
+    <article class="approval" aria-label="메일 보내기 승인">
+      <header>
+        <h4>메일 보내기</h4>
+        <span class="badge irreversible"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음</span></span>
+      </header>
+      <dl>
+        <dt>받는 사람</dt>
+        <dd>
+          <ul class="recips">
+            <li>김서연 &lt;seoyeon.kim@example.com&gt; <span class="muted">(직접 입력)</span></li>
+            <li class="flag">
+              <span class="badge warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처</span></span>
+              park.minjun@example.net
+              <p class="why">메일 본문에서 가져온 주소입니다. 처음 보는 수신자인지 확인하세요.</p>
+            </li>
+          </ul>
+        </dd>
+        <dt>제목</dt><dd>11월 12일 미팅 안내와 지난 논의 정리</dd>
+        <dt>본문</dt><dd><details><summary>펼쳐 보기</summary><p>안녕하세요. 내일 <span class="num">14:30</span>에 미팅을 진행하려 합니다. 지난 논의 내용을 아래에 정리했습니다. (합성 예시 문장)</p></details></dd>
+      </dl>
+      <div class="remain"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.8V10l2.8 1.8"/></svg><span>남은 시간 <b class="num">04:32</b></span></div>
+      <footer>
+        <button class="btn primary" type="button">보내기</button>
+        <button class="btn secondary" type="button">실행하지 않기</button>
+      </footer>
+    </article>
+
+    <ul class="states" aria-label="의미 색 상태">
+      <li class="s info"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.2v.1" stroke-linecap="round"/></svg><span>일반 정보: 일정 2개를 찾았습니다.</span></li>
+      <li class="s warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처: 메일 본문에서 온 값입니다.</span></li>
+      <li class="s danger"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음: 보낸 메일은 회수할 수 없습니다.</span></li>
+      <li class="s success"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="m6.5 10.3 2.3 2.3 4.7-5"/></svg><span>성공: 메일을 보냈습니다.</span></li>
+      <li class="s error"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="m7.5 7.5 5 5M12.5 7.5l-5 5"/></svg><span>오류: 메일을 보내지 못했습니다. 다시 시도하세요.</span></li>
+    </ul>
+  </div>
+</section></div>
+<div class="col"><h2>흑연 (무채색)</h2>
+<section class="cell graphite light" aria-label="흑연 (무채색) 밝은 모드">
+  <h3 class="cell-title">흑연 (무채색) 밝은 모드</h3>
+  <div class="screen">
+    <div class="msg user"><p>내일 오후에 박민준 씨와 30분 미팅 잡고, 지난 메일 내용 정리해서 보내 줘.</p></div>
+    <div class="msg bot"><p>내일 일정을 확인했습니다. <span class="num">11월 12일 (목)</span> 빈 시간은 <span class="num">14:30–15:00</span>, <span class="num">16:00–17:30</span>입니다. 첫 번째 시간으로 일정을 잡고 메일 초안을 만들었습니다. 보내기 전에 아래 내용을 확인하세요.</p></div>
+
+    <article class="approval" aria-label="메일 보내기 승인">
+      <header>
+        <h4>메일 보내기</h4>
+        <span class="badge irreversible"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음</span></span>
+      </header>
+      <dl>
+        <dt>받는 사람</dt>
+        <dd>
+          <ul class="recips">
+            <li>김서연 &lt;seoyeon.kim@example.com&gt; <span class="muted">(직접 입력)</span></li>
+            <li class="flag">
+              <span class="badge warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처</span></span>
+              park.minjun@example.net
+              <p class="why">메일 본문에서 가져온 주소입니다. 처음 보는 수신자인지 확인하세요.</p>
+            </li>
+          </ul>
+        </dd>
+        <dt>제목</dt><dd>11월 12일 미팅 안내와 지난 논의 정리</dd>
+        <dt>본문</dt><dd><details><summary>펼쳐 보기</summary><p>안녕하세요. 내일 <span class="num">14:30</span>에 미팅을 진행하려 합니다. 지난 논의 내용을 아래에 정리했습니다. (합성 예시 문장)</p></details></dd>
+      </dl>
+      <div class="remain"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.8V10l2.8 1.8"/></svg><span>남은 시간 <b class="num">04:32</b></span></div>
+      <footer>
+        <button class="btn primary" type="button">보내기</button>
+        <button class="btn secondary" type="button">실행하지 않기</button>
+      </footer>
+    </article>
+
+    <ul class="states" aria-label="의미 색 상태">
+      <li class="s info"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.2v.1" stroke-linecap="round"/></svg><span>일반 정보: 일정 2개를 찾았습니다.</span></li>
+      <li class="s warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처: 메일 본문에서 온 값입니다.</span></li>
+      <li class="s danger"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음: 보낸 메일은 회수할 수 없습니다.</span></li>
+      <li class="s success"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="m6.5 10.3 2.3 2.3 4.7-5"/></svg><span>성공: 메일을 보냈습니다.</span></li>
+      <li class="s error"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="m7.5 7.5 5 5M12.5 7.5l-5 5"/></svg><span>오류: 메일을 보내지 못했습니다. 다시 시도하세요.</span></li>
+    </ul>
+  </div>
+</section>
+<section class="cell graphite dark" aria-label="흑연 (무채색) 어두운 모드">
+  <h3 class="cell-title">흑연 (무채색) 어두운 모드</h3>
+  <div class="screen">
+    <div class="msg user"><p>내일 오후에 박민준 씨와 30분 미팅 잡고, 지난 메일 내용 정리해서 보내 줘.</p></div>
+    <div class="msg bot"><p>내일 일정을 확인했습니다. <span class="num">11월 12일 (목)</span> 빈 시간은 <span class="num">14:30–15:00</span>, <span class="num">16:00–17:30</span>입니다. 첫 번째 시간으로 일정을 잡고 메일 초안을 만들었습니다. 보내기 전에 아래 내용을 확인하세요.</p></div>
+
+    <article class="approval" aria-label="메일 보내기 승인">
+      <header>
+        <h4>메일 보내기</h4>
+        <span class="badge irreversible"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음</span></span>
+      </header>
+      <dl>
+        <dt>받는 사람</dt>
+        <dd>
+          <ul class="recips">
+            <li>김서연 &lt;seoyeon.kim@example.com&gt; <span class="muted">(직접 입력)</span></li>
+            <li class="flag">
+              <span class="badge warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처</span></span>
+              park.minjun@example.net
+              <p class="why">메일 본문에서 가져온 주소입니다. 처음 보는 수신자인지 확인하세요.</p>
+            </li>
+          </ul>
+        </dd>
+        <dt>제목</dt><dd>11월 12일 미팅 안내와 지난 논의 정리</dd>
+        <dt>본문</dt><dd><details><summary>펼쳐 보기</summary><p>안녕하세요. 내일 <span class="num">14:30</span>에 미팅을 진행하려 합니다. 지난 논의 내용을 아래에 정리했습니다. (합성 예시 문장)</p></details></dd>
+      </dl>
+      <div class="remain"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.8V10l2.8 1.8"/></svg><span>남은 시간 <b class="num">04:32</b></span></div>
+      <footer>
+        <button class="btn primary" type="button">보내기</button>
+        <button class="btn secondary" type="button">실행하지 않기</button>
+      </footer>
+    </article>
+
+    <ul class="states" aria-label="의미 색 상태">
+      <li class="s info"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.2v.1" stroke-linecap="round"/></svg><span>일반 정보: 일정 2개를 찾았습니다.</span></li>
+      <li class="s warn"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.5 18 16.5H2z"/><path d="M10 8v4M10 14.2v.1" stroke-linecap="round"/></svg><span>외부 출처: 메일 본문에서 온 값입니다.</span></li>
+      <li class="s danger"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M4.7 15.3 15.3 4.7"/></svg><span>되돌릴 수 없음: 보낸 메일은 회수할 수 없습니다.</span></li>
+      <li class="s success"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="m6.5 10.3 2.3 2.3 4.7-5"/></svg><span>성공: 메일을 보냈습니다.</span></li>
+      <li class="s error"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="m7.5 7.5 5 5M12.5 7.5l-5 5"/></svg><span>오류: 메일을 보내지 못했습니다. 다시 시도하세요.</span></li>
+    </ul>
+  </div>
+</section></div>
+</main>
+<script>
+(function () {
+  var names = { plex: "IBM Plex Sans KR", pretendard: "Pretendard Variable" };
+  var sample = "메일을 보내기 전에 확인하세요 0123456789 Orbit";
+  var ctx = document.createElement("canvas").getContext("2d");
+  function width(font) { ctx.font = "32px " + font; return ctx.measureText(sample).width; }
+  function installed(name) {
+    return width('"' + name + '", monospace') !== width("monospace") || width('"' + name + '", serif') !== width("serif");
+  }
+  var note = document.getElementById("fontnote");
+  function update(v) {
+    document.body.setAttribute("data-font", v);
+    if (v === "system") { note.textContent = "시스템 대체 글꼴로 보고 있습니다. 실제 후보 글꼴이 아니라 이 PC의 기본 한글 글꼴입니다."; return; }
+    if (installed(names[v])) { note.textContent = names[v] + "이(가) 이 PC에 설치되어 있어 실제 글꼴로 보입니다."; note.style.background = "#E3F3E8"; note.style.borderColor = "#1E7A3C"; note.style.color = "#0F3D1E"; }
+    else { note.textContent = names[v] + "이(가) 이 PC에 설치되어 있지 않아 시스템 대체 글꼴로 보입니다. 이 화면의 글자 모양은 후보 글꼴이 아닙니다. 색과 배치만 비교하세요."; note.style.background = "#FFF4D6"; note.style.borderColor = "#8A5100"; note.style.color = "#3D2400"; }
+  }
+  var radios = document.querySelectorAll('input[name="font"]');
+  for (var i = 0; i < radios.length; i++) radios[i].addEventListener("change", function (e) { update(e.target.value); });
+  update("plex");
+})();
+</script>
+</body>
+</html>

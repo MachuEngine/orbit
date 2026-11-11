@@ -1,0 +1,115 @@
+/* 후보, 개발자 선택 전.
+ * 추천안(흑연 팔레트 + IBM Plex Sans KR) 기준 초안이다. 선택 후 확정한다.
+ * tokens.json과 같은 값을 유지한다. 값을 바꾸면 두 파일을 같은 커밋에서 바꾸고 대비표를 다시 계산한다.
+ * UI 코드는 색·글꼴 값을 여기 정의한 토큰으로만 쓴다.
+ */
+:root {
+  color-scheme: light dark;
+  --color-bg: #F4F5F6;
+  --color-surface: #FFFFFF;
+  --color-text: #17191C;
+  --color-text-muted: #51565D;
+  --color-border: #7E848C;
+  --color-divider: #DEE0E3;
+  --color-accent: #2E3640;
+  --color-on-accent: #FFFFFF;
+  --color-focus: #0B63CE;
+  --color-info: #1F5F99;
+  --color-warning: #8A5100;
+  --color-danger: #B3261E;
+  --color-success: #1E7A3C;
+  --color-error: #B3261E;
+
+  --font-body: "IBM Plex Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --leading-body: 1.7;
+  --leading-heading: 1.35;
+  --tracking-body: 0;
+  --tracking-heading: 0;
+  --measure-body: 44em;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 2px rgba(23, 25, 28, 0.08);
+  --shadow-md: 0 4px 12px rgba(23, 25, 28, 0.12);
+
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #16181B;
+    --color-surface: #1E2125;
+    --color-text: #ECEEF0;
+    --color-text-muted: #A9AEB5;
+    --color-border: #747A83;
+    --color-divider: #2E3237;
+    --color-accent: #D4D9DF;
+    --color-on-accent: #14171A;
+    --color-focus: #6AA8FF;
+    --color-info: #8DB8F0;
+    --color-warning: #F0B44D;
+    --color-danger: #FF8F85;
+    --color-success: #62CF8C;
+    --color-error: #FF8F85;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: #16181B;
+  --color-surface: #1E2125;
+  --color-text: #ECEEF0;
+  --color-text-muted: #A9AEB5;
+  --color-border: #747A83;
+  --color-divider: #2E3237;
+  --color-accent: #D4D9DF;
+  --color-on-accent: #14171A;
+  --color-focus: #6AA8FF;
+  --color-info: #8DB8F0;
+  --color-warning: #F0B44D;
+  --color-danger: #FF8F85;
+  --color-success: #62CF8C;
+  --color-error: #FF8F85;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+  }
+}
