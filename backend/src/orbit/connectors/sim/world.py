@@ -190,6 +190,11 @@ class AccountState:
         seqs = [e.seq for e in snap.draft_log]
         if seqs != list(range(1, len(seqs) + 1)):
             raise SnapshotError(f"{label}: draft_log의 seq는 1부터 연속이어야 한다")
+        for entry in snap.draft_log:
+            if entry.kind == "sent" and entry.sent_message_id not in state.messages:
+                raise SnapshotError(
+                    f"{label}: draft_log {entry.seq}의 sent_message_id가 messages에 없다"
+                )
         state.draft_log = list(snap.draft_log)
         return state
 
@@ -501,8 +506,8 @@ def _diff_mail(
             for mid, m in sorted(new_messages.items())
             if mid not in claimed and "SENT" in m.labels and m.thread_id == draft.thread_id
         ]
-        if len(candidates) > 1:  # 같은 스레드에 후보가 여럿이면 제목·본문까지 비교한다
-            candidates = [m for m in candidates if _same_content(draft, m)]
+        # 기록이 없으면 후보 수와 상관없이 제목·본문이 같은 메시지만 짝으로 본다.
+        candidates = [m for m in candidates if _same_content(draft, m)]
         if candidates:
             claimed.add(candidates[0].id)
             drafts_sent.append(DraftSent(aid, clean_draft(draft), clean_message(candidates[0])))

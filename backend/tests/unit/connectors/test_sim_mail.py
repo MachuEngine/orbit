@@ -12,7 +12,7 @@ from orbit.connectors.contracts import (
 from orbit.connectors.sim.faults import FaultPlan
 from orbit.connectors.sim.mail import SimMailConnector
 from orbit.connectors.sim.runtime import SimRuntime
-from orbit.connectors.sim.world import SimWorld, diff
+from orbit.connectors.sim.world import SimWorld, SnapshotError, diff
 
 
 def spec(**kw: Any) -> DraftSpec:
@@ -271,3 +271,124 @@ async def test_draft_log_survives_copy_fork_and_snapshot(world: SimWorld) -> Non
 def test_snapshot_without_draft_log_loads_empty(world: SimWorld) -> None:
     assert world.account("acct-alice").draft_log == []
     assert "draft_log" not in world.to_dict()["accounts"]["acct-alice"]
+
+
+# ---------------------------------------------------------------- 계약에서 옮긴 Sim 전용 동작
+
+
+async def _ids(mail: SimMailConnector, query: str) -> list[str]:
+    return [m.id for m in (await mail.search_messages(query, max_results=50)).messages]
+
+
+async def test_fixture_exact_results_and_substring_matching(world: SimWorld) -> None:
+    mail = connector(world)
+    assert await _ids(mail, "") == ["msg-a-003", "msg-a-002", "msg-a-001"]
+    assert await _ids(mail, "FROM:ALICE") == ["msg-a-002"]  # 이름 부분 문자열
+    assert await _ids(mail, "from:bob in:inbox has:attachment") == ["msg-a-003"]
+    assert await _ids(mail, '"다음 주 일정"') == ["msg-a-001"]  # 조사 결합(일정을)도 일치
+    assert await _ids(mail, '"주 다음 일정"') == []
+    assert await _ids(mail, "alice@example.com") == ["msg-a-002"]  # 키워드는 발신자도 본다
+    assert await _ids(mail, "분기") == ["msg-a-003"]
+    assert await _ids(mail, 'subject:"일정문의"') == []
+
+
+async def test_pagination_exact_pages(world: SimWorld) -> None:
+    mail = connector(world)
+    first = await mail.search_messages("", max_results=2)
+    assert [m.id for m in first.messages] == ["msg-a-003", "msg-a-002"]
+    second = await mail.search_messages("", max_results=2, page_token=first.next_page_token)
+    assert [m.id for m in second.messages] == ["msg-a-001"]
+    assert second.next_page_token is None
+    assert (await mail.search_messages("", max_results=3)).next_page_token is None
+
+
+async def test_page_token_rejects_non_ascii_digits(world: SimWorld) -> None:
+    mail = connector(world)
+    for bad in ("o:²", "o:١", "o:１"):
+        with pytest.raises(InvalidQuery):
+            await mail.search_messages("", page_token=bad)
+
+
+async def test_drafts_only_appear_in_drafts_search(world: SimWorld) -> None:
+    mail = connector(world)
+    draft = await mail.create_draft(spec(subject="유일한초안제목"))
+    assert await _ids(mail, "유일한초안제목") == []
+    assert await _ids(mail, "in:drafts 유일한초안제목") == [draft.message_id]
+    assert draft.message_id not in await _ids(mail, "")
+    drafts = await mail.search_messages("in:drafts")
+    assert "msg-a-d01" in [m.id for m in drafts.messages]
+
+
+async def test_get_thread_excludes_draft_messages(world: SimWorld) -> None:
+    mail = connector(world)
+    draft = await mail.create_draft(spec(reply_to_message_id="msg-a-003"))
+    thread = await mail.get_thread("thr-a-002")
+    assert [m.id for m in thread.messages] == ["msg-a-003"]
+    assert draft.message_id not in {m.id for m in thread.messages}
+    with pytest.raises(NotFound):  # 초안만 있는 새 스레드는 조회되지 않는다
+        await mail.get_thread((await mail.create_draft(spec())).thread_id)
+
+
+async def test_reply_to_missing_message_raises_not_found(world: SimWorld) -> None:
+    with pytest.raises(NotFound):
+        await connector(world).create_draft(spec(reply_to_message_id="msg-does-not-exist"))
+
+
+async def test_send_does_not_deliver_to_other_account(world: SimWorld) -> None:
+    alice = connector(world)
+    bob = SimMailConnector(world, "acct-bob", SimRuntime())
+    before = await _ids(bob, "")
+    draft = await alice.create_draft(spec(subject="앨리스만보는제목"))
+    await alice.send_draft(draft.draft_id)
+    assert await _ids(bob, "") == before  # v0 단순화: 다른 계정으로 배달하지 않는다
+
+
+async def test_other_accounts_fixture_ids_are_not_found(world: SimWorld) -> None:
+    bob = SimMailConnector(world, "acct-bob", SimRuntime())
+    with pytest.raises(NotFound):
+        await bob.get_draft("drf-a-001")
+    with pytest.raises(NotFound):
+        await connector(world).get_message("msg-b-001")
+
+
+async def test_resend_after_not_applied_leaves_exactly_one_sent_mail(world: SimWorld) -> None:
+    mail = connector(
+        world,
+        {"rules": [{"tool": "send_draft", "nth_call": 1, "error": "result_unknown_not_applied"}]},
+    )
+    draft = await mail.create_draft(spec())
+    with pytest.raises(ResultUnknown):
+        await mail.send_draft(draft.draft_id)
+    await mail.send_draft(draft.draft_id)
+    sent = (await mail.search_messages("in:sent", max_results=50)).messages
+    full = [await mail.get_message(m.id) for m in sent]
+    assert [m.headers.get(ORBIT_EXECUTION_HEADER) for m in full].count("exec-1") == 1
+    thread = await mail.get_thread(draft.thread_id)
+    assert len(thread.messages) == 1
+
+
+async def test_diff_fallback_single_candidate_with_different_content_is_not_a_send(
+    world: SimWorld,
+) -> None:
+    before = world.copy()
+    mail = connector(world)
+    other = await mail.create_draft(spec(subject="다른 제목", reply_to_message_id="msg-a-001"))
+    await mail.send_draft(other.draft_id)
+    alice = world.account("acct-alice")
+    alice.draft_log.clear()
+    del alice.drafts["drf-a-001"]
+    d = diff(before, world)
+    assert not d.drafts_sent
+    assert len(d.drafts_deleted) == 1
+    assert len(d.messages_added) == 1
+
+
+async def test_snapshot_rejects_sent_log_entry_without_message(world: SimWorld) -> None:
+    mail = connector(world)
+    draft = await mail.create_draft(spec())
+    await mail.send_draft(draft.draft_id)
+    data = world.to_dict()
+    log = data["accounts"]["acct-alice"]["draft_log"]
+    log[-1]["sent_message_id"] = "msg-ghost"
+    with pytest.raises(SnapshotError):
+        SimWorld.load(data, world.clock)

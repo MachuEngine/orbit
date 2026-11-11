@@ -6,6 +6,8 @@ SPIKE-005에서 관측한 Gmail 초안 동작을 재현한다.
 - `send_draft`는 초안을 지우고 **새 메시지 ID**로 `SENT` 메시지를 만든다. 스레드 ID는 초안과 같고
   헤더(`X-Orbit-Execution-Id`)는 보존된다. 받는 사람에 계정 본인이 있으면 `INBOX`도 붙인다.
 - 다른 계정으로의 배달은 흉내 내지 않는다(v0). 보낸 메일은 보내는 계정의 메일함에만 생긴다.
+- `get_thread`는 초안 메시지를 포함하지 않는다. Gmail은 스레드 조회에 초안을 포함할 수 있으므로
+  호출자는 `DRAFT` 라벨로 걸러야 한다.
 - 초안 생성·발송·삭제는 `AccountState.draft_log`에 기록해 `diff`가 정확히 짝짓게 한다.
 - 페이지 토큰은 정렬된 결과의 오프셋(`o:<n>`)이라 결정적이다.
 """
@@ -98,7 +100,9 @@ class SimMailConnector:
             raise InvalidQuery("max_results는 1 이상이어야 한다")
         offset = 0
         if page_token is not None:
-            if not page_token.startswith(_CURSOR_PREFIX) or not page_token[2:].isdigit():
+            if not page_token.startswith(_CURSOR_PREFIX) or not (
+                page_token[2:].isascii() and page_token[2:].isdigit()
+            ):
                 raise InvalidQuery(f"잘못된 page_token: {page_token!r}")
             offset = int(page_token[len(_CURSOR_PREFIX) :])
         email = self._state.email
