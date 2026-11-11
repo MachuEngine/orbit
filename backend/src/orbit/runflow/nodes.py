@@ -194,6 +194,9 @@ class RunNodes:
             rows = await list_messages(s, workspace_id=ws, run_id=run_id)
             if llm_call_id in Transcript(tuple(rows)).tool_results(step):
                 return
+            # `response.provider_items`(추론 항목 등)는 그래프 상태·DB에 저장하지 않는다(결정:
+            # 프롬프트 파생 내용을 저장소에 늘리지 않는다). 그래서 워커 경로는 이 항목을 버리고,
+            # 다음 단계 요청에도 되돌려 보내지 않는다(docs/pilot/README.md 한계).
             content: dict[str, Any] = {
                 "step": step,
                 "tool_call_id": llm_call_id,

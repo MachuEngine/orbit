@@ -39,6 +39,7 @@ from orbit.evalrunner.scoring import FailureType, score_episode
 from orbit.evalrunner.structured import answer_ids
 from orbit.evalrunner.task_source import SPLITS, Dataset, DatasetError, TaskView
 from orbit.llm.interface import LLM, UsageRecorder
+from orbit.llm.model_id import is_declared_model
 
 UNSPECIFIED_MODEL = "unspecified"
 
@@ -104,8 +105,9 @@ def _config_dict(
     repeats: int,
     sample: int | None,
     n_tasks: int,
+    llm_config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    config: dict[str, Any] = {
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "dataset": f"{dataset.name}@{dataset.version}",
@@ -122,6 +124,9 @@ def _config_dict(
         "sample": sample,
         "n_tasks": n_tasks,
     }
+    if llm_config is not None:  # 실제 LLM 제공자 설정(ADR-0014). 스크립트 실행에는 없다.
+        config["llm"] = dict(llm_config)
+    return config
 
 
 @dataclass(frozen=True)
@@ -151,6 +156,9 @@ class EpisodeResult:
     model_mismatch: bool
     latency_ms: int
     text_skipped: bool = False  # 최종 텍스트를 받지 못해 텍스트 지표가 없다
+    cached_input_tokens: int = 0
+    reasoning_tokens: int = 0  # output_tokens의 부분집합(추론에 쓴 토큰)
+    length_finishes: int = 0  # 출력 토큰 한도로 끝난 LLM 응답 수(finish_reason == "length")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -177,9 +185,12 @@ class EpisodeResult:
                 "llm_calls": self.llm_calls,
                 "input_tokens": self.input_tokens,
                 "output_tokens": self.output_tokens,
+                "cached_input_tokens": self.cached_input_tokens,
+                "reasoning_tokens": self.reasoning_tokens,
                 "cost_usd": self.cost_usd,
                 "models": list(self.models),
                 "providers": list(self.providers),
+                "length_finishes": self.length_finishes,
             },
             "model_mismatch": self.model_mismatch,
             "latency_ms": self.latency_ms,
@@ -286,7 +297,7 @@ async def run_episode(
     mismatch = (
         declared_model_id != UNSPECIFIED_MODEL
         and bool(models)
-        and set(models) != {declared_model_id}
+        and any(not is_declared_model(declared_model_id, m) for m in models)
     )
     checks: Mapping[str, bool | None] = score.checks
     if error_type is not None:  # 응답이 없으면 응답·호출 검사는 의미가 없다
@@ -315,12 +326,15 @@ async def run_episode(
         llm_calls=len(recorder.records),
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
+        cached_input_tokens=usage.cached_input_tokens,
+        reasoning_tokens=usage.reasoning_tokens,
         cost_usd=cost,
         models=models,
         providers=providers,
         model_mismatch=mismatch,
         latency_ms=latency_ms,
         text_skipped=text_skipped,
+        length_finishes=sum(r.finish_reason == "length" for r in recorder.records),
     )
 
 
@@ -370,6 +384,7 @@ async def run_experiment(
     git_dirty: bool = True,  # git 상태를 모르면 깨끗하다고 가정하지 않는다
     experiment_id: str | None = None,
     allow_sealed_test: bool = False,
+    llm_config: Mapping[str, Any] | None = None,
     sink: ResultSink | None = None,
     monotonic: Callable[[], float] = time.perf_counter,
 ) -> ExperimentSummary:
@@ -419,6 +434,7 @@ async def run_experiment(
         repeats=repeats,
         sample=sample,
         n_tasks=len(tasks),
+        llm_config=llm_config,
     )
     fingerprint = _digest(config)
     exp_id = experiment_id or f"exp-{fingerprint[:12]}"
@@ -478,11 +494,13 @@ class Estimate:
     repeats: int
     mean_input_tokens: float
     mean_output_tokens: float
+    mean_reasoning_tokens: float  # output_tokens의 부분집합
     mean_cost_usd: float | None  # 비용을 모르는 에피소드가 있으면 None
     estimated_episodes: int
     estimated_total_tokens: float
     estimated_total_cost_usd: float | None
     stopped_reason: str | None
+    length_finish_rate: float  # 전체 LLM 호출 중 finish_reason == "length" 비율
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
@@ -512,11 +530,15 @@ async def estimate_experiment(
             repeats=repeats,
             mean_input_tokens=mean_in,
             mean_output_tokens=mean_out,
+            mean_reasoning_tokens=sum(r.reasoning_tokens for r in results) / count,
             mean_cost_usd=mean_cost,
             estimated_episodes=episodes,
             estimated_total_tokens=(mean_in + mean_out) * episodes,
             estimated_total_cost_usd=mean_cost * episodes if mean_cost is not None else None,
             stopped_reason=summary.stopped_reason,
+            length_finish_rate=(
+                sum(r.length_finishes for r in results) / max(sum(r.llm_calls for r in results), 1)
+            ),
         ),
         summary,
     )

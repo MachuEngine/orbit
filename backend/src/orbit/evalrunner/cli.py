@@ -5,7 +5,8 @@
     python -m orbit.evalrunner stats <jsonl> [--compare <jsonl>]
 
 종료 코드: 0 정상, 2 사용 오류(봉인된 test 분할, 파일 충돌, 잘못된 입력), 3 누적 상한으로 중단.
-이 CLI는 실제 LLM을 부르지 않는다. `--llm-script`가 없으면 LLM 호출은 모두 실패한다.
+기본은 실제 LLM을 부르지 않는다. `--llm-script`가 없으면 LLM 호출은 모두 실패한다.
+`--live-llm`을 주면 `ORBIT_LLM_*` 환경 변수의 제공자(ADR-0014)로 실제 호출한다(비용 발생).
 """
 
 import argparse
@@ -17,19 +18,24 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from orbit.connectors.sim.faults import FaultPlan
+from orbit.core.config import get_llm_settings
 from orbit.evalrunner import stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
 from orbit.evalrunner.runner import (
     ExperimentBudget,
     FaultPlanSpec,
+    LLMFactory,
     SealedSplitError,
     estimate_experiment,
     run_experiment,
 )
 from orbit.evalrunner.suts import UnknownSutError, create_sut, sut_names
 from orbit.evalrunner.task_source import DatasetError, load_dataset
+from orbit.llm.factory import build_llm, llm_config_info
 
 SEAL_FLAG = "--i-understand-this-uses-the-sealed-test-split"
 
@@ -111,6 +117,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--prompt-version", default="unspecified")
     run.add_argument("--experiment-id", default=None)
     run.add_argument("--llm-script", default=None, help="과제별 ScriptedLLM 응답 JSON")
+    run.add_argument(
+        "--live-llm", action="store_true",
+        help="ORBIT_LLM_* 설정의 실제 LLM을 호출한다(비용 발생). --llm-script와 함께 쓸 수 없다",
+    )  # fmt: skip
     run.add_argument(SEAL_FLAG, dest="allow_test", action="store_true")
 
     st = sub.add_parser("stats", help="결과 JSONL 통계")
@@ -125,6 +135,22 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _live_llm(declared_model_id: str) -> tuple[LLMFactory, dict[str, Any], str] | None:
+    """환경 변수에서 실제 LLM 팩토리·설정 지문·모델 ID를 만든다. 실패하면 None(종료 코드 2)."""
+    try:
+        settings = get_llm_settings()
+    except ValidationError as exc:
+        # 오류 항목의 입력값에는 키가 들어 있을 수 있어 필드 이름만 출력한다.
+        names = sorted({".".join(str(p) for p in e["loc"]) or "(설정 전체)" for e in exc.errors()})
+        print(f"LLM 설정 오류 (확인할 항목: {', '.join(names)})", file=sys.stderr)
+        return None
+    if declared_model_id not in ("unspecified", settings.llm_model_id):
+        print("--model-id가 ORBIT_LLM_MODEL_ID와 다르다", file=sys.stderr)
+        return None
+    llm = build_llm(settings)
+    return (lambda task, repeat: llm), llm_config_info(settings), settings.llm_model_id
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.split == "test" and not args.allow_test:
         raise SealedSplitError("test 분할 봉인")  # 출력 파일을 만들기 전에 거부한다
@@ -134,7 +160,18 @@ def _run(args: argparse.Namespace) -> int:
     if sink_path.exists():
         print(f"이미 있는 파일에는 쓰지 않는다: {sink_path}", file=sys.stderr)
         return 2
-    llm_factory = load_script(args.llm_script) if args.llm_script else scripted_llm_factory({})
+    if args.live_llm and args.llm_script:
+        print("--live-llm과 --llm-script는 함께 쓸 수 없다", file=sys.stderr)
+        return 2
+    llm_config: dict[str, Any] | None = None
+    model_id: str = args.model_id
+    if args.live_llm:
+        live = _live_llm(args.model_id)
+        if live is None:
+            return 2
+        llm_factory, llm_config, model_id = live
+    else:
+        llm_factory = load_script(args.llm_script) if args.llm_script else scripted_llm_factory({})
     sha, dirty = _git_state(out.parent)  # 출력 파일을 만들기 전에 읽는다
     common: dict[str, Any] = {
         "split": args.split,
@@ -144,13 +181,15 @@ def _run(args: argparse.Namespace) -> int:
         "budget": Budget(args.max_steps, args.max_episode_tokens, args.max_seconds),
         "experiment_budget": ExperimentBudget(args.max_cost_usd, args.max_total_tokens),
         "fault": _load_fault_plan(args.fault_plan),
-        "model_id": args.model_id,
+        "model_id": model_id,
+        "llm_config": llm_config,
         "prompt_version": args.prompt_version,
         "git_sha": sha,
         "git_dirty": dirty,
         "experiment_id": args.experiment_id,
         "allow_sealed_test": args.allow_test,
     }
+    sink_path.parent.mkdir(parents=True, exist_ok=True)  # 결과 폴더가 없으면 만든다
     with sink_path.open("x", encoding="utf-8") as fh:
 
         def sink(result: Any) -> None:
@@ -202,7 +241,13 @@ def _stats(args: argparse.Namespace) -> int:
         "failure_distribution": stats.failure_distribution(records),
         "state_diff_mismatch_episodes": stats.state_diff_mismatch_count(records),
         "model_mismatch_episodes": stats.model_mismatch_count(records),
+        "response_models": stats.response_model_set(records),
     }
+    if not report["response_models"]["single"]:
+        report["warnings"] = [
+            "실행 전체의 응답 모델이 하나가 아니다. 결과를 같은 모델로 해석하지 않는다"
+        ]
+        print("경고: 실행 전체의 응답 모델이 하나가 아니다", file=sys.stderr)
     if args.compare:
         other = stats.load_results(args.compare, reject_model_mismatch=reject)
         report["paired_difference_a_minus_b"] = stats.paired_difference(

@@ -134,7 +134,7 @@ def main() -> None:
     from orbit.core.config import get_llm_settings, get_settings
     from orbit.core.ids import Uuid7Generator
     from orbit.db.session import AsyncDatabase
-    from orbit.llm.openrouter import OpenRouterLLM
+    from orbit.llm.factory import build_llm
     from orbit.runflow.deps import SimConnectorResolver
 
     settings = get_settings()
@@ -145,7 +145,8 @@ def main() -> None:
     except ValidationError:
         raise SystemExit(
             "LLM 설정이 없어 워커를 시작하지 않는다. 필요한 환경 변수: ORBIT_LLM_MODEL_ID, "
-            "ORBIT_LLM_PROVIDER_ORDER, ORBIT_OPENROUTER_API_KEY (backend/dev.env 참고)"
+            "ORBIT_LLM_PROVIDER_ORDER, ORBIT_OPENROUTER_API_KEY. provider가 openai이면 "
+            "ORBIT_LLM_PROVIDER=openai와 ORBIT_OPENAI_API_KEY (backend/dev.env 참고)"
         ) from None
     url = settings.database_url.get_secret_value()
     clock = SystemClock()
@@ -153,7 +154,7 @@ def main() -> None:
         db=AsyncDatabase.from_url(url),
         clock=clock,
         ids=Uuid7Generator(clock),
-        llm=OpenRouterLLM(llm_settings),
+        llm=build_llm(llm_settings),
         resolver=SimConnectorResolver(settings.sim_snapshot_path, settings.sim_account_id, clock),
         tz=ZoneInfo(settings.user_timezone),
         checkpoint_conninfo=make_url(url).set(drivername="postgresql").render_as_string(False),

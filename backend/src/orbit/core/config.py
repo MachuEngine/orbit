@@ -15,7 +15,7 @@
 import uuid
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -47,32 +47,90 @@ class LLMSettings(BaseSettings):
     - `ORBIT_LLM_PROVIDER_ORDER`: 쉼표로 구분한 제공자 우선순위 (D9-4).
     - `ORBIT_LLM_ACCEPTED_RESPONSE_MODEL_IDS`: 쉼표 구분. 요청 ID와 다르지만 같은 모델로
       인정할 응답 모델 ID 목록. 기본은 빈 값.
-    - `ORBIT_OPENROUTER_API_KEY`: 기본값 없음, 빈 값 거절.
+    - `ORBIT_OPENROUTER_API_KEY`: 기본값 없음, 빈 값 거절. provider가 openrouter일 때만 필수.
+    - `ORBIT_LLM_PROVIDER`: `openrouter`(기본) | `openai`(ADR-0014, 파일럿용 임시).
+      openai이면 `ORBIT_OPENAI_API_KEY`가 필수이고 `ORBIT_LLM_PROVIDER_ORDER`는 쓰지 않는다.
+    - `ORBIT_OPENAI_BASE_URL`: 기본 `https://api.openai.com/v1`, https만 허용.
+    - `ORBIT_LLM_REASONING_EFFORT`: openai 추론 강도(none|minimal|low|medium|high|xhigh).
+      비우면 보내지 않는다.
+    - `ORBIT_LLM_SEND_TEMPERATURE`: 기본 거짓. 거짓이면 openai 어댑터는 temperature를 보내지 않고
+      그 사실을 설정 지문에 남긴다(추론 모델은 temperature를 지원하지 않을 수 있다).
+    - `ORBIT_LLM_PRICE_INPUT_PER_MTOK`, `..._CACHED_INPUT_PER_MTOK`, `..._OUTPUT_PER_MTOK`,
+      `ORBIT_LLM_PRICE_SOURCE`: 1백만 토큰당 달러 단가표(openai 비용 계산용). 하나라도 있으면
+      네 값이 모두 있어야 한다. 없으면 비용은 None(미상)이다.
     """
 
     model_config = SettingsConfigDict(env_prefix="ORBIT_", extra="ignore")
 
     llm_model_id: str
-    llm_provider_order: Annotated[list[str], NoDecode]
-    openrouter_api_key: SecretStr = Field(min_length=1)
+    llm_provider: Literal["openrouter", "openai"] = "openrouter"
+    llm_provider_order: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    openrouter_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    llm_reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    llm_send_temperature: bool = False
+    llm_price_input_per_mtok: float | None = Field(default=None, ge=0)
+    llm_price_cached_input_per_mtok: float | None = Field(default=None, ge=0)
+    llm_price_output_per_mtok: float | None = Field(default=None, ge=0)
+    llm_price_source: str | None = None
     llm_accepted_response_model_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     llm_timeout_seconds: float = Field(default=60.0, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
 
-    @field_validator("openrouter_api_key")
+    # API 키 빈 값 거절은 선택한 provider의 키에만 건다(`_provider_requirements`).
+    # 쓰지 않는 provider의 키가 `.env`에 빈 값으로 남아 있어도 시작을 막지 않는다.
+
+    @field_validator("llm_reasoning_effort", "llm_price_source", mode="before")
     @classmethod
-    def _key_not_blank(cls, value: SecretStr) -> SecretStr:
-        if not value.get_secret_value().strip():
-            raise ValueError("API 키가 비어 있다")
+    def _blank_is_unset(cls, value: object) -> object:
+        # `.env`에서 `KEY=`처럼 비워 둔 값은 설정하지 않은 것으로 본다.
+        if isinstance(value, str) and not value.strip():
+            return None
         return value
 
-    @field_validator("openrouter_base_url")
+    @field_validator(
+        "llm_price_input_per_mtok",
+        "llm_price_cached_input_per_mtok",
+        "llm_price_output_per_mtok",
+        mode="before",
+    )
+    @classmethod
+    def _blank_price_is_unset(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("openrouter_base_url", "openai_base_url")
     @classmethod
     def _require_https(cls, value: str) -> str:
         if not value.startswith("https://"):
-            raise ValueError("OpenRouter base URL은 https://만 허용한다")
+            raise ValueError("base URL은 https://만 허용한다")
         return value
+
+    @model_validator(mode="after")
+    def _provider_requirements(self) -> "LLMSettings":
+        key = self.openrouter_api_key if self.llm_provider == "openrouter" else self.openai_api_key
+        if key is not None and not key.get_secret_value().strip():
+            raise ValueError("API 키가 비어 있다")
+        if self.llm_provider == "openrouter":
+            if self.openrouter_api_key is None:
+                raise ValueError("provider가 openrouter이면 ORBIT_OPENROUTER_API_KEY가 필요하다")
+            if not self.llm_provider_order:
+                raise ValueError("provider가 openrouter이면 ORBIT_LLM_PROVIDER_ORDER가 필요하다")
+        elif self.openai_api_key is None:
+            raise ValueError("provider가 openai이면 ORBIT_OPENAI_API_KEY가 필요하다")
+        prices = (
+            self.llm_price_input_per_mtok,
+            self.llm_price_cached_input_per_mtok,
+            self.llm_price_output_per_mtok,
+        )
+        if any(p is not None for p in prices) and (
+            any(p is None for p in prices) or not self.llm_price_source
+        ):
+            raise ValueError("단가표는 입력·캐시 입력·출력 단가와 출처가 모두 있어야 한다")
+        return self
 
     @field_validator("llm_accepted_response_model_ids", mode="before")
     @classmethod
@@ -86,8 +144,6 @@ class LLMSettings(BaseSettings):
     def _split_provider_order(cls, value: object) -> object:
         if isinstance(value, str):
             value = [part.strip() for part in value.split(",") if part.strip()]
-        if isinstance(value, list) and not value:
-            raise ValueError("제공자 우선순위가 비어 있다")
         return value
 
 
