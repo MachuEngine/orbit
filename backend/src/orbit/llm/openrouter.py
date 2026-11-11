@@ -69,6 +69,8 @@ class OpenRouterLLM:
         self._model_id = validate_model_id(settings.llm_model_id)
         self._accepted_ids = frozenset(settings.llm_accepted_response_model_ids)
         self._provider_order = tuple(settings.llm_provider_order)
+        if settings.openrouter_api_key is None:
+            raise ValueError("OpenRouter API 키가 없다")
         self._api_key = settings.openrouter_api_key
         self._url = settings.openrouter_base_url.rstrip("/") + "/chat/completions"
         self._timeout = settings.llm_timeout_seconds

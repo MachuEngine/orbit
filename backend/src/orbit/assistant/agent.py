@@ -94,7 +94,12 @@ class ReadOnlyAssistant:
             if not response.tool_calls:
                 return response.text or "", None
             messages.append(
-                Message(role="assistant", content=response.text, tool_calls=response.tool_calls)
+                Message(
+                    role="assistant",
+                    content=response.text,
+                    tool_calls=response.tool_calls,
+                    provider_items=response.provider_items,
+                )
             )
             structured: dict[str, Any] | None = None
             for call in response.tool_calls:

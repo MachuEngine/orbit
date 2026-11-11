@@ -135,6 +135,7 @@ class UsageRecord:
     error_type: str | None = None  # 실패 시 예외 클래스 이름만
     cost_incomplete: bool = False
     model_id_missing: bool = False  # 응답에 모델 ID가 없었다
+    finish_reason: str | None = None  # 응답이 있을 때만
 
 
 class UsageRecorder:
@@ -213,6 +214,7 @@ class RecordingLLM:
                 retries=response.retries,
                 cost_incomplete=response.cost_incomplete,
                 model_id_missing=response.model_id is None,
+                finish_reason=response.finish_reason,
             )
         )
         return response
