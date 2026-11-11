@@ -18,6 +18,9 @@ jobs:
       ORBIT_PG_SUPERUSER_PASSWORD: ci_superuser_pw
       ORBIT_OWNER_PASSWORD: ci_owner_pw
       ORBIT_APP_PASSWORD: ci_app_pw
+      # 설정 객체는 두 URL을 함께 읽으므로 job 전체에 둔다(마이그레이션 단계도 ORBIT_DATABASE_URL을 요구한다).
+      ORBIT_DATABASE_URL: postgresql+psycopg://orbit_app:ci_app_pw@localhost:5432/orbit
+      ORBIT_MIGRATION_DATABASE_URL: postgresql+psycopg://orbit_owner:ci_owner_pw@localhost:5432/orbit
     services:
       postgres:
         image: pgvector/pgvector:0.8.0-pg17
@@ -62,14 +65,10 @@ jobs:
 
       - name: Run migrations
         run: uv run --directory backend alembic upgrade head
-        env:
-          ORBIT_MIGRATION_DATABASE_URL: postgresql+psycopg://orbit_owner:ci_owner_pw@localhost:5432/orbit
 
       - name: Run checks
         run: bash scripts/check.sh
         env:
           CI: "true"
-          ORBIT_DATABASE_URL: postgresql+psycopg://orbit_app:ci_app_pw@localhost:5432/orbit
-          ORBIT_MIGRATION_DATABASE_URL: postgresql+psycopg://orbit_owner:ci_owner_pw@localhost:5432/orbit
           ORBIT_TEST_DATABASE_URL: postgresql+psycopg://orbit_app:ci_app_pw@localhost:5432/orbit_test
           ORBIT_TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://orbit_owner:ci_owner_pw@localhost:5432/orbit_test
