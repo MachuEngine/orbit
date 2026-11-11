@@ -1,5 +1,11 @@
 """Sim 캘린더 커넥터 (ADR-0008 3절). 계정 하나에 묶이며 모든 공개 메서드는 `SimRuntime`을 거친다.
 
+계약 아님 (Sim 고유 동작, 호출자가 의존하면 안 된다. 실제 어댑터는 다르게 동작할 수 있다):
+- 취소된 일정에도 `update_event`가 성공한다.
+- 이미 취소된 일정의 재취소가 `if_match`가 맞으면 변경 없이 성공한다(멱등).
+- `list_events`의 `query`는 제목·설명·장소의 대소문자 무시 부분 문자열 일치다.
+계약이 보장하는 규칙(종일 일정, `ValueError` 조건)은 `CalendarConnector` docstring을 본다.
+
 판단 기록:
 - `query`: Sim은 제목·설명·장소에 대한 대소문자 무시 부분 문자열 일치다. 계약은 "제목의
   완전한 단어를 대소문자 무관하게 찾는다"까지만 보장한다(Google `q`는 단어 단위 전문 검색).
@@ -23,9 +29,12 @@
 - `list_events`는 naive `time_min`/`time_max`와 `time_min >= time_max`에 `ValueError`를 던진다.
 """
 
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, time
+from typing import Any
 
 from orbit.connectors.contracts import (
+    CALENDAR_TOOLS,
     AlreadyExists,
     Calendar,
     CalendarEvent,
@@ -61,6 +70,12 @@ class SimCalendarConnector:
         self._account_id = account_id
         self._rt = runtime if runtime is not None else SimRuntime()
         self._world.account(account_id)  # 없는 계정이면 바로 실패한다
+        self._rt.bind(CALENDAR_TOOLS)
+
+    def _run[T](
+        self, tool: str, args: Mapping[str, Any], apply_fn: Callable[[], T]
+    ) -> Awaitable[T]:
+        return self._rt.run_tool(tool, args, apply_fn, account_id=self._account_id)
 
     @property
     def runtime(self) -> SimRuntime:
@@ -87,9 +102,7 @@ class SimCalendarConnector:
         return event
 
     async def list_calendars(self) -> list[Calendar]:
-        return await self._rt.run_tool(
-            "list_calendars", {}, lambda: list(self._account.calendars.values())
-        )
+        return await self._run("list_calendars", {}, lambda: list(self._account.calendars.values()))
 
     async def list_events(
         self,
@@ -131,11 +144,11 @@ class SimCalendarConnector:
             found.sort(key=lambda e: (e.start.astimezone(UTC), e.id))
             return found
 
-        return await self._rt.run_tool("list_events", args, apply)
+        return await self._run("list_events", args, apply)
 
     async def get_event(self, calendar_id: str, event_id: str) -> CalendarEvent:
         args = {"calendar_id": calendar_id, "event_id": event_id}
-        return await self._rt.run_tool("get_event", args, lambda: self._get(calendar_id, event_id))
+        return await self._run("get_event", args, lambda: self._get(calendar_id, event_id))
 
     async def create_event(
         self, calendar_id: str, event_id: str, draft: EventDraft
@@ -157,7 +170,7 @@ class SimCalendarConnector:
             )
             return self._store(event)
 
-        return await self._rt.run_tool("create_event", args, apply)
+        return await self._run("create_event", args, apply)
 
     async def update_event(
         self, calendar_id: str, event_id: str, patch: EventPatch, *, if_match: str
@@ -180,7 +193,7 @@ class SimCalendarConnector:
             )
             return self._store(updated)
 
-        return await self._rt.run_tool("update_event", args, apply)
+        return await self._run("update_event", args, apply)
 
     async def cancel_event(
         self, calendar_id: str, event_id: str, *, if_match: str
@@ -202,4 +215,4 @@ class SimCalendarConnector:
             )
             return self._store(cancelled)
 
-        return await self._rt.run_tool("cancel_event", args, apply)
+        return await self._run("cancel_event", args, apply)

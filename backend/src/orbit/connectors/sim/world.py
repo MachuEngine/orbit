@@ -261,13 +261,24 @@ class SimWorld:
         except KeyError:
             raise KeyError(f"없는 계정: {account_id}") from None
 
-    def fork(self, episode_seed: int) -> SimWorld:
-        """독립 복사본(깊은 복사)을 만든다. ID 생성기는 `episode_seed`로 새로 시작한다."""
-        return SimWorld(episode_seed, copy.deepcopy(self._accounts), self.clock)
+    def fork(self, episode_seed: int, clock: Clock | None = None) -> SimWorld:
+        """독립 복사본(깊은 복사)을 만든다. ID 생성기는 `episode_seed`로 새로 시작한다.
+
+        `clock`을 주지 않으면 시계를 복사하지 않고 같은 `Clock` 객체를 공유한다. 병렬 에피소드가
+        한 시계를 함께 움직이면 재현성이 깨지므로(D1-5), 병렬 에피소드는 각자 시계를 만들어
+        `clock`으로 넘긴다.
+        """
+        return SimWorld(
+            episode_seed, copy.deepcopy(self._accounts), clock if clock is not None else self.clock
+        )
 
     def copy(self) -> SimWorld:
-        """ID 생성기 상태까지 그대로 복사한다. `diff`의 `before` 기준점으로 쓴다."""
-        return copy.deepcopy(self)
+        """ID 생성기 상태까지 그대로 복사한다. `diff`의 `before` 기준점으로 쓴다.
+
+        시계는 복사하지 않고 공유한다. `diff` 기준점은 읽기만 하므로 문제없지만, 복사본을 별도
+        에피소드로 쓴다면 시계를 공유하지 않도록 `fork(seed, clock=...)`를 쓴다(D1-5).
+        """
+        return copy.deepcopy(self, {id(self.clock): self.clock})
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -52,6 +52,8 @@
 
 진행 메모 (2단계-A, 브랜치 `stage-2a/contracts-core`): 계약 타입·오류·Protocol(`orbit/connectors/contracts.py`), Sim 공통부(`sim/world.py`·`calls.py`·`faults.py`·`runtime.py`), 최소 스냅샷 픽스처, 계약 테스트 골격(`tests/contract/conftest.py`)을 만들었다. Sim 메일·캘린더 커넥터와 계약 테스트 본문은 다음 작업(병렬)이다.
 
+진행 메모 (2단계-D, 브랜치 `stage-2d/followups`): 리뷰에서 미룬 보완을 반영했다. 캘린더·메일 계약 규칙과 Sim 고유 동작("계약 아님")을 docstring에 정리, `sim` 등록 누락 시 실패하는 레지스트리 테스트, FaultPlan `match` JSON 정규화와 커넥터 바인딩 시 `tool` 검증(공유 런타임은 `shared=True` + `check_bound()`, 계정 구분은 `account_id` match), `RateLimited` 키워드 전용 인자, 메일 `headers` 복사 반환, `SimWorld.copy()`·`fork()`의 시계 공유.
+
 ### 3단계. 일정 조회 경로와 평가 기반
 1. 내부 LLM 인터페이스 + OpenRouter 구현 (고정 모델 ID, 토큰·비용 기록)
 2. 읽기 전용 일정 질의 경로: 작업 집합 핸들(E1, M3)과 Tool Calling
