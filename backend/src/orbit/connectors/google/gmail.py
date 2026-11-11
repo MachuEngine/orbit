@@ -33,14 +33,14 @@ import base64
 import html
 import re
 import urllib.parse
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from email import policy
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.utils import formataddr, getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
-from typing import Any, Protocol
+from typing import Any
 
 import httpx
 
@@ -48,20 +48,18 @@ from orbit.connectors.contracts import (
     ORBIT_EXECUTION_HEADER,
     Address,
     AttachmentMeta,
-    ConnectorError,
     Draft,
     DraftSpec,
-    InvalidQuery,
     MailMessage,
     MailThread,
     MessageSummary,
     NotFound,
-    PermissionRevoked,
-    RateLimited,
     ResultUnknown,
     SearchPage,
     TransientError,
 )
+from orbit.connectors.google._http import GoogleHttp, Sleep
+from orbit.connectors.google.tokens import AccessTokenProvider
 from orbit.connectors.sim.mail_query import parse_query
 
 DEFAULT_BASE_URL = "https://gmail.googleapis.com/gmail/v1"
@@ -78,17 +76,9 @@ _LABEL_OPERATORS = {"SENT": "sent", "INBOX": "inbox", "DRAFT": "drafts"}
 _PLAIN_VALUE = re.compile(r"[\w.@]+")
 _KEYWORDS = frozenset({"or", "and", "not", "around"})
 
-SleepFn = Callable[[float], Awaitable[None]]
-
-
-class AccessTokenProvider(Protocol):
-    """액세스 토큰 공급자. 토큰 원문을 로그·예외에 남기지 않는다."""
-
-    async def access_token(self) -> str: ...
-
-    async def refresh(self) -> str:
-        """토큰을 새로 받아 돌려준다. 실패(철회 포함)는 `PermissionRevoked`로 던진다."""
-        ...
+MAX_MIME_DEPTH = 20
+MAX_BODY_CHARS = 200_000  # 본문 텍스트 글자 수 상한. 넘으면 잘라내고 표시를 붙인다
+TRUNCATED_MARK = "\n[... 본문이 길어 일부를 잘랐다]"
 
 
 # ---------------------------------------------------------------- 검색 질의 변환
@@ -243,19 +233,33 @@ class _Body:
         self.plain: list[str] = []
         self.html: list[str] = []
         self.attachments: list[AttachmentMeta] = []
+        self.truncated = False
 
     def text(self) -> str:
         if self.plain:
             # Gmail은 줄바꿈을 CRLF로 저장하고 본문 끝에 줄바꿈을 붙인다. 초안 본문과 대조할 수
             # 있게 LF로 통일하고 끝의 줄바꿈은 뗀다(본문 끝의 줄바꿈 차이는 보존하지 않는다).
             text = "\n".join(self.plain).replace("\r\n", "\n").replace("\r", "\n")
-            return text.rstrip("\n")
-        if self.html:
-            return html_to_text("\n".join(self.html))
-        return ""
+            text = text.rstrip("\n")
+        elif self.html:
+            # 변환 전에 입력 크기도 제한한다(잘린 HTML 조각은 변환기가 알아서 닫는다).
+            source = "\n".join(self.html)
+            if len(source) > MAX_BODY_CHARS * 4:
+                source = source[: MAX_BODY_CHARS * 4]
+                self.truncated = True
+            text = html_to_text(source)
+        else:
+            text = ""
+        if len(text) > MAX_BODY_CHARS:
+            text = text[:MAX_BODY_CHARS]
+            self.truncated = True
+        return text + TRUNCATED_MARK if self.truncated else text
 
 
-def _walk(part: Mapping[str, Any], acc: _Body) -> None:
+def _walk(part: Mapping[str, Any], acc: _Body, depth: int = 0) -> None:
+    if depth > MAX_MIME_DEPTH:
+        acc.truncated = True
+        return
     mime = str(part.get("mimeType", "")).lower()
     body = part.get("body") or {}
     filename = part.get("filename") or ""
@@ -272,7 +276,7 @@ def _walk(part: Mapping[str, Any], acc: _Body) -> None:
         return
     if children:
         for child in children:
-            _walk(child, acc)
+            _walk(child, acc, depth + 1)
         return
     data = body.get("data")
     if not data:
@@ -373,63 +377,6 @@ def build_mime(
     return msg.as_bytes()
 
 
-# ---------------------------------------------------------------- 오류 대응
-
-
-def _error_info(response: httpx.Response) -> tuple[set[str], bool]:
-    """(소문자 사유 코드 집합, invalid_grant 여부). 응답 본문 문장은 오류 메시지에 쓰지 않는다."""
-    reasons: set[str] = set()
-    revoked = False
-    try:
-        data = response.json()
-    except ValueError:
-        return reasons, revoked
-    error = data.get("error") if isinstance(data, dict) else None
-    if isinstance(error, str):
-        revoked = error.lower() == "invalid_grant"
-        reasons.add(error.lower())
-    elif isinstance(error, dict):
-        for item in error.get("errors") or []:
-            if isinstance(item, dict) and isinstance(item.get("reason"), str):
-                reasons.add(item["reason"].lower())
-        status = error.get("status")
-        if isinstance(status, str):
-            reasons.add(status.lower())
-        message = error.get("message")
-        if isinstance(message, str) and "invalid_grant" in message.lower():
-            revoked = True
-    return reasons, revoked
-
-
-def _retry_after(response: httpx.Response) -> float | None:
-    raw = response.headers.get("retry-after")
-    if raw is None:
-        return None
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        return None
-
-
-def _map_error(response: httpx.Response, *, search: bool) -> ConnectorError:
-    status = response.status_code
-    reasons, revoked = _error_info(response)
-    suffix = f" ({','.join(sorted(reasons))})" if reasons else ""
-    if revoked:
-        return PermissionRevoked(f"Gmail 인증 철회{suffix}")
-    if status == 429 or reasons & _RATE_LIMIT_REASONS:
-        return RateLimited(
-            retry_after_s=_retry_after(response), message=f"Gmail 호출 한도 초과 HTTP {status}"
-        )
-    if status in (401, 403):
-        return PermissionRevoked(f"Gmail 권한 없음 HTTP {status}{suffix}")
-    if status == 404:
-        return NotFound("Gmail에서 대상을 찾을 수 없다")
-    if status == 400 and search:
-        return InvalidQuery(f"Gmail이 검색어를 거절했다{suffix}")
-    return ConnectorError(f"Gmail 요청 실패 HTTP {status}{suffix}")
-
-
 # ---------------------------------------------------------------- 커넥터
 
 
@@ -437,27 +384,45 @@ def _quote(value: str) -> str:
     return urllib.parse.quote(value, safe="")
 
 
+def _parsed[T](fn: Callable[[Mapping[str, Any]], T], resource: Mapping[str, Any]) -> T:
+    """읽기 경로 파싱 오류는 응답 내용을 담지 않고 `TransientError`로 감싼다."""
+    try:
+        return fn(resource)
+    except Exception:
+        raise TransientError("Gmail 응답을 해석하지 못했다") from None
+
+
 class GmailConnector:
-    """`MailConnector` 계약의 Gmail 구현. 연결(계정) 하나에 묶인다."""
+    """`MailConnector` 계약의 Gmail 구현. 연결(계정) 하나에 묶인다.
+
+    HTTP 규칙(토큰 갱신, 쓰기 결과 불명 판정, 오류 대응, `base_url` 검증)은 `_http.GoogleHttp`가
+    Calendar 어댑터와 같이 쓰는 공통부다.
+    """
 
     def __init__(
         self,
-        token_provider: AccessTokenProvider,
+        tokens: AccessTokenProvider,
         *,
         base_url: str = DEFAULT_BASE_URL,
-        transport: httpx.AsyncBaseTransport | None = None,
-        timeout: httpx.Timeout | None = None,
-        sleep: SleepFn = asyncio.sleep,
+        client: httpx.AsyncClient | None = None,
+        allow_test_base_url: bool = False,
+        timeout_s: float = 15.0,
+        read_retries: int = 2,
+        sleep: Sleep = asyncio.sleep,
     ) -> None:
-        self._tokens = token_provider
-        self._base = base_url.rstrip("/")
-        self._sleep = sleep
-        self._client = httpx.AsyncClient(
-            transport=transport, timeout=timeout or httpx.Timeout(15.0, connect=5.0)
+        self._http = GoogleHttp(
+            tokens,
+            service="Gmail",
+            base_url=base_url,
+            client=client,
+            allow_test_base_url=allow_test_base_url,
+            timeout_s=timeout_s,
+            read_retries=read_retries,
+            sleep=sleep,
         )
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        await self._http.aclose()
 
     async def __aenter__(self) -> GmailConnector:
         return self
@@ -465,89 +430,20 @@ class GmailConnector:
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
-    # -- HTTP 공통 --------------------------------------------------------------
-
-    async def _access_token(self) -> str:
-        try:
-            return await self._tokens.access_token()
-        except ConnectorError:
-            raise
-        except Exception:
-            raise TransientError("액세스 토큰을 가져오지 못했다") from None
-
-    async def _refresh_token(self) -> str:
-        try:
-            return await self._tokens.refresh()
-        except ConnectorError:
-            raise
-        except Exception:
-            raise PermissionRevoked("액세스 토큰을 갱신하지 못했다") from None
-
-    async def _request(
+    async def _get(
         self,
-        method: str,
         path: str,
         *,
-        params: Sequence[tuple[str, str]] | None = None,
-        json: Mapping[str, Any] | None = None,
-        write: bool = False,
-        search: bool = False,
-    ) -> Any:
-        url = f"{self._base}/users/me/{path}"
-        token = await self._access_token()
-        refreshed = False
-        failures = 0
-        while True:
-            try:
-                response = await self._client.request(
-                    method,
-                    url,
-                    params=httpx.QueryParams(list(params)) if params else None,
-                    json=json,
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-            except httpx.TransportError as exc:
-                before_send = isinstance(
-                    exc, httpx.ConnectError | httpx.ConnectTimeout | httpx.PoolTimeout
-                )
-                if write and not before_send:
-                    raise ResultUnknown("요청을 보낸 뒤 연결이 끊기거나 시간이 초과됐다") from None
-                failures += 1
-                if write or failures >= _READ_ATTEMPTS:
-                    raise TransientError("Gmail에 연결하지 못했다") from None
-                await self._sleep(_RETRY_DELAYS_S[min(failures, len(_RETRY_DELAYS_S)) - 1])
-                continue
-            status = response.status_code
-            if status == 401:
-                if refreshed:
-                    raise PermissionRevoked("토큰을 갱신한 뒤에도 인증에 실패했다")
-                token = await self._refresh_token()
-                refreshed = True
-                continue
-            if status >= 500:
-                if write:
-                    raise ResultUnknown(f"쓰기 요청 뒤 서버 오류 HTTP {status}")
-                failures += 1
-                if failures >= _READ_ATTEMPTS:
-                    raise TransientError(f"Gmail 서버 오류 HTTP {status}")
-                await self._sleep(_RETRY_DELAYS_S[min(failures, len(_RETRY_DELAYS_S)) - 1])
-                continue
-            if 200 <= status < 300:
-                if status == 204 or not response.content:
-                    return None
-                try:
-                    return response.json()
-                except ValueError:
-                    if write:
-                        raise ResultUnknown("쓰기 응답을 해석하지 못했다") from None
-                    raise TransientError("Gmail 응답을 해석하지 못했다") from None
-            raise _map_error(response, search=search)
+        op: str,
+        params: list[tuple[str, str]] | None = None,
+        query: bool = False,
+    ) -> dict[str, Any]:
+        return await self._http.request(
+            "GET", f"/users/me/{path}", op=op, write=False, params=params, query=query
+        )
 
-    async def _get_resource(self, path: str, *, fmt: str = "full") -> Mapping[str, Any]:
-        data = await self._request("GET", path, params=[("format", fmt)])
-        if not isinstance(data, dict):
-            raise TransientError("Gmail 응답 형식이 올바르지 않다")
-        return data
+    async def _get_full(self, path: str, *, op: str) -> dict[str, Any]:
+        return await self._get(path, op=op, params=[("format", "full")])
 
     # -- 검색·조회 --------------------------------------------------------------
 
@@ -560,48 +456,57 @@ class GmailConnector:
         params = [("q", q), ("maxResults", str(min(max_results, _MAX_RESULTS_CAP)))]
         if page_token:
             params.append(("pageToken", page_token))
-        data = await self._request("GET", "messages", params=params, search=True)
-        listing = data if isinstance(data, dict) else {}
+        listing = await self._get("messages", op="search_messages", params=params, query=True)
         summaries: list[MessageSummary] = []
         for item in listing.get("messages") or []:
             try:
-                resource = await self._get_resource(f"messages/{_quote(str(item['id']))}")
+                msg_id = str(item["id"])
+            except (KeyError, TypeError):
+                raise TransientError("Gmail 응답을 해석하지 못했다") from None
+            try:
+                resource = await self._get_full(f"messages/{_quote(msg_id)}", op="search_messages")
             except NotFound:
                 continue  # 목록을 읽은 뒤 지워진 메시지
-            summaries.append(parse_summary(resource))
-        return SearchPage(
-            messages=tuple(summaries), next_page_token=listing.get("nextPageToken") or None
-        )
+            summaries.append(_parsed(parse_summary, resource))
+        token = listing.get("nextPageToken")
+        return SearchPage(messages=tuple(summaries), next_page_token=str(token) if token else None)
 
     async def get_message(self, message_id: str) -> MailMessage:
-        return parse_message(await self._get_resource(f"messages/{_quote(message_id)}"))
+        resource = await self._get_full(f"messages/{_quote(message_id)}", op="get_message")
+        return _parsed(parse_message, resource)
 
     async def get_thread(self, thread_id: str) -> MailThread:
-        resource = await self._get_resource(f"threads/{_quote(thread_id)}")
-        messages = sorted(
-            (parse_message(m) for m in resource.get("messages") or []), key=lambda m: m.sent_at
-        )
-        return MailThread(id=str(resource.get("id", thread_id)), messages=tuple(messages))
+        resource = await self._get_full(f"threads/{_quote(thread_id)}", op="get_thread")
+
+        def build(res: Mapping[str, Any]) -> MailThread:
+            messages = sorted(
+                (parse_message(m) for m in res.get("messages") or []), key=lambda m: m.sent_at
+            )
+            return MailThread(id=str(res.get("id", thread_id)), messages=tuple(messages))
+
+        return _parsed(build, resource)
 
     # -- 초안·발송 --------------------------------------------------------------
 
     async def _reply_context(self, message_id: str) -> tuple[str, str | None, str | None]:
         """(스레드 ID, In-Reply-To로 쓸 Message-ID, References 값)."""
-        data = await self._request(
-            "GET",
+        data = await self._get(
             f"messages/{_quote(message_id)}",
+            op="create_draft",
             params=[
                 ("format", "metadata"),
                 ("metadataHeaders", "Message-ID"),
                 ("metadataHeaders", "References"),
             ],
         )
-        if not isinstance(data, dict) or "threadId" not in data:
-            raise TransientError("Gmail 응답 형식이 올바르지 않다")
-        headers = _headers_of(data.get("payload") or {})
-        origin_id = headers.get("message-id")
-        chain = " ".join(x for x in (headers.get("references"), origin_id) if x) or None
-        return str(data["threadId"]), origin_id, chain
+
+        def build(res: Mapping[str, Any]) -> tuple[str, str | None, str | None]:
+            headers = _headers_of(res.get("payload") or {})
+            origin_id = headers.get("message-id")
+            chain = " ".join(x for x in (headers.get("references"), origin_id) if x) or None
+            return str(res["threadId"]), origin_id, chain
+
+        return _parsed(build, data)
 
     async def create_draft(self, spec: DraftSpec) -> Draft:
         thread_id: str | None = None
@@ -613,7 +518,9 @@ class GmailConnector:
         message: dict[str, Any] = {"raw": base64.urlsafe_b64encode(mime).decode("ascii")}
         if thread_id is not None:
             message["threadId"] = thread_id
-        data = await self._request("POST", "drafts", json={"message": message}, write=True)
+        data = await self._http.request(
+            "POST", "/users/me/drafts", op="create_draft", write=True, body={"message": message}
+        )
         try:
             return Draft(
                 draft_id=str(data["id"]),
@@ -621,33 +528,38 @@ class GmailConnector:
                 thread_id=str(data["message"]["threadId"]),
                 spec=spec,
             )
-        except (KeyError, TypeError):
-            raise ResultUnknown("초안 생성 응답을 해석하지 못했다") from None
+        except Exception:
+            raise ResultUnknown("Gmail create_draft 응답을 해석하지 못했다") from None
 
     async def get_draft(self, draft_id: str) -> Draft:
-        data = await self._get_resource(f"drafts/{_quote(draft_id)}")
-        message = data.get("message") or {}
-        try:
+        data = await self._get_full(f"drafts/{_quote(draft_id)}", op="get_draft")
+
+        def build(res: Mapping[str, Any]) -> Draft:
+            message = res["message"]
             return Draft(
-                draft_id=str(data["id"]),
+                draft_id=str(res["id"]),
                 message_id=str(message["id"]),
                 thread_id=str(message["threadId"]),
                 spec=_spec_from_message(message),
             )
-        except KeyError:
-            raise TransientError("Gmail 응답 형식이 올바르지 않다") from None
+
+        return _parsed(build, data)
 
     async def send_draft(self, draft_id: str) -> MailMessage:
-        data = await self._request("POST", "drafts/send", json={"id": draft_id}, write=True)
+        data = await self._http.request(
+            "POST", "/users/me/drafts/send", op="send_draft", write=True, body={"id": draft_id}
+        )
         try:
-            sent_id = str(data["id"])
-        except (KeyError, TypeError):
-            raise ResultUnknown("발송 응답을 해석하지 못했다") from None
-        try:
-            return await self.get_message(sent_id)
-        except ConnectorError:
+            return await self.get_message(str(data["id"]))
+        except Exception:
             # 발송은 끝났다. 재발송은 404이므로 호출자가 스레드 조회로 대조한다.
-            raise ResultUnknown("발송은 요청됐지만 발송된 메일을 조회하지 못했다") from None
+            raise ResultUnknown("발송은 요청됐지만 발송된 메일을 확인하지 못했다") from None
 
     async def delete_draft(self, draft_id: str) -> None:
-        await self._request("DELETE", f"drafts/{_quote(draft_id)}", write=True)
+        await self._http.request(
+            "DELETE",
+            f"/users/me/drafts/{_quote(draft_id)}",
+            op="delete_draft",
+            write=True,
+            allow_empty=True,
+        )

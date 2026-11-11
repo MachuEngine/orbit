@@ -26,6 +26,9 @@ from orbit.connectors.contracts import (
     TransientError,
 )
 from orbit.connectors.google.gmail import (
+    MAX_BODY_CHARS,
+    MAX_MIME_DEPTH,
+    TRUNCATED_MARK,
     GmailConnector,
     build_mime,
     html_to_text,
@@ -69,11 +72,11 @@ class Harness:
         async def sleep(seconds: float) -> None:
             self.sleeps.append(seconds)
 
+        client = httpx.AsyncClient(
+            base_url="https://gmail.test/gmail/v1", transport=httpx.MockTransport(record)
+        )
         self.gmail = GmailConnector(
-            self.tokens,
-            base_url="https://gmail.test/gmail/v1",
-            transport=httpx.MockTransport(record),
-            sleep=sleep,
+            self.tokens, client=client, allow_test_base_url=True, sleep=sleep
         )
 
 
@@ -366,7 +369,9 @@ async def test_gmail_400_on_search_is_invalid_query() -> None:
     [
         (err(429, "rateLimitExceeded"), RateLimited),
         (err(403, "userRateLimitExceeded"), RateLimited),
-        (err(403, "dailyLimitExceeded"), RateLimited),
+        (err(403, "dailyLimitExceeded"), ConnectorError),
+        (err(403, "forbidden"), ConnectorError),
+        (err(403, "authError"), PermissionRevoked),
         (err(403, "insufficientPermissions"), PermissionRevoked),
         (err(400, "failedPrecondition", "invalid_grant"), PermissionRevoked),
         (err(404, "notFound"), NotFound),
@@ -624,3 +629,145 @@ def test_draft_body_round_trips_exactly_with_crlf_normalization() -> None:
         },
     }
     assert parse_message(resource).body_text == body
+
+
+# ---------------------------------------------------------------- 리뷰 1차 수정
+
+
+async def test_other_403_is_plain_connector_error_with_reason_code() -> None:
+    h = Harness(lambda r: err(403, "forbidden", "비밀 문장"))
+    with pytest.raises(ConnectorError) as info:
+        await h.gmail.get_message("m1")
+    assert type(info.value) is ConnectorError
+    assert "forbidden" in info.value.message and "비밀 문장" not in info.value.message
+
+
+async def test_reason_code_is_length_limited() -> None:
+    h = Harness(lambda r: err(403, "x" * 500))
+    with pytest.raises(ConnectorError) as info:
+        await h.gmail.get_message("m1")
+    assert "x" * 50 not in info.value.message and len(info.value.message) < 100
+
+
+@pytest.mark.parametrize("op", ["create", "send", "delete"])
+async def test_write_408_is_result_unknown(op: str) -> None:
+    h = Harness(lambda r: err(408, "requestTimeout"))
+    with pytest.raises(ResultUnknown):
+        await _write(h, op)
+    assert len(h.requests) == 1
+
+
+@pytest.mark.parametrize("op", ["create", "send", "delete"])
+async def test_write_non_transport_request_error_is_result_unknown(op: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.DecodingError("x")
+
+    h = Harness(handler)
+    with pytest.raises(ResultUnknown):
+        await _write(h, op)
+    assert len(h.requests) == 1
+
+
+async def test_read_non_transport_request_error_is_transient() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.DecodingError("x")
+
+    h = Harness(handler)
+    with pytest.raises(TransientError):
+        await h.gmail.get_message("m1")
+
+
+@pytest.mark.parametrize("bad", [{"id": "m1"}, {"id": "m1", "threadId": "t1", "internalDate": []}])
+async def test_send_follow_up_parse_failure_is_result_unknown(bad: dict[str, object]) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"id": "m1", "threadId": "t1"})
+        return httpx.Response(200, json={**bad, "payload": "not-a-dict"})
+
+    h = Harness(handler)
+    with pytest.raises(ResultUnknown):
+        await h.gmail.send_draft("dr-1")
+
+
+async def test_read_parse_failure_is_transient_without_content() -> None:
+    h = Harness(lambda r: httpx.Response(200, json={"id": "m1", "payload": {"headers": "비밀"}}))
+    with pytest.raises(TransientError) as info:
+        await h.gmail.get_message("m1")
+    assert "비밀" not in info.value.message
+    h2 = Harness(lambda r: httpx.Response(200, json={"messages": [{"nope": 1}]}))
+    with pytest.raises(TransientError):
+        await h2.gmail.search_messages("hello")
+
+
+async def test_get_draft_with_malformed_message_is_transient() -> None:
+    h = Harness(lambda r: httpx.Response(200, json={"id": "dr-1", "message": {"id": "m"}}))
+    with pytest.raises(TransientError):
+        await h.gmail.get_draft("dr-1")
+
+
+class NoTokens:
+    async def access_token(self) -> str:
+        return "t"
+
+    async def refresh(self) -> str:
+        return "t"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://gmail.googleapis.com/gmail/v1",
+        "https://googleapis.com.evil.example/gmail/v1",
+        "https://evilgoogleapis.com/gmail/v1",
+        "https://gmail.googleapis.com@evil.example/gmail/v1",
+    ],
+)
+def test_base_url_must_be_googleapis_host(url: str) -> None:
+    with pytest.raises(ValueError, match="googleapis"):
+        GmailConnector(NoTokens(), base_url=url)
+
+
+def test_default_and_test_base_url_rules() -> None:
+    GmailConnector(NoTokens())
+    GmailConnector(NoTokens(), base_url="https://gmail.test/v1", allow_test_base_url=True)
+    with pytest.raises(ValueError):
+        GmailConnector(NoTokens(), client=httpx.AsyncClient(base_url="https://evil.example"))
+
+
+# ---------------------------------------------------------------- 파싱 상한
+
+
+def _nest(depth: int, leaf: dict[str, object]) -> dict[str, object]:
+    part = leaf
+    for _ in range(depth):
+        part = {"mimeType": "multipart/mixed", "parts": [part]}
+    return part
+
+
+def test_mime_depth_limit_truncates_and_marks() -> None:
+    leaf: dict[str, object] = {"mimeType": "text/plain", "body": {"data": b64("깊은 본문")}}
+    ok = parse_message(message_resource(payload=_nest(MAX_MIME_DEPTH, leaf)))
+    assert ok.body_text == "깊은 본문"
+    deep = parse_message(message_resource(payload=_nest(MAX_MIME_DEPTH + 1, leaf)))
+    assert "깊은 본문" not in deep.body_text and deep.body_text.endswith(TRUNCATED_MARK)
+
+
+def test_pathological_depth_does_not_overflow_stack() -> None:
+    leaf: dict[str, object] = {"mimeType": "text/plain", "body": {"data": b64("x")}}
+    msg = parse_message(message_resource(payload=_nest(5000, leaf)))
+    assert msg.body_text.endswith(TRUNCATED_MARK)
+
+
+def test_body_length_limit_truncates_and_marks() -> None:
+    payload = {"mimeType": "text/plain", "body": {"data": b64("가" * (MAX_BODY_CHARS + 50))}}
+    msg = parse_message(message_resource(payload=payload))
+    assert msg.body_text == "가" * MAX_BODY_CHARS + TRUNCATED_MARK
+    exact = {"mimeType": "text/plain", "body": {"data": b64("나" * MAX_BODY_CHARS)}}
+    assert parse_message(message_resource(payload=exact)).body_text == "나" * MAX_BODY_CHARS
+
+
+def test_html_body_length_limit() -> None:
+    payload = {"mimeType": "text/html", "body": {"data": b64("<p>" + "다" * (MAX_BODY_CHARS * 2))}}
+    msg = parse_message(message_resource(payload=payload))
+    assert msg.body_text.endswith(TRUNCATED_MARK)
+    assert len(msg.body_text) == MAX_BODY_CHARS + len(TRUNCATED_MARK)

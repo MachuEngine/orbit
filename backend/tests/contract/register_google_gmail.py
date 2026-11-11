@@ -11,6 +11,8 @@ from collections.abc import MutableMapping
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
+
 from orbit.connectors.contracts import MailConnector, PermissionRevoked
 from orbit.connectors.google.gmail import GmailConnector
 from orbit.connectors.sim.world import SimWorld
@@ -35,10 +37,11 @@ class _StaticTokenProvider:
 
 def _google_mock(world: SimWorld, account_id: str) -> MailConnector:
     fake = FakeGmail(world.account(account_id), now=FIXED_NOW)
+    client = httpx.AsyncClient(
+        base_url="https://gmail.mock/gmail/v1", transport=make_transport(fake)
+    )
     return GmailConnector(
-        _StaticTokenProvider(fake.valid_token),
-        base_url="https://gmail.mock/gmail/v1",
-        transport=make_transport(fake),
+        _StaticTokenProvider(fake.valid_token), client=client, allow_test_base_url=True
     )
 
 

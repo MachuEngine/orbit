@@ -36,48 +36,38 @@
 from __future__ import annotations
 
 import asyncio
-import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, time
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 import httpx
 
 from orbit.connectors.contracts import (
-    AlreadyExists,
     Attendee,
     Calendar,
     CalendarEvent,
-    ConnectorError,
     EventDraft,
     EventPatch,
-    InvalidQuery,
-    NotFound,
-    PermissionRevoked,
     PreconditionFailed,
-    RateLimited,
     ResponseStatus,
     ResultUnknown,
     TransientError,
     validate_client_event_id,
 )
+from orbit.connectors.google._http import GoogleHttp, Sleep
 from orbit.connectors.google.tokens import AccessTokenProvider
 
 DEFAULT_BASE_URL = "https://www.googleapis.com/calendar/v3"
 
-_RATE_REASONS = frozenset({"ratelimitexceeded", "userratelimitexceeded"})
-_PERMISSION_REASONS = frozenset({"insufficientpermissions"})
 _STATUS_FROM_GOOGLE: dict[str, ResponseStatus] = {
     "needsAction": "needs_action",
     "accepted": "accepted",
     "declined": "declined",
     "tentative": "tentative",
 }
-_REASON_SAFE = re.compile(r"[A-Za-z0-9_]{1,40}")
 _PAGE_SIZE = 250
 _MAX_PAGES = 40  # 끝없는 순회 방지(최대 10,000건)
-_MAX_AUTO_RETRY_AFTER_S = 2.0
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -203,81 +193,7 @@ def _attendees_body(
     return body
 
 
-# ---------------------------------------------------------------- 오류 변환
-
-
-def _error_reason(resp: httpx.Response) -> str:
-    """Google 오류 본문의 이유 코드만 꺼낸다. 메시지 본문은 일정 내용을 담을 수 있어 쓰지 않는다."""
-    try:
-        body = resp.json()
-    except ValueError:
-        return ""
-    if not isinstance(body, dict):
-        return ""
-    err = body.get("error")
-    if isinstance(err, str):  # OAuth 형식: {"error": "invalid_grant"}
-        return err
-    if isinstance(err, dict):
-        errors = err.get("errors")
-        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
-            return str(errors[0].get("reason", ""))
-        return str(err.get("status", ""))
-    return ""
-
-
-def _safe(reason: str) -> str:
-    return reason if _REASON_SAFE.fullmatch(reason) else "unknown"
-
-
-def _retry_after(resp: httpx.Response) -> float | None:
-    raw = resp.headers.get("Retry-After")
-    if raw is None:
-        return None
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        return None
-
-
-def _http_error(
-    resp: httpx.Response, *, op: str, write: bool, creating: bool, query: bool
-) -> ConnectorError:
-    status = resp.status_code
-    reason = _error_reason(resp)
-    key = reason.casefold()
-    note = f"Google Calendar {op} 실패: HTTP {status}, reason={_safe(reason)}"
-    if key == "invalid_grant" or status == 401:
-        return PermissionRevoked(note)
-    if status == 429 or (status == 403 and key in _RATE_REASONS):
-        return RateLimited(retry_after_s=_retry_after(resp), message=note)
-    if status == 403 and key in _PERMISSION_REASONS:
-        return PermissionRevoked(note)
-    if status in (404, 410):
-        return NotFound(note)
-    if status == 409 and creating:
-        return AlreadyExists(note)
-    if status == 412:
-        return PreconditionFailed(note)
-    if status == 400 and query:
-        return InvalidQuery(note)
-    if status == 408 and write:
-        return ResultUnknown(note)
-    if status >= 500:
-        return ResultUnknown(note) if write else TransientError(note)
-    return ConnectorError(note)
-
-
 # ---------------------------------------------------------------- 커넥터
-
-
-def _check_base_url(base_url: str) -> None:
-    parts = urlsplit(base_url)
-    host = parts.hostname or ""
-    if parts.scheme != "https" or not host.endswith(".googleapis.com"):
-        raise ValueError("base_url은 https://*.googleapis.com 이어야 한다")
-
-
-Sleep = Callable[[float], Awaitable[None]]
 
 
 class GoogleCalendarConnector:
@@ -298,33 +214,19 @@ class GoogleCalendarConnector:
         read_retries: int = 2,
         sleep: Sleep = asyncio.sleep,
     ) -> None:
-        # 액세스 토큰을 실어 보내는 곳이므로 Google 호스트만 허용한다. 테스트만 명시적으로 푼다.
-        # 클라이언트를 주입하면 그 클라이언트의 주소를 검사할 수 없으므로 같은 명시가 필요하다.
-        if not allow_test_base_url:
-            if client is not None:
-                raise ValueError("client 주입은 allow_test_base_url=True일 때만 쓸 수 있다")
-            _check_base_url(base_url)
-        self._tokens = tokens
-        self._client = client or httpx.AsyncClient(base_url=base_url, timeout=timeout_s)
-        self._owns_client = client is None
-        self._read_retries = read_retries
-        self._sleep = sleep
+        self._http = GoogleHttp(
+            tokens,
+            service="Google Calendar",
+            base_url=base_url,
+            client=client,
+            allow_test_base_url=allow_test_base_url,
+            timeout_s=timeout_s,
+            read_retries=read_retries,
+            sleep=sleep,
+        )
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
-
-    # ---- HTTP
-
-    async def _token(self, *, refresh: bool) -> str:
-        try:
-            return await (self._tokens.refresh() if refresh else self._tokens.access_token())
-        except PermissionRevoked:
-            raise
-        except Exception:
-            if refresh:
-                raise PermissionRevoked("토큰을 새로 받지 못했다") from None
-            raise TransientError("액세스 토큰을 받지 못했다") from None
+        await self._http.aclose()
 
     async def _request(
         self,
@@ -339,62 +241,17 @@ class GoogleCalendarConnector:
         creating: bool = False,
         query: bool = False,
     ) -> dict[str, Any]:
-        token = await self._token(refresh=False)
-        refreshed = False
-        attempt = 0
-        while True:
-            headers = {"Authorization": f"Bearer {token}"}
-            if if_match is not None:
-                headers["If-Match"] = if_match
-            try:
-                resp = await self._client.request(
-                    method, path, params=params, json=body, headers=headers
-                )
-            except httpx.TransportError as exc:
-                err = self._transport_error(exc, op=op, write=write)
-                if not write and attempt < self._read_retries:
-                    await self._sleep(0.2 * 2.0**attempt)
-                    attempt += 1
-                    continue
-                raise err from None
-            if resp.status_code == 401 and not refreshed:
-                refreshed = True
-                token = await self._token(refresh=True)
-                continue
-            if resp.is_success:
-                try:
-                    data = resp.json()
-                    if not isinstance(data, dict):
-                        raise ValueError  # noqa: TRY301
-                except ValueError:
-                    note = f"Google Calendar {op} 응답을 읽을 수 없다"
-                    raise (ResultUnknown(note) if write else TransientError(note)) from None
-                return data
-            err = _http_error(resp, op=op, write=write, creating=creating, query=query)
-            if not write and attempt < self._read_retries:
-                delay = self._auto_retry_delay(err, attempt)
-                if delay is not None:
-                    await self._sleep(delay)
-                    attempt += 1
-                    continue
-            raise err
-
-    @staticmethod
-    def _auto_retry_delay(err: ConnectorError, attempt: int) -> float | None:
-        if isinstance(err, TransientError):
-            return 0.2 * 2.0**attempt
-        if isinstance(err, RateLimited):
-            wait: float = err.retry_after_s if err.retry_after_s is not None else 0.5
-            return wait if wait <= _MAX_AUTO_RETRY_AFTER_S else None
-        return None
-
-    @staticmethod
-    def _transport_error(exc: httpx.TransportError, *, op: str, write: bool) -> ConnectorError:
-        before_send = isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout | httpx.PoolTimeout)
-        kind = type(exc).__name__
-        if write and not before_send:
-            return ResultUnknown(f"Google Calendar {op} 요청 뒤 연결 오류({kind}), 결과를 모른다")
-        return TransientError(f"Google Calendar {op} 연결 오류({kind})")
+        return await self._http.request(
+            method,
+            path,
+            op=op,
+            write=write,
+            params=params,
+            body=body,
+            extra_headers={"If-Match": if_match} if if_match is not None else None,
+            creating=creating,
+            query=query,
+        )
 
     @staticmethod
     def _cal(calendar_id: str) -> str:

@@ -47,6 +47,36 @@
 | 답장 스레드 | `threadId`를 주면 그 스레드에 붙는다 | `In-Reply-To`·`References`와 `threadId`를 함께 줄 때 Gmail이 스레드를 그대로 쓰는지(제목이 다를 때도) |
 | 오류 응답 | 모의 서버는 `{"error": {"errors": [{"reason": ...}]}}` 형식이다 | 429·403 `rateLimitExceeded`, 401, 만료·철회 때의 실제 본문. 어댑터는 사유 코드만 보고 분기한다 |
 
+## 본문 정규화 규칙 (어댑터와 실행기 공통)
+
+Gmail은 본문 줄바꿈을 CRLF로 저장하고 끝에 줄바꿈을 붙인다. 발송 결과 대조(ADR-0003, SPIKE-005)에서 초안 본문과 승인된 본문을 비교하므로 양쪽이 같은 규칙을 쓴다.
+
+- 어댑터(`parse_message`): `text/plain` 본문의 CRLF·CR을 LF로 바꾸고 끝의 줄바꿈을 모두 뗀다. 그 밖의 공백은 그대로 둔다.
+- 실행기(`orbit.actions.executor._same_draft`): 본문은 NFC 정규화, CRLF·CR을 LF로, 끝 줄바꿈 제거 후 비교한다. 제목은 양끝 공백 제거 후 NFC로 비교한다. 수신자·참조는 소문자 이메일 집합으로 비교한다.
+- 따라서 끝 줄바꿈만 다른 본문은 같은 초안으로 보고, 중간 줄바꿈·글자·앞쪽 공백이 다르면 다른 초안으로 본다.
+
+## 파싱 상한
+
+- MIME 중첩 깊이 상한은 `MAX_MIME_DEPTH`(20)다. 넘는 부분은 읽지 않는다.
+- 본문 텍스트 글자 수 상한은 `MAX_BODY_CHARS`(200,000)다. HTML은 변환 전에 입력도 4배까지만 읽는다.
+- 둘 중 하나라도 걸리면 본문을 잘라내고 끝에 `TRUNCATED_MARK`(`[... 본문이 길어 일부를 잘랐다]`)를 붙인다.
+
+## 공통 HTTP 구조
+
+Calendar·Gmail 어댑터는 `backend/src/orbit/connectors/google/_http.py`의 `GoogleHttp`를 함께 쓴다. `base_url` 검증(`https://*.googleapis.com`, 테스트만 `allow_test_base_url`), 401 갱신 후 한 번 재전송, 쓰기 결과 불명 판정, 읽기 재시도, 오류 매핑이 한 곳에 있다. 토큰 공급자 Protocol은 `google/tokens.py`의 `AccessTokenProvider` 하나다. 오류 매핑은 다음과 같다.
+
+| 응답 | 오류 |
+| --- | --- |
+| 401(갱신 후에도), `invalid_grant`, 403 `insufficientPermissions`·`authError` | `PermissionRevoked` |
+| 429, 403 `rateLimitExceeded`·`userRateLimitExceeded` | `RateLimited` |
+| 404·410 | `NotFound` |
+| 검색의 400 | `InvalidQuery` |
+| 그 밖의 403·4xx | 사유 코드(영숫자 40자 이내)를 담은 일반 `ConnectorError` |
+| 읽기의 5xx·연결 오류·`httpx.RequestError` | `TransientError` |
+| 쓰기의 408·5xx·요청 전송 뒤 오류·읽을 수 없는 성공 응답 | `ResultUnknown` |
+| 쓰기의 연결 전 실패(연결 실패, 풀 대기 초과, 토큰 공급 실패) | `TransientError` |
+| `send_draft`가 발송 성공 뒤 조회·파싱에 실패 | `ResultUnknown` |
+
 ## 어댑터의 알려진 한계
 
 - 검색 결과의 각 메시지를 `messages.get(format=full)`로 하나씩 읽는다(첨부 유무 확인용). `max_results` 상한은 100이고 호출 수가 결과 수에 비례한다.
