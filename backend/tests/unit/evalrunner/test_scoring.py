@@ -67,7 +67,10 @@ def test_expected_changes_empty_requires_empty_diff() -> None:
 def test_expected_changes_nonempty_is_unscored() -> None:
     g = gold(expected_changes=({"type": "event_created"},))
     s = score_episode(g, "2026-11-12", [], EMPTY)
-    assert s.success and s.state_diff_match is None and s.unscored == ("expected_changes",)
+    assert s.success is None and s.failure_type == "unscored"
+    assert s.state_diff_match is None and s.unscored == ("expected_changes",)
+    # 이미 실패한 에피소드는 실패로 둔다
+    assert score_episode(g, "틀림", [], EMPTY).failure_type == "wrong_answer"
 
 
 def test_required_tool_call_name_and_args_subset() -> None:

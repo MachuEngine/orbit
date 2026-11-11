@@ -38,7 +38,7 @@ class ScriptedToolSUT:
         self._max_turns = max_turns
 
     async def run(self, episode: Episode) -> EpisodeOutput:
-        dispatcher = ToolDispatcher(episode.connectors, episode.task.account_id)
+        dispatcher = ToolDispatcher(episode.connectors)
         specs = tool_specs()
         messages: list[Message] = [
             Message(role="user", content=t.content) for t in episode.task.turns
@@ -86,9 +86,13 @@ def sut_names() -> list[str]:
     return sorted(_REGISTRY)
 
 
+class UnknownSutError(ValueError):
+    pass
+
+
 def create_sut(name: str) -> SystemUnderTest:
     try:
         factory = _REGISTRY[name]
     except KeyError:
-        raise ValueError(f"알 수 없는 SUT: {name} (등록: {sut_names()})") from None
+        raise UnknownSutError(f"알 수 없는 SUT: {name} (등록: {sut_names()})") from None
     return factory()

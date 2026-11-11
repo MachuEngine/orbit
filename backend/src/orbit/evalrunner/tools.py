@@ -21,7 +21,7 @@ from orbit.connectors.contracts import (
     CalendarConnector,
     MailConnector,
 )
-from orbit.connectors.sim.factory import SimConnectorSet
+from orbit.evalrunner.episode import EpisodeConnectors
 from orbit.llm.types import ToolSpec
 
 
@@ -66,9 +66,9 @@ class ToolArgumentError(ValueError):
 
 
 class ToolDispatcher:
-    def __init__(self, connectors: SimConnectorSet, account_id: str) -> None:
-        self._mail = connectors.mail[account_id]
-        self._calendar = connectors.calendar[account_id]
+    def __init__(self, connectors: EpisodeConnectors) -> None:
+        self._mail = connectors.mail
+        self._calendar = connectors.calendar
 
     async def call(self, name: str, arguments: Mapping[str, Any]) -> Any:
         entry = _TABLE.get(name)

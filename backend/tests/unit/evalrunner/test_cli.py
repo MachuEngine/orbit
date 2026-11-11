@@ -64,9 +64,29 @@ def test_estimate_writes_separate_file(tmp_path: Path, capsys: pytest.CaptureFix
 
 
 def test_cost_cap_exit_code(tmp_path: Path) -> None:
-    assert main(_run_args(tmp_path, "c.jsonl", "--max-cost-usd", "0.0025", "--repeats", "3")) == 3
-    assert len((tmp_path / "c.jsonl").read_text(encoding="utf-8").splitlines()) == 2
+    assert main(_run_args(tmp_path, "c.jsonl", "--max-cost-usd", "0.0005", "--repeats", "3")) == 3
+    assert len((tmp_path / "c.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
 def test_unknown_sut_is_usage_error(tmp_path: Path) -> None:
     assert main(_run_args(tmp_path, "u.jsonl", "--sut", "nope")) == 2
+
+
+def test_error_output_does_not_echo_input_values(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "ds"
+    root.mkdir()
+    for name in ("manifest.json", "tasks.jsonl"):
+        (root / name).write_text((DATASET_DIR / name).read_text(encoding="utf-8"), "utf-8")
+    world = {
+        "schema_version": 1,
+        "seed": "SECRET-MARKER-XYZ",
+        "accounts": {"acct-alice": {}, "acct-bob": {}},
+    }
+    (root / "world.json").write_text(json.dumps(world), encoding="utf-8")
+    args = ["run", "--dataset", str(root), "--split", "dev", "--sut", "noop"]
+    assert main([*args, "--out", str(tmp_path / "o.jsonl")]) == 2
+    err = capsys.readouterr().err
+    assert "SECRET-MARKER-XYZ" not in err
+    assert "DatasetError" in err

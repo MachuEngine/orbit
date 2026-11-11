@@ -28,6 +28,10 @@ from typing import Any, Protocol
 
 SPLITS = ("dev", "test")
 
+# 호출 기록 요약(`orbit.connectors.sim.calls`)이 값을 가리는 규칙. 테스트가 원본과 같은지 확인한다.
+REDACTED_KEYS = frozenset({"body_text", "description", "snippet"})
+MAX_SUMMARY_STR = 80
+
 
 class DatasetError(ValueError):
     """데이터셋 파일을 읽을 수 없거나 형식이 계약과 다르다."""
@@ -153,6 +157,20 @@ def _str_list(data: Mapping[str, Any], key: str, where: str) -> tuple[str, ...]:
     return tuple(items)
 
 
+def _check_args_subset(value: Any, where: str, key: str = "") -> None:
+    """호출 기록 요약과 비교할 수 없는 값(가려진 키, 80자 초과 문자열)이면 `DatasetError`."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k in REDACTED_KEYS:
+                raise DatasetError(f"{where}: args_subset에 요약에서 가려지는 키 {k}를 쓸 수 없다")
+            _check_args_subset(v, where, str(k))
+    elif isinstance(value, list):
+        for v in value:
+            _check_args_subset(v, where, key)
+    elif isinstance(value, str) and len(value) > MAX_SUMMARY_STR:
+        raise DatasetError(f"{where}: args_subset 문자열이 {MAX_SUMMARY_STR}자를 넘는다")
+
+
 def _parse_gold(data: Mapping[str, Any], where: str) -> GoldRecord:
     facts: list[FactRecord] = []
     for i, f in enumerate(_get(data, "answer_facts", list, where)):
@@ -179,7 +197,9 @@ def _parse_gold(data: Mapping[str, Any], where: str) -> GoldRecord:
         w = f"{where}.required_tool_calls[{i}]"
         if not isinstance(c, dict):
             raise DatasetError(f"{w}: 객체가 아니다")
-        calls.append(RequiredCallRecord(_get(c, "tool", str, w), _get(c, "args_subset", dict, w)))
+        subset = _get(c, "args_subset", dict, w)
+        _check_args_subset(subset, w)
+        calls.append(RequiredCallRecord(_get(c, "tool", str, w), subset))
     return GoldRecord(
         answer_facts=tuple(facts),
         must_not_contain=must_not,
@@ -194,7 +214,7 @@ def _parse_task(data: Any, where: str) -> TaskRecord:
         raise DatasetError(f"{where}: 객체가 아니다")
     split = _get(data, "split", str, where)
     if split not in SPLITS:
-        raise DatasetError(f"{where}: split은 {SPLITS} 중 하나여야 한다: {split!r}")
+        raise DatasetError(f"{where}: split은 {SPLITS} 중 하나여야 한다")
     raw_time = _get(data, "as_of_time", str, where)
     try:
         as_of = datetime.fromisoformat(raw_time)

@@ -20,19 +20,27 @@ from typing import Any
 from orbit.connectors.contracts import ConnectorError
 from orbit.connectors.sim.factory import build_sim_connectors
 from orbit.connectors.sim.faults import FaultPlan
-from orbit.connectors.sim.world import SimWorld, diff
+from orbit.connectors.sim.world import SimWorld, SnapshotError, diff
 from orbit.core.clock import FixedClock
 from orbit.evalrunner.episode import (
     Budget,
     BudgetExceeded,
     Episode,
+    EpisodeConnectors,
     EpisodeOutput,
+    EpisodeRecordingLLM,
+    ReadOnlyClock,
     StepCounter,
+    SutTask,
+    SutTurn,
     SystemUnderTest,
 )
 from orbit.evalrunner.scoring import FailureType, score_episode
-from orbit.evalrunner.task_source import SPLITS, Dataset, TaskView
-from orbit.llm.interface import LLM, RecordingLLM, UsageRecorder
+from orbit.evalrunner.task_source import SPLITS, Dataset, DatasetError, TaskView
+from orbit.llm.interface import LLM, UsageRecorder
+from orbit.llm.scripted import ScriptedLLM
+
+UNSPECIFIED_MODEL = "unspecified"
 
 LLMFactory = Callable[[TaskView, int], LLM]
 SutFactory = Callable[[], SystemUnderTest]
@@ -91,12 +99,14 @@ def _config_dict(
     experiment_budget: ExperimentBudget,
     fault: FaultPlanSpec,
     git_sha: str,
+    git_dirty: bool,
     seed: int,
     repeats: int,
     sample: int | None,
 ) -> dict[str, Any]:
     return {
         "git_sha": git_sha,
+        "git_dirty": git_dirty,
         "dataset": f"{dataset.name}@{dataset.version}",
         "split": split,
         "sut": {"name": sut.name, "version": sut.version},
@@ -120,7 +130,7 @@ class EpisodeResult:
     task_id: str
     scenario_id: str
     repeat: int
-    success: bool
+    success: bool | None  # None: 채점하지 못한 항목이 있어 성공도 실패도 아니다
     failure_type: FailureType | None
     detail: str | None
     state_diff_match: bool | None
@@ -131,6 +141,9 @@ class EpisodeResult:
     input_tokens: int
     output_tokens: int
     cost_usd: float | None
+    models: tuple[str, ...]
+    providers: tuple[str, ...]
+    model_mismatch: bool
     latency_ms: int
 
     def to_dict(self) -> dict[str, Any]:
@@ -156,7 +169,10 @@ class EpisodeResult:
                 "input_tokens": self.input_tokens,
                 "output_tokens": self.output_tokens,
                 "cost_usd": self.cost_usd,
+                "models": list(self.models),
+                "providers": list(self.providers),
             },
+            "model_mismatch": self.model_mismatch,
             "latency_ms": self.latency_ms,
         }
 
@@ -177,6 +193,7 @@ async def run_episode(
     experiment_id: str,
     config: Mapping[str, Any],
     fingerprint: str,
+    declared_model_id: str = UNSPECIFIED_MODEL,
     monotonic: Callable[[], float] = time.perf_counter,
 ) -> EpisodeResult:
     clock = FixedClock(task.as_of_time)  # 에피소드마다 자기 시계(D1-5)
@@ -184,11 +201,21 @@ async def run_episode(
     before = world.copy()
     connectors = build_sim_connectors(world, [task.account_id], fault.plan)
     recorder = UsageRecorder()
+    recording_llm = EpisodeRecordingLLM(llm, recorder)
+    account = task.account_id
     episode = Episode(
-        task=task,
-        connectors=connectors,
-        clock=clock,
-        llm=RecordingLLM(llm, recorder),
+        # 정답(gold)과 분할·태그는 러너만 가진다. SUT에는 아래 네 필드만 준다.
+        task=SutTask(
+            task_id=task.task_id,
+            turns=tuple(SutTurn(t.role, t.content) for t in task.turns),
+            as_of_time=task.as_of_time,
+            account_id=account,
+        ),
+        connectors=EpisodeConnectors(
+            mail=connectors.mail[account], calendar=connectors.calendar[account]
+        ),
+        clock=ReadOnlyClock(clock),
+        llm=recording_llm,
         budget=budget,
         steps=StepCounter(budget, recorder, monotonic=monotonic),
     )
@@ -201,7 +228,7 @@ async def run_episode(
     try:
         async with timeout:
             result = await sut.run(episode)
-        if isinstance(result, EpisodeOutput):
+        if isinstance(result, EpisodeOutput) and isinstance(result.final_text, str):
             output = result
         else:
             error_type, detail = "sut_error", "InvalidOutput"
@@ -231,12 +258,23 @@ async def run_episode(
         task.gold, output.final_text if output is not None else "", calls, diff(before, world)
     )
     failure: FailureType | None
-    if score.failure_type == "forbidden_tool":  # 안전 위반은 오류·예산 초과에 가려지지 않는다
-        failure, detail = "forbidden_tool", None
+    if score.failure_type in ("forbidden_tool", "unexpected_state_change"):
+        # 안전 위반은 오류·예산 초과에 가려지지 않는다
+        failure, detail = score.failure_type, None
     elif error_type is not None:
         failure = error_type
     else:
         failure = score.failure_type
+    recorded = recorder.total_cost_usd
+    # 취소된 호출의 비용은 알 수 없다. 합계가 있어도 과소 집계이므로 None으로 둔다.
+    cost = None if recording_llm.cancelled or recorded is None else float(recorded)
+    models = tuple(sorted({r.model_id for r in recorder.records if r.model_id}))
+    providers = tuple(sorted({r.provider for r in recorder.records if r.provider}))
+    mismatch = (
+        declared_model_id != UNSPECIFIED_MODEL
+        and bool(models)
+        and set(models) != {declared_model_id}
+    )
     checks: Mapping[str, bool | None] = score.checks
     if error_type is not None:  # 응답이 없으면 응답·호출 검사는 의미가 없다
         checks = {
@@ -250,7 +288,7 @@ async def run_episode(
         task_id=task.task_id,
         scenario_id=task.scenario_id,
         repeat=repeat,
-        success=failure is None,
+        success=None if failure == "unscored" else failure is None,
         failure_type=failure,
         detail=detail if failure == error_type else None,
         state_diff_match=score.state_diff_match,
@@ -260,7 +298,10 @@ async def run_episode(
         llm_calls=len(recorder.records),
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
-        cost_usd=float(c) if (c := recorder.total_cost_usd) is not None else None,
+        cost_usd=cost,
+        models=models,
+        providers=providers,
+        model_mismatch=mismatch,
         latency_ms=latency_ms,
     )
 
@@ -308,13 +349,15 @@ async def run_experiment(
     model_id: str = "unspecified",
     prompt_version: str = "unspecified",
     git_sha: str = "unknown",
+    git_dirty: bool = True,  # git 상태를 모르면 깨끗하다고 가정하지 않는다
     experiment_id: str | None = None,
     allow_sealed_test: bool = False,
     sink: ResultSink | None = None,
     monotonic: Callable[[], float] = time.perf_counter,
 ) -> ExperimentSummary:
-    """과제 x 반복을 순서대로 실행한다. 결과는 끝날 때마다 `sink`로 넘기고 요약에도 모은다.
-
+    """반복 우선(1회차 전 과제 -> 2회차 ...)으로 실행한다. 과제 순서는 실험 시드로 고정 셔플해
+    순서 편향(누적 상한 중단 시 특정 과제만 남는 문제)을 줄인다. 결과는 끝날 때마다 `sink`로 넘기고
+    요약에도 모은다.
 
     SUT는 에피소드마다 `sut_factory()`로 새로 만들고, LLM은 `llm_factory(task, repeat)`로
     새로 받는다(에피소드 간 상태 공유 없음).
@@ -332,10 +375,15 @@ async def run_experiment(
     tasks = select_tasks(dataset.tasks_for(split), sample, seed)
     if not tasks:
         raise ValueError(f"{split} 분할에 과제가 없다")
-    base_world = SimWorld.load(dict(dataset.world_snapshot), FixedClock(tasks[0].as_of_time))
+    try:
+        base_world = SimWorld.load(dict(dataset.world_snapshot), FixedClock(tasks[0].as_of_time))
+    except SnapshotError as exc:  # pydantic 오류 메시지에는 입력값이 들어 있을 수 있다
+        raise DatasetError("world.json이 Sim 스냅샷 v1 형식과 맞지 않는다") from exc
     for account in {t.account_id for t in tasks}:  # FaultPlan 오타를 실행 전에 드러낸다
         build_sim_connectors(base_world.fork(0), [account], fault.plan)
 
+    if model_id == UNSPECIFIED_MODEL and not isinstance(llm_factory(tasks[0], 1), ScriptedLLM):
+        raise ValueError("ScriptedLLM이 아닌 LLM에는 --model-id(고정 모델 ID)를 지정해야 한다")
     probe = sut_factory()
     config = _config_dict(
         dataset=dataset,
@@ -347,6 +395,7 @@ async def run_experiment(
         experiment_budget=experiment_budget,
         fault=fault,
         git_sha=git_sha,
+        git_dirty=git_dirty,
         seed=seed,
         repeats=repeats,
         sample=sample,
@@ -355,8 +404,10 @@ async def run_experiment(
     exp_id = experiment_id or f"exp-{fingerprint[:12]}"
     summary = ExperimentSummary(exp_id, fingerprint, len(tasks) * repeats)
 
-    for task in tasks:
-        for repeat in range(1, repeats + 1):
+    ordered = sorted(tasks, key=lambda t: t.task_id)
+    random.Random(f"order:{seed}").shuffle(ordered)  # noqa: S311
+    for repeat in range(1, repeats + 1):
+        for task in ordered:
             result = await run_episode(
                 task=task,
                 base_world=base_world,
@@ -369,6 +420,7 @@ async def run_experiment(
                 experiment_id=exp_id,
                 config=config,
                 fingerprint=fingerprint,
+                declared_model_id=model_id,
                 monotonic=monotonic,
             )
             summary.results.append(result)

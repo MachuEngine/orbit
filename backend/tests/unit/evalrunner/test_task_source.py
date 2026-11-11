@@ -80,3 +80,23 @@ def test_rejects_duplicate_task_id(tmp_path: Path) -> None:
     (root / "tasks.jsonl").write_text(line + "\n" + line + "\n", "utf-8")
     with pytest.raises(DatasetError, match="중복"):
         load_dataset(root)
+
+
+def test_args_subset_must_be_comparable_with_call_summary(tmp_path: Path) -> None:
+    root = _copy(tmp_path)
+    for bad in ({"body_text": "x"}, {"draft": {"description": "x"}}, {"query": "가" * 81}):
+        task = _first_task(root)
+        gold = task["gold"]
+        assert isinstance(gold, dict)
+        gold["required_tool_calls"] = [{"tool": "create_draft", "args_subset": bad}]
+        _write_task(root, task)
+        with pytest.raises(DatasetError, match="args_subset"):
+            load_dataset(root)
+
+
+def test_summary_constants_match_call_log() -> None:
+    from orbit.connectors.sim import calls
+    from orbit.evalrunner import task_source
+
+    assert task_source.REDACTED_KEYS == calls._REDACTED_KEYS
+    assert task_source.MAX_SUMMARY_STR == calls._MAX_STR

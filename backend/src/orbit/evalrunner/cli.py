@@ -28,24 +28,34 @@ from orbit.evalrunner.runner import (
     estimate_experiment,
     run_experiment,
 )
-from orbit.evalrunner.suts import create_sut, sut_names
+from orbit.evalrunner.suts import UnknownSutError, create_sut, sut_names
 from orbit.evalrunner.task_source import DatasetError, load_dataset
 
 SEAL_FLAG = "--i-understand-this-uses-the-sealed-test-split"
 
 
-def _git_sha() -> str:
+def _git(*args: str) -> str | None:
     try:
         out = subprocess.run(  # noqa: S603
-            ["git", "rev-parse", "HEAD"],  # noqa: S607
+            ["git", *args],  # noqa: S607
             capture_output=True,
             text=True,
             check=True,
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    return out.stdout.strip() or "unknown"
+        return None
+    return out.stdout
+
+
+def _git_state() -> tuple[str, bool]:
+    """(HEAD SHA, 작업 트리에 추적 파일 변경이 있는가). git을 쓸 수 없으면 ("unknown", True).
+
+    추적하지 않는 파일(결과 출력 디렉터리 등)은 변경으로 보지 않는다.
+    """
+    sha = (_git("rev-parse", "HEAD") or "").strip() or "unknown"
+    status = _git("status", "--porcelain", "--untracked-files=no")
+    return sha, status is None or bool(status.strip())
 
 
 def _load_fault_plan(path: str | None) -> FaultPlanSpec:
@@ -87,6 +97,10 @@ def _parser() -> argparse.ArgumentParser:
     st = sub.add_parser("stats", help="결과 JSONL 통계")
     st.add_argument("results")
     st.add_argument("--compare", default=None, help="짝지은 차이를 낼 다른 결과 (a - b, a가 첫째)")
+    st.add_argument("--include-incomplete", action="store_true", help="반복이 부족한 과제도 포함")
+    st.add_argument(
+        "--reject-model-mismatch", action="store_true", help="선언 모델과 실제 모델이 다르면 거부"
+    )
     st.add_argument("--resamples", type=int, default=stats.DEFAULT_RESAMPLES)
     st.add_argument("--seed", type=int, default=stats.DEFAULT_SEED)
     return p
@@ -102,6 +116,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"이미 있는 파일에는 쓰지 않는다: {sink_path}", file=sys.stderr)
         return 2
     llm_factory = load_script(args.llm_script) if args.llm_script else scripted_llm_factory({})
+    sha, dirty = _git_state()  # 출력 파일을 만들기 전에 읽는다
     common: dict[str, Any] = {
         "split": args.split,
         "sut_factory": lambda: create_sut(args.sut),
@@ -112,7 +127,8 @@ def _run(args: argparse.Namespace) -> int:
         "fault": _load_fault_plan(args.fault_plan),
         "model_id": args.model_id,
         "prompt_version": args.prompt_version,
-        "git_sha": _git_sha(),
+        "git_sha": sha,
+        "git_dirty": dirty,
         "experiment_id": args.experiment_id,
         "allow_sealed_test": args.allow_test,
     }
@@ -153,16 +169,23 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _stats(args: argparse.Namespace) -> int:
-    records = stats.load_results(args.results)
-    kw = {"resamples": args.resamples, "seed": args.seed}
+    reject = args.reject_model_mismatch
+    records = stats.load_results(args.results, reject_model_mismatch=reject)
+    kw = {
+        "resamples": args.resamples,
+        "seed": args.seed,
+        "include_incomplete": args.include_incomplete,
+    }
     rate = stats.success_rate(records, **kw)
     report: dict[str, Any] = {
         "success_rate": rate.__dict__,
         "pass_k": stats.pass_k(records).__dict__,
         "failure_distribution": stats.failure_distribution(records),
+        "state_diff_mismatch_episodes": stats.state_diff_mismatch_count(records),
+        "model_mismatch_episodes": stats.model_mismatch_count(records),
     }
     if args.compare:
-        other = stats.load_results(args.compare)
+        other = stats.load_results(args.compare, reject_model_mismatch=reject)
         report["paired_difference_a_minus_b"] = stats.paired_difference(
             records, other, **kw
         ).__dict__
@@ -177,6 +200,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SealedSplitError:
         print(f"test 분할은 봉인돼 있다. 실행하려면 {SEAL_FLAG}를 명시한다.", file=sys.stderr)
         return 2
-    except (DatasetError, stats.ResultsError, ValueError, OSError) as exc:
-        print(f"오류: {exc}", file=sys.stderr)
+    except (DatasetError, stats.ResultsError, UnknownSutError) as exc:
+        # 이 예외들의 메시지는 위치·이름만 담도록 직접 만든 것이다.
+        print(f"오류: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+    except (ValueError, OSError) as exc:
+        # 외부 라이브러리 오류(pydantic 등)의 메시지에는 입력 원문이 들어갈 수 있어 이름만 쓴다.
+        print(f"오류: {type(exc).__name__}", file=sys.stderr)
         return 2

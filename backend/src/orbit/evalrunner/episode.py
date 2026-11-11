@@ -4,15 +4,17 @@
 `UsageRecorder`에서 직접 읽는다. `EpisodeOutput`은 최종 응답만 담는다.
 """
 
+import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal, Protocol
 
-from orbit.connectors.sim.factory import SimConnectorSet
+from orbit.connectors.contracts import CalendarConnector, MailConnector
 from orbit.core.clock import Clock
-from orbit.evalrunner.task_source import TaskView
-from orbit.llm.interface import RecordingLLM, UsageRecorder
+from orbit.llm.interface import LLM, RecordingLLM, UsageRecord, UsageRecorder
+from orbit.llm.types import LLMRequest, LLMResponse
 
 
 @dataclass(frozen=True)
@@ -74,12 +76,81 @@ class StepCounter:
 
 
 @dataclass(frozen=True)
-class Episode:
-    """에피소드 하나에 평가 대상이 쓸 수 있는 것. FaultPlan은 숨긴다(커넥터 안에서만 작동)."""
+class SutTask:
+    """평가 대상에게 보이는 과제. 정답(`gold`)과 채점 단서, 분할·태그·난이도는 없다."""
 
-    task: TaskView
-    connectors: SimConnectorSet  # 과제 계정 하나의 메일·캘린더 커넥터
-    clock: Clock  # 과제 `as_of_time`에 고정된 에피소드 전용 시계
+    task_id: str
+    turns: tuple["SutTurn", ...]
+    as_of_time: datetime
+    account_id: str
+
+
+@dataclass(frozen=True)
+class SutTurn:
+    role: str
+    content: str
+
+
+class ReadOnlyClock:
+    """`now()`만 있는 시계. 평가 대상이 시각을 옮기지 못하게 한다."""
+
+    def __init__(self, inner: Clock) -> None:
+        self._now = inner.now
+
+    def now(self) -> datetime:
+        return self._now()
+
+
+@dataclass(frozen=True)
+class EpisodeConnectors:
+    """과제 계정 하나의 메일·캘린더 커넥터. 런타임·호출 기록·FaultPlan은 노출하지 않는다."""
+
+    mail: MailConnector
+    calendar: CalendarConnector
+
+
+class EpisodeRecordingLLM(RecordingLLM):
+    """`RecordingLLM`에 더해, 취소(시간 초과)된 진행 중 호출을 "취소됨, 비용 미상"으로 남긴다.
+
+    취소된 호출은 토큰과 비용을 알 수 없다. `cancelled`가 0보다 크면 러너가 에피소드 비용을
+    `None`으로 기록해 누적 비용 상한이 토큰 상한 대체 경로를 타게 한다.
+    """
+
+    def __init__(self, inner: LLM, recorder: UsageRecorder) -> None:
+        super().__init__(inner, recorder)
+        self._rec = recorder
+        self.cancelled = 0
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        try:
+            return await super().complete(request)
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                self.cancelled += 1
+                self._rec.record(
+                    UsageRecord(
+                        purpose=request.purpose,
+                        model_id=None,
+                        provider=None,
+                        input_tokens=0,
+                        output_tokens=0,
+                        cached_input_tokens=0,
+                        cost_usd=None,
+                        latency_ms=None,
+                        retries=0,
+                        error_type="Cancelled",
+                    )
+                )
+            raise
+
+
+@dataclass(frozen=True)
+class Episode:
+    """에피소드 하나에 평가 대상이 쓸 수 있는 것. 정답·FaultPlan·호출 기록은 숨긴다."""
+
+    task: SutTask
+    connectors: EpisodeConnectors
+    clock: Clock  # 과제 `as_of_time`에 고정된 읽기 전용 시계
     llm: RecordingLLM
     budget: Budget
     steps: StepCounter

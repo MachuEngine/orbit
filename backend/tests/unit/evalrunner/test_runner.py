@@ -33,7 +33,11 @@ async def test_all_correct_succeeds(dataset: Dataset) -> None:
     summary = await run(dataset, repeats=2)
     assert summary.completed
     assert len(summary.results) == 8  # dev 과제 4개 x 2회. test 과제는 실행하지 않는다
-    assert all(r.success and r.failure_type is None for r in summary.results)
+    for r in summary.results:
+        if r.task_id == "t-005":  # 비어 있지 않은 expected_changes: 채점 불가
+            assert (r.success, r.failure_type) == (None, "unscored")
+        else:
+            assert (r.success, r.failure_type) == (True, None)
     t1 = by_task(summary, "t-001")[0]
     assert t1.trajectory == ("list_events",)
     assert (t1.llm_calls, t1.input_tokens, t1.output_tokens) == (2, 20, 10)
@@ -41,10 +45,13 @@ async def test_all_correct_succeeds(dataset: Dataset) -> None:
     assert t1.state_diff_match is True
 
 
-async def test_nonempty_expected_changes_is_unscored_not_failed(dataset: Dataset) -> None:
+async def test_nonempty_expected_changes_is_unscored_neither_success_nor_failure(
+    dataset: Dataset,
+) -> None:
     summary = await run(dataset, repeats=1)
     t5 = by_task(summary, "t-005")[0]
-    assert t5.success
+    assert t5.success is None
+    assert t5.failure_type == "unscored"
     assert t5.unscored == ("expected_changes",)
     assert t5.state_diff_match is None
 
@@ -317,7 +324,7 @@ async def test_each_episode_has_own_fixed_clock_and_forked_world(dataset: Datase
 
         async def run(self, episode: Episode) -> EpisodeOutput:
             seen.append((episode.clock.now(), episode.task.as_of_time, episode.clock))
-            created = await episode.connectors.calendar["acct-alice"].list_calendars()
+            created = await episode.connectors.calendar.list_calendars()
             assert created
             return EpisodeOutput(final_text="안녕")
 
@@ -371,23 +378,26 @@ async def test_fingerprint_changes_with_config(dataset: Dataset) -> None:
 
 
 async def test_result_schema(dataset: Dataset) -> None:
-    summary = await run(dataset, repeats=1, model_id="m-1", prompt_version="p-1")
+    summary = await run(dataset, repeats=1, model_id=SCRIPTED_MODEL_ID, prompt_version="p-1")
     row = json.loads(summary.results[0].to_json_line())
     assert set(row) >= {
         "experiment_id", "config", "config_fingerprint", "task_id", "repeat", "outcome",
         "state_diff_match", "approval_violations", "trajectory", "usage", "latency_ms",
     }  # fmt: skip
     assert set(row["outcome"]) >= {"success", "failure_type"}
-    assert set(row["usage"]) == {"llm_calls", "input_tokens", "output_tokens", "cost_usd"}
+    assert set(row["usage"]) == {
+        "llm_calls", "input_tokens", "output_tokens", "cost_usd", "models", "providers",
+    }  # fmt: skip
+    assert row["model_mismatch"] is False
+    assert row["config"]["git_dirty"] is True  # 라이브러리 기본값: git 상태를 모르면 더럽다고 본다
     assert row["approval_violations"] == 0
     cfg = row["config"]
     assert cfg["git_sha"] == "test-sha"
     assert cfg["dataset"] == "mini-eval@0.1.0" and cfg["split"] == "dev"
     assert cfg["sut"] == {"name": "scripted_tool", "version": "0"}
-    assert cfg["model_id"] == "m-1" and cfg["prompt_version"] == "p-1"
+    assert cfg["model_id"] == SCRIPTED_MODEL_ID and cfg["prompt_version"] == "p-1"
     assert cfg["fault_plan"] == "none"
     assert cfg["budget"] == Budget().to_dict()
-    assert SCRIPTED_MODEL_ID not in json.dumps(row)  # 설정의 model_id는 선언값이다
 
 
 async def test_results_do_not_store_prompt_or_response_text(dataset: Dataset) -> None:
@@ -411,10 +421,10 @@ async def test_test_split_is_sealed(dataset: Dataset) -> None:
 
 
 async def test_cost_cap_stops_experiment(dataset: Dataset) -> None:
-    # 에피소드당 0.002 USD. 두 번째 에피소드 뒤 0.004 > 0.0025
-    summary = await run(dataset, repeats=3, experiment_budget=ExperimentBudget(max_cost_usd=0.0025))
+    # 모든 에피소드가 0.001 USD 이상이므로 첫 에피소드 뒤 상한(0.0005)을 넘는다
+    summary = await run(dataset, repeats=3, experiment_budget=ExperimentBudget(max_cost_usd=0.0005))
     assert summary.stopped_reason == "cost_cap"
-    assert len(summary.results) == 2
+    assert len(summary.results) == 1
     assert summary.episodes_planned == 12
 
 
@@ -424,11 +434,11 @@ async def test_token_cap_replaces_cost_cap_when_cost_unknown(dataset: Dataset) -
         dataset,
         script,
         repeats=3,
-        experiment_budget=ExperimentBudget(max_cost_usd=1.0, max_tokens=50),
+        experiment_budget=ExperimentBudget(max_cost_usd=1.0, max_tokens=10),
     )
-    # 에피소드당 30토큰: 두 번째 에피소드 뒤 60 > 50
+    # 에피소드당 15토큰 이상이므로 첫 에피소드 뒤 15 > 10
     assert summary.stopped_reason == "token_cap"
-    assert len(summary.results) == 2
+    assert len(summary.results) == 1
     assert all(r.cost_usd is None for r in summary.results)
 
 
