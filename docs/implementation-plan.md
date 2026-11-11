@@ -63,6 +63,15 @@
 
 완료 조건: 같은 설정으로 다시 돌리면 같은 범위의 결과가 나온다. 모델이 고정된다.
 
+진행(2026-11-11, 브랜치 `stage-3/eval-foundation`)
+- 3a `orbit.llm`: 내부 LLM 인터페이스, `ScriptedLLM`, `OpenRouterLLM`(제공자 라우팅 고정, 실제 응답 모델 검증, 비용 미상 표시). 완료.
+- 3b `orbit.evaldata`: 시나리오 우선 생성기, 세계 모델 `eval/worlds/orbit-v0.toml`(TOML), 데이터셋 `eval/datasets/orbit-eval/v0`(과제 60개, dev 36 / test 24, 근거 공유 묶음 15개). 정답은 구조화된 답(ADR-0010), dev와 test는 근거 일정·메일을 공유하지 않는다. 완료, **사람 검수 대기**.
+- 3c `orbit.evalrunner`: 에피소드 실행, 구조화된 답 채점(텍스트 사실은 보조 지표), 결과 JSONL·설정 지문, 반복 우선 실행, 클러스터 bootstrap 신뢰구간·paired 차이·pass^k, 예산 상한, test 봉인. 완료.
+- 3d `orbit.assistant`: 읽기 전용 비서 경로(ADR-0011). 작업 집합 핸들, 읽기 도구 4개 + `submit_answer`, 외부 콘텐츠 표지, 프롬프트 `assistant-v0.2`, 온도 0. `ScriptedLLM`으로만 검증했다. 완료.
+- 3e 모델 파일럿: OpenRouter API 키(개발자)와 데이터 검수 후 진행.
+
+알려진 한계(v0): test 묶음이 9개라 신뢰구간이 불안정하다. 취소 제외·일정 변경 과제는 캘린더가 최신 상태라 메일 이해보다 도구 사용을 잰다. 텍스트 답 품질은 성공 판정에 들어가지 않는다. 공개 저장소라 test 정답을 누구나 볼 수 있다.
+
 ### 4단계. Run 실행과 승인 (쓰기 경로)
 1. `run`·`approval`·`execution`·`run_event` 테이블
 2. Procrastinate 워커, 멈춘 작업 복구 주기 작업
