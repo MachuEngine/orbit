@@ -5,25 +5,27 @@
 대조한다. 자동 재호출은 중복이 구조적으로 불가능한 표의 "1회 재호출"뿐이다.
 판단할 수 없으면 `needs_user`다.
 
+소유권: 실행기는 실행마다 고유 owner를 만들고 `begin`(새 행)·`claim`(기존 행)으로 lease를 얻는다.
+`claim`에 실패하면 외부 호출 없이 현재 기록을 돌려준다. `record_ref`·`finish`가 `False`면
+소유권을 잃은 것이므로 이후 외부 호출을 하지 않는다. 프로세스 안팎 동시 실행을 lease로 일원화한다.
+
 판단 기록:
-- 만료는 `execution` 행이 아직 없을 때만 검사한다. 행이 이미 있으면(크래시 뒤 재진입) 만료돼도
-  대조를 끝내야 하므로 만료로 거절하지 않는다. 승인 상태·해시 검사는 항상 한다.
+- 승인이 만료됐거나 `approved`가 아닌 상태에서 `execution` 행이 없으면 거절한다. 행이 이미 있는
+  재진입이면 시도 표식(`attempted`, `before_version`, `draft_attempted`·`draft_id`)이 없을 때만
+  외부 호출 없이 `failed`(`expired`·`not_approved`)로 끝내고, 표식이 있으면 대조만 한다
+  (대조 결과의 1회 재호출 포함). 해시 불일치는 항상 거절한다.
 - 대조 중 읽기 호출이 `ResultUnknown` 말고 다른 오류로 실패하면(일시 오류 등) 결론을 내리지 않고
-  `unknown`으로 기록한다. 다음 재진입에서 다시 대조한다.
+  `unknown`으로 기록한다(소유권도 놓는다). 다음 재진입에서 다시 대조한다.
 - 일정 생성 대조는 요청한 참석자가 현재 일정에 모두 있으면 같은 내용으로 본다(주최자 자동 추가 등
   제공자가 붙이는 참석자를 허용하기 위함).
-- 같은 프로세스에서 같은 승인을 동시에 실행하면 승인 ID별 잠금으로 직렬화한다. 한쪽이 끝난 뒤 다른
-  쪽은 종료된 행을 그대로 돌려받는다. 프로세스 사이 중복은 4C 워커와 DB(`begin`의 유일 제약) 몫이다.
 - 오류 종류는 예외 클래스 이름만 `error_kind`에 남긴다. 메시지·본문·주소는 기록하지 않는다.
 """
 
-import asyncio
 import dataclasses
 import unicodedata
 import uuid
-import weakref
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from orbit.actions.hashing import args_hash, normalize_email
@@ -81,12 +83,17 @@ class ApprovalRejected(Exception):  # noqa: N818
 # ---------------------------------------------------------------- 공통
 
 
+class _Lost(Exception):  # noqa: N818
+    """소유권을 잃었다. 이후 외부 호출을 하지 않고 현재 기록을 돌려준다."""
+
+
 class _Run:
     """한 번의 실행 상태. `ref`는 `external_ref`의 로컬 사본이고 기록할 때 통째로 저장한다."""
 
-    def __init__(self, store: ExecutionStore, record: ExecutionRecord) -> None:
+    def __init__(self, store: ExecutionStore, record: ExecutionRecord, owner: uuid.UUID) -> None:
         self.store = store
         self.record = record
+        self.owner = owner
         self.ref: dict[str, Any] = dict(record.external_ref)
 
     @property
@@ -95,21 +102,31 @@ class _Run:
 
     async def save_ref(self, **updates: Any) -> None:
         self.ref.update(updates)
-        await self.store.record_ref(self.record.id, dict(self.ref))
+        if not await self.store.record_ref(self.record.id, self.owner, dict(self.ref)):
+            raise _Lost
 
     async def end(
-        self, status: str, error: Exception | None = None, **ref_updates: Any
+        self, status: str, error: Exception | str | None = None, **ref_updates: Any
     ) -> ExecutionRecord:
         self.ref.update(ref_updates)
-        kind = None if error is None else type(error).__name__
-        await self.store.finish(self.record.id, status, dict(self.ref), kind)
+        kind = error if isinstance(error, str) or error is None else type(error).__name__
+        if not await self.store.finish(self.record.id, self.owner, status, dict(self.ref), kind):
+            raise _Lost
         self.record = dataclasses.replace(
             self.record, status=status, external_ref=dict(self.ref), error_kind=kind
         )
         return self.record
 
 
-_locks: weakref.WeakValueDictionary[uuid.UUID, asyncio.Lock] = weakref.WeakValueDictionary()
+def _attempted(ref: dict[str, Any], action: WriteAction) -> bool:
+    """첫 외부 쓰기 호출을 시도했을 수 있는가(호출 직전에 기록하는 표식)."""
+    match action:
+        case CreateEvent():
+            return bool(ref.get("attempted"))
+        case UpdateEventTime() | CancelEvent():
+            return "before_version" in ref
+        case SendMail():
+            return bool(ref.get("draft_attempted")) or "draft_id" in ref
 
 
 async def execute_approved(
@@ -120,45 +137,53 @@ async def execute_approved(
     mail: MailConnector,
     store: ExecutionStore,
     clock: Clock,
+    lease_duration: timedelta = timedelta(minutes=5),
 ) -> ExecutionRecord:
-    if approval.status == "expired":
-        raise ApprovalRejected("expired")
-    if approval.status != "approved":
-        raise ApprovalRejected("not_approved")
-    lock = _locks.get(approval.id)
-    if lock is None:
-        lock = _locks[approval.id] = asyncio.Lock()
-    async with lock:
-        return await _execute_locked(approval, action, calendar, mail, store, clock)
-
-
-async def _execute_locked(
-    approval: ApprovalView,
-    action: WriteAction,
-    calendar: CalendarConnector,
-    mail: MailConnector,
-    store: ExecutionStore,
-    clock: Clock,
-) -> ExecutionRecord:
-    existing = await store.get(approval.id)
-    if existing is None and clock.now() >= approval.expires_at:
-        raise ApprovalRejected("expired")
+    """`lease_duration`은 커넥터 호출 타임아웃×(1+재호출 1회)보다 길게 잡는다."""
     if args_hash(action) != approval.args_hash:
         raise ApprovalRejected("hash_mismatch")
+    now = clock.now()
+    invalid: str | None = None
+    if approval.status == "expired" or (
+        approval.status == "approved" and now >= approval.expires_at
+    ):
+        invalid = "expired"
+    elif approval.status != "approved":
+        invalid = "not_approved"
 
-    record, created = await store.begin(approval.id)
-    if not created and record.status in TERMINAL:
-        return record
-    run = _Run(store, record)
-    # 새 행이면 처음부터, 기존 pending·unknown 행이면 대조부터 시작한다.
-    resume = not created
-    match action:
-        case CreateEvent():
-            return await _create_event(run, calendar, action, resume)
-        case UpdateEventTime() | CancelEvent():
-            return await _modify_event(run, calendar, action)
-        case SendMail():
-            return await _send_mail(run, mail, action, resume)
+    existing = await store.get(approval.id)
+    if existing is None and invalid is not None:
+        raise ApprovalRejected(invalid)
+    if existing is not None and existing.status in TERMINAL:
+        return existing
+
+    owner = uuid.uuid4()
+    record, created = await store.begin(approval.id, owner, now + lease_duration)
+    if not created:
+        if record.status in TERMINAL:
+            return record
+        if not await store.claim(record.id, owner, clock.now() + lease_duration):
+            return await _current(store, approval.id, record)
+        record = await _current(store, approval.id, record)
+    run = _Run(store, record, owner)
+    try:
+        if invalid is not None and not _attempted(run.ref, action):
+            return await run.end(FAILED, invalid)  # 쓰기를 시도한 적이 없다
+        match action:
+            case CreateEvent():
+                return await _create_event(run, calendar, action)
+            case UpdateEventTime() | CancelEvent():
+                return await _modify_event(run, calendar, action)
+            case SendMail():
+                return await _send_mail(run, mail, action)
+    except _Lost:
+        return await _current(store, approval.id, record)
+
+
+async def _current(
+    store: ExecutionStore, approval_id: uuid.UUID, fallback: ExecutionRecord
+) -> ExecutionRecord:
+    return await store.get(approval_id) or fallback
 
 
 # ---------------------------------------------------------------- 일정 생성
@@ -194,10 +219,11 @@ def _same_created(event: CalendarEvent, action: CreateEvent) -> bool:
 
 
 async def _create_event(
-    run: _Run, calendar: CalendarConnector, action: CreateEvent, resume: bool
+    run: _Run, calendar: CalendarConnector, action: CreateEvent
 ) -> ExecutionRecord:
     event_id = run.hex_id
-    if not resume:
+    if not run.ref.get("attempted"):
+        await run.save_ref(attempted=True)  # 첫 쓰기 호출 직전에 기록한다
         try:
             event = await calendar.create_event(action.calendar_id, event_id, _event_draft(action))
         except (ResultUnknown, AlreadyExists):
@@ -285,6 +311,8 @@ async def _modify_event(
             current = await calendar.get_event(action.calendar_id, action.event_id)
         except ConnectorError as e:
             return await run.end(FAILED, e)
+        if _matches_target(current, action):  # 이미 목표 상태다: 쓰지 않는다
+            return await run.end(SUCCEEDED, None, version=current.version)
         await run.save_ref(
             calendar_id=action.calendar_id,
             event_id=action.event_id,
@@ -335,13 +363,11 @@ async def _reconcile_modify(
 # ---------------------------------------------------------------- 메일 발송
 
 
-async def _send_mail(
-    run: _Run, mail: MailConnector, action: SendMail, resume: bool
-) -> ExecutionRecord:
+async def _send_mail(run: _Run, mail: MailConnector, action: SendMail) -> ExecutionRecord:
     if "draft_id" not in run.ref:
         # 초안 ID를 기록하기 전이다. 초안이 만들어졌는지 알 수 없지만 발송 전이므로 새로 만든다.
-        return await _create_draft_and_send(run, mail, action, resume)
-    return await _reconcile_send(run, mail)
+        return await _create_draft_and_send(run, mail, action)
+    return await _reconcile_send(run, mail, action)
 
 
 async def _draft_spec(run: _Run, mail: MailConnector, action: SendMail) -> DraftSpec:
@@ -362,16 +388,19 @@ async def _draft_spec(run: _Run, mail: MailConnector, action: SendMail) -> Draft
 
 
 async def _create_draft_and_send(
-    run: _Run, mail: MailConnector, action: SendMail, resume: bool
+    run: _Run, mail: MailConnector, action: SendMail
 ) -> ExecutionRecord:
     try:
         spec = await _draft_spec(run, mail, action)
     except (ConnectorError, ValueError) as e:
         return await run.end(FAILED, e)  # 쓰기 전이다
 
-    attempts = 1 if resume else 2  # 재진입이면 이미 한 번 시도했을 수 있다
+    resume = bool(run.ref.get("draft_attempted"))  # 표식이 있으면 이미 한 번 시도했을 수 있다
+    attempts = 1 if resume else 2
     if resume:
         await run.save_ref(orphan_draft_possible=True)
+    else:
+        await run.save_ref(draft_attempted=True)  # 초안 생성 직전에 기록한다
     while True:
         try:
             draft = await mail.create_draft(spec)
@@ -388,7 +417,7 @@ async def _create_draft_and_send(
     try:
         message = await mail.send_draft(draft.draft_id)
     except ResultUnknown:
-        return await _reconcile_send(run, mail)
+        return await _reconcile_send(run, mail, action)
     except (ConnectorError, ValueError) as e:
         return await run.end(FAILED, e)
     return await run.end(SUCCEEDED, None, sent_message_id=message.id)
@@ -409,14 +438,31 @@ async def _find_sent(run: _Run, mail: MailConnector) -> ExecutionRecord:
     return await run.end(NEEDS_USER)  # 초안이 사라졌고 보낸 메일도 없다: 사용자가 지웠을 수 있다
 
 
-async def _reconcile_send(run: _Run, mail: MailConnector) -> ExecutionRecord:
+def _same_draft(spec: DraftSpec | None, action: SendMail) -> bool:
+    if spec is None:
+        return False
+
+    def emails(values: tuple[str, ...] | tuple[Address, ...]) -> set[str]:
+        return {normalize_email(v if isinstance(v, str) else v.email) for v in values}
+
+    return (
+        emails(spec.to) == emails(action.to)
+        and emails(spec.cc) == emails(action.cc)
+        and _nfc(spec.subject) == _nfc(action.subject)
+        and _nfc(spec.body_text) == _nfc(action.body)
+    )
+
+
+async def _reconcile_send(run: _Run, mail: MailConnector, action: SendMail) -> ExecutionRecord:
     draft_id = str(run.ref["draft_id"])
     try:
-        await mail.get_draft(draft_id)
+        draft = await mail.get_draft(draft_id)
     except NotFound:
         return await _find_sent(run, mail)
     except ConnectorError as e:
         return await run.end(UNKNOWN, e)
+    if not _same_draft(draft.spec, action):
+        return await run.end(NEEDS_USER)  # 초안이 바뀌었거나 내용을 알 수 없다: 보내지 않는다
     # 초안이 남아 있다: 미발송이다. 발송된 초안은 재발송이 거절되므로 1회 재호출은 중복이 아니다.
     try:
         message = await mail.send_draft(draft_id)

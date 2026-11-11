@@ -104,3 +104,34 @@ def test_models_are_frozen_and_require_aware_times() -> None:
         mail(to=())
     with pytest.raises(ValidationError):
         mail(to=("not-an-email",))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "a@b.com, evil@x.com",
+        "a@b.com,evil@x.com",
+        "Bob <b@x.com>",
+        "<b@x.com>",
+        '"bob"@x.com',
+        " b@x.com",
+        "b@x.com\n",
+        "b@x .com",
+        "b@x.com;c@x.com",
+        "b\x00@x.com",
+        "@x.com",
+        "b@",
+        "b@@x.com",
+        "b..c@x.com",
+        "b@-x.com",
+    ],
+)
+def test_invalid_emails_rejected(value: str) -> None:
+    with pytest.raises(ValidationError):
+        mail(to=(value,))
+    with pytest.raises(ValidationError):
+        create(attendees=(value,))
+
+
+def test_valid_emails_accepted() -> None:
+    mail(to=("o'brien@x.com", "a.b+tag@sub.example.co.kr", "x_y@x-y.org"))

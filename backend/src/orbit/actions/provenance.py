@@ -2,7 +2,8 @@
 
 우선순위는 `user` > `workspace_data` > `external_content` > `model`이다.
 입력 수집은 호출자(4C)가 한다.
-이메일은 대소문자를 무시하고, 텍스트 안의 등장은 주소 경계(앞뒤가 주소 문자가 아님)로 찾는다.
+이메일은 대소문자를 무시하고, 텍스트 안의 등장은 주소 경계(앞뒤가 RFC 5322 atext·`.`·`@`가
+아님)로 찾는다. 경계 문자가 붙은 경우(`'bob@x.com'`)는 보수적으로 찾지 못한 것으로 본다.
 """
 
 import re
@@ -12,7 +13,7 @@ from typing import Literal
 
 Provenance = Literal["user", "workspace_data", "external_content", "model"]
 
-_ADDR_CHARS = r"A-Za-z0-9_%+\-"
+_ADDR_CHARS = r"A-Za-z0-9!#$%&'*+/=?^_`{|}~\-"  # RFC 5322 atext
 
 
 def _norm(value: str) -> str:
@@ -21,7 +22,7 @@ def _norm(value: str) -> str:
 
 def _pattern(email: str) -> re.Pattern[str]:
     return re.compile(
-        rf"(?<![{_ADDR_CHARS}.@]){re.escape(email)}(?![{_ADDR_CHARS}@]|\.[A-Za-z0-9])"
+        rf"(?<![{_ADDR_CHARS}.@]){re.escape(email)}(?![{_ADDR_CHARS}@]|\.[{_ADDR_CHARS}])"
     )
 
 

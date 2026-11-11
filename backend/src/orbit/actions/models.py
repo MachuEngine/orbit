@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -11,10 +12,15 @@ class _Action(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+_ATOM = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_EMAIL = re.compile(rf"{_ATOM}(?:\.{_ATOM})*@{_LABEL}(?:\.{_LABEL})*")
+
+
 def _check_emails(values: tuple[str, ...]) -> tuple[str, ...]:
+    """`local@domain` 하나만 허용한다(공백·쉼표·꺾쇠·따옴표·제어문자·표시 이름 거부)."""
     for value in values:
-        local, sep, domain = value.partition("@")
-        if not sep or not local or not domain:
+        if len(value) > 254 or _EMAIL.fullmatch(value) is None:
             raise ValueError("이메일 형식이 아니다")
     return values
 

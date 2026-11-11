@@ -70,3 +70,11 @@ def test_user_utterance_also_uses_boundary() -> None:
 
 def test_duplicates_collapse() -> None:
     assert classify(["A@example.com", "a@example.com"]) == {"a@example.com": "model"}
+
+
+def test_apostrophe_address_is_matched_whole() -> None:
+    ok = classify(["o'brien@x.com"], user=["o'brien@x.com 에게 보내줘"])
+    assert ok == {"o'brien@x.com": "user"}
+    # 앞 문자가 atext면 다른 주소의 일부다.
+    assert classify(["brien@x.com"], external=["o'brien@x.com"]) == {"brien@x.com": "model"}
+    assert classify(["bob@x.com"], external=["x!bob@x.com", "bob@x.com!"]) == {"bob@x.com": "model"}

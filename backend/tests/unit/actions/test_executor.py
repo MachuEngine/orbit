@@ -17,7 +17,7 @@ from orbit.actions.store import (
     ExecutionRecord,
     InMemoryExecutionStore,
 )
-from orbit.connectors.contracts import Attendee, DraftSpec, EventDraft, EventPatch
+from orbit.connectors.contracts import Address, Attendee, DraftSpec, EventDraft, EventPatch
 
 from .conftest import ACCOUNT, CALENDAR, NOW, Env, faults
 
@@ -26,6 +26,7 @@ MakeEnv = Callable[..., Env]
 T0 = datetime(2026, 11, 20, 5, 0, tzinfo=UTC)
 T1 = datetime(2026, 11, 20, 6, 0, tzinfo=UTC)
 EVENT_ID = "evalice001"
+DEAD = uuid.UUID(int=999)  # 종료된 실행자
 
 CREATE = CreateEvent(
     calendar_id=CALENDAR,
@@ -177,9 +178,17 @@ async def test_same_approval_twice_sequential_writes_once(make_env: MakeEnv, nam
 class YieldingStore(InMemoryExecutionStore):
     """모든 저장소 호출에서 제어를 넘겨 동시 실행이 실제로 끼어들게 한다."""
 
-    async def begin(self, approval_id: uuid.UUID) -> tuple[ExecutionRecord, bool]:
+    async def begin(
+        self, approval_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime
+    ) -> tuple[ExecutionRecord, bool]:
         await asyncio.sleep(0)
-        result = await super().begin(approval_id)
+        result = await super().begin(approval_id, owner, lease_until)
+        await asyncio.sleep(0)
+        return result
+
+    async def claim(self, execution_id: uuid.UUID, owner: uuid.UUID, lease_until: datetime) -> bool:
+        await asyncio.sleep(0)
+        result = await super().claim(execution_id, owner, lease_until)
         await asyncio.sleep(0)
         return result
 
@@ -187,32 +196,89 @@ class YieldingStore(InMemoryExecutionStore):
         await asyncio.sleep(0)
         return await super().get(approval_id)
 
-    async def record_ref(self, execution_id: uuid.UUID, external_ref: dict[str, Any]) -> None:
+    async def record_ref(
+        self, execution_id: uuid.UUID, owner: uuid.UUID, external_ref: dict[str, Any]
+    ) -> bool:
         await asyncio.sleep(0)
-        await super().record_ref(execution_id, external_ref)
+        result = await super().record_ref(execution_id, owner, external_ref)
         await asyncio.sleep(0)
+        return result
 
     async def finish(
-        self, execution_id: uuid.UUID, status: str, external_ref: dict[str, Any], error: str | None
-    ) -> None:
+        self,
+        execution_id: uuid.UUID,
+        owner: uuid.UUID,
+        status: str,
+        external_ref: dict[str, Any],
+        error_kind: str | None,
+    ) -> bool:
         await asyncio.sleep(0)
-        await super().finish(execution_id, status, external_ref, error)
+        result = await super().finish(execution_id, owner, status, external_ref, error_kind)
         await asyncio.sleep(0)
+        return result
+
+
+def writes(d: Any) -> int:
+    return (
+        len(d.events_created) + len(d.events_updated) + len(d.events_cancelled) + len(d.drafts_sent)
+    )
 
 
 @pytest.mark.parametrize("name", list(ACTIONS))
-async def test_same_approval_concurrent_writes_once(make_env: MakeEnv, name: str) -> None:
+async def test_concurrent_executors_new_row_write_once(make_env: MakeEnv, name: str) -> None:
     env = make_env()
-    env.store = YieldingStore()
+    env.store = YieldingStore(env.clock)
     results = await asyncio.gather(*(run(env, ACTIONS[name]) for _ in range(4)))
-    assert {r.id for r in results} == {results[0].id}
-    assert all(r.status == SUCCEEDED for r in results)
-    d = env.diff()
-    assert (
-        len(d.events_created) + len(d.events_updated) + len(d.events_cancelled) + len(d.drafts_sent)
-        == 1
-    )
+    assert len({r.id for r in results}) == 1
+    final = await env.store.get(uuid.UUID(int=1))
+    assert final is not None and final.status == SUCCEEDED
+    assert writes(env.diff()) == 1
     assert len(env.calls("create_event", "update_event", "cancel_event", "send_draft")) == 1
+
+
+@pytest.mark.parametrize("name", list(ACTIONS))
+async def test_two_owners_on_same_pending_row_write_once(make_env: MakeEnv, name: str) -> None:
+    env = make_env()
+    env.store = YieldingStore(env.clock)
+    await seed_pending(env, ACTIONS[name])
+    await asyncio.gather(run(env, ACTIONS[name]), run(env, ACTIONS[name]))
+    final = await env.store.get(uuid.UUID(int=1))
+    assert final is not None and final.status == SUCCEEDED
+    assert writes(env.diff()) == 1
+
+
+async def test_active_lease_blocks_other_executor_until_expiry(make_env: MakeEnv) -> None:
+    env = make_env()
+    record, _ = await env.store.begin(
+        uuid.UUID(int=1), DEAD, NOW + timedelta(minutes=5)
+    )  # 다른 실행자가 소유 중
+    blocked = await run(env, MAIL)
+    assert blocked.id == record.id and blocked.status == PENDING
+    assert env.conns.calls.records == []
+    env.clock.advance(timedelta(minutes=5))  # lease 만료: 이어받는다
+    taken = await run(env, MAIL)
+    assert taken.status == SUCCEEDED and taken.lease_owner is not None
+    assert taken.lease_owner != DEAD
+    assert env.sent_with_header(record.id.hex) == 1
+
+
+@pytest.mark.parametrize("name", list(ACTIONS))
+async def test_lost_ownership_stops_external_calls(make_env: MakeEnv, name: str) -> None:
+    """record_ref가 거절되면(소유권 상실) 외부 호출 없이 현재 기록을 돌려준다."""
+    env = make_env()
+
+    class Stealing(InMemoryExecutionStore):
+        async def record_ref(
+            self, execution_id: uuid.UUID, owner: uuid.UUID, external_ref: dict[str, Any]
+        ) -> bool:
+            self._update(execution_id, lease_owner=DEAD)  # 다른 실행자가 가져갔다
+            return await super().record_ref(execution_id, owner, external_ref)
+
+    env.store = Stealing(env.clock)
+    record = await run(env, ACTIONS[name])
+    assert record.status == PENDING and record.lease_owner == DEAD
+    assert env.calls("create_event", "update_event", "cancel_event", "send_draft") == []
+    assert env.calls("create_draft") == []
 
 
 # ---------------------------------------------------------------- 결과 불명 대조
@@ -300,9 +366,20 @@ async def test_create_event_recall_unknown_needs_user(make_env: MakeEnv) -> None
 # ---------------------------------------------------------------- 선기록 후 종료 흉내(재진입)
 
 
+def mail_spec(execution_hex: str, **overrides: Any) -> DraftSpec:
+    values: dict[str, Any] = {
+        "to": (Address(email="bob@example.org"),),
+        "subject": MAIL.subject,
+        "body_text": MAIL.body,
+        "execution_id": execution_hex,
+    }
+    values.update(overrides)
+    return DraftSpec(**values)
+
+
 async def seed_pending(env: Env, action: WriteAction) -> ExecutionRecord:
     """프로세스가 `begin` 직후 종료된 상태를 만든다."""
-    record, created = await env.store.begin(uuid.UUID(int=1))
+    record, created = await env.store.begin(uuid.UUID(int=1), DEAD, NOW - timedelta(seconds=1))
     assert created and record.status == PENDING
     return record
 
@@ -323,6 +400,7 @@ async def test_reentry_with_pending_row_never_called(make_env: MakeEnv, name: st
 async def test_reentry_create_event_already_applied(make_env: MakeEnv) -> None:
     env = make_env()
     pending = await seed_pending(env, CREATE)
+    await env.store.record_ref(pending.id, DEAD, {"attempted": True})
     await env.calendar.create_event(
         CALENDAR,
         pending.id.hex,
@@ -343,6 +421,7 @@ async def test_reentry_create_event_already_applied(make_env: MakeEnv) -> None:
 async def test_reentry_create_event_with_different_content_needs_user(make_env: MakeEnv) -> None:
     env = make_env()
     pending = await seed_pending(env, CREATE)
+    await env.store.record_ref(pending.id, DEAD, {"attempted": True})
     await env.calendar.create_event(
         CALENDAR, pending.id.hex, EventDraft(title="다른 제목", start=T0, end=T1)
     )
@@ -354,7 +433,7 @@ async def test_reentry_create_event_with_different_content_needs_user(make_env: 
 async def test_reentry_modify_before_call(make_env: MakeEnv, name: str) -> None:
     env = make_env()
     pending = await seed_pending(env, ACTIONS[name])
-    await env.store.record_ref(pending.id, {"before_version": "v-e1"})  # 기록 후 호출 전 종료
+    await env.store.record_ref(pending.id, DEAD, {"before_version": "v-e1"})  # 기록 후 호출 전 종료
     record = await run(env, ACTIONS[name])
     assert record.status == SUCCEEDED
     d = env.diff()
@@ -365,7 +444,7 @@ async def test_reentry_modify_before_call(make_env: MakeEnv, name: str) -> None:
 async def test_reentry_modify_after_call_applied(make_env: MakeEnv, name: str) -> None:
     env = make_env()
     pending = await seed_pending(env, ACTIONS[name])
-    await env.store.record_ref(pending.id, {"before_version": "v-e1"})
+    await env.store.record_ref(pending.id, DEAD, {"before_version": "v-e1"})
     if name == "update":
         await env.calendar.update_event(
             CALENDAR, EVENT_ID, EventPatch(start=T0, end=T1), if_match="v-e1"
@@ -379,21 +458,29 @@ async def test_reentry_modify_after_call_applied(make_env: MakeEnv, name: str) -
 
 async def test_reentry_mail_before_draft_recorded(make_env: MakeEnv) -> None:
     env = make_env()
-    await seed_pending(env, MAIL)
+    pending = await seed_pending(env, MAIL)
+    await env.store.record_ref(pending.id, DEAD, {"draft_attempted": True})
     record = await run(env, MAIL)
     assert record.status == SUCCEEDED
     assert env.sent_with_header(record.id.hex) == 1
     assert record.external_ref["orphan_draft_possible"] is True
 
 
+async def test_reentry_mail_without_marker_is_fresh(make_env: MakeEnv) -> None:
+    env = make_env()
+    await seed_pending(env, MAIL)
+    record = await run(env, MAIL)
+    assert record.status == SUCCEEDED
+    assert "orphan_draft_possible" not in record.external_ref
+    assert record.external_ref["draft_attempted"] is True
+
+
 async def test_reentry_mail_draft_created_not_sent(make_env: MakeEnv) -> None:
     env = make_env()
     pending = await seed_pending(env, MAIL)
-    draft = await env.mail.create_draft(
-        DraftSpec(to=(), subject="x", body_text="y", execution_id=pending.id.hex)
-    )
+    draft = await env.mail.create_draft(mail_spec(pending.id.hex))
     await env.store.record_ref(
-        pending.id, {"draft_id": draft.draft_id, "thread_id": draft.thread_id}
+        pending.id, DEAD, {"draft_id": draft.draft_id, "thread_id": draft.thread_id}
     )
     record = await run(env, MAIL)
     assert record.status == SUCCEEDED
@@ -404,12 +491,10 @@ async def test_reentry_mail_draft_created_not_sent(make_env: MakeEnv) -> None:
 async def test_reentry_mail_already_sent(make_env: MakeEnv) -> None:
     env = make_env()
     pending = await seed_pending(env, MAIL)
-    draft = await env.mail.create_draft(
-        DraftSpec(to=(), subject="x", body_text="y", execution_id=pending.id.hex)
-    )
+    draft = await env.mail.create_draft(mail_spec(pending.id.hex))
     await env.mail.send_draft(draft.draft_id)
     await env.store.record_ref(
-        pending.id, {"draft_id": draft.draft_id, "thread_id": draft.thread_id}
+        pending.id, DEAD, {"draft_id": draft.draft_id, "thread_id": draft.thread_id}
     )
     record = await run(env, MAIL)
     assert record.status == SUCCEEDED
@@ -419,10 +504,51 @@ async def test_reentry_mail_already_sent(make_env: MakeEnv) -> None:
 
 async def test_reentry_after_expiry_still_reconciles(make_env: MakeEnv) -> None:
     env = make_env()
-    await seed_pending(env, CANCEL)
+    pending = await seed_pending(env, CANCEL)
+    await env.store.record_ref(pending.id, DEAD, {"before_version": "v-e1"})
     env.clock.advance(timedelta(hours=1))
     record = await run(env, CANCEL)
     assert record.status == SUCCEEDED
+
+
+@pytest.mark.parametrize("name", list(ACTIONS))
+@pytest.mark.parametrize("row", ["pending", "unknown"])
+@pytest.mark.parametrize("why", ["expired", "rejected"])
+async def test_reentry_without_marker_and_invalid_approval_makes_no_call(
+    make_env: MakeEnv, name: str, row: str, why: str
+) -> None:
+    env = make_env()
+    pending = await seed_pending(env, ACTIONS[name])
+    if row == "unknown":
+        assert await env.store.finish(pending.id, DEAD, UNKNOWN, {}, "TransientError")
+    if why == "expired":
+        env.clock.advance(timedelta(hours=1))
+        record = await run(env, ACTIONS[name])
+        assert record.error_kind == "expired"
+    else:
+        record = await run(env, ACTIONS[name], status="rejected")
+        assert record.error_kind == "not_approved"
+    assert record.status == FAILED
+    assert env.conns.calls.records == []
+
+
+@pytest.mark.parametrize("name", ["create", "update", "mail"])
+async def test_reentry_with_marker_and_expired_approval_reconciles(
+    make_env: MakeEnv, name: str
+) -> None:
+    env = make_env()
+    pending = await seed_pending(env, ACTIONS[name])
+    markers: dict[str, dict[str, Any]] = {
+        "create": {"attempted": True},
+        "update": {"before_version": "v-e1"},
+        "mail": {"draft_attempted": True},
+    }
+    marker = markers[name]
+    await env.store.record_ref(pending.id, DEAD, marker)
+    env.clock.advance(timedelta(hours=1))
+    record = await run(env, ACTIONS[name])
+    assert record.status == SUCCEEDED
+    assert writes(env.diff()) == 1
 
 
 async def test_reentry_is_still_checked_against_hash(make_env: MakeEnv) -> None:
@@ -478,7 +604,7 @@ async def test_real_interleaved_change_is_failed(make_env: MakeEnv) -> None:
 async def test_reentry_with_unknown_other_change_needs_user(make_env: MakeEnv, name: str) -> None:
     env = make_env()
     pending = await seed_pending(env, ACTIONS[name])
-    await env.store.record_ref(pending.id, {"before_version": "v-e1"})
+    await env.store.record_ref(pending.id, DEAD, {"before_version": "v-e1"})
     await env.calendar.update_event(
         CALENDAR, EVENT_ID, EventPatch(title="다른 사용자의 변경"), if_match="v-e1"
     )
@@ -499,7 +625,7 @@ async def test_reentry_event_vanished_needs_user(make_env: MakeEnv) -> None:
     env = make_env()
     action = CancelEvent(calendar_id=CALENDAR, event_id="nonexistent1")
     pending = await seed_pending(env, action)
-    await env.store.record_ref(pending.id, {"before_version": "v-x"})
+    await env.store.record_ref(pending.id, DEAD, {"before_version": "v-x"})
     record = await run(env, action)
     assert record.status == NEEDS_USER
 
@@ -507,7 +633,7 @@ async def test_reentry_event_vanished_needs_user(make_env: MakeEnv) -> None:
 async def test_mail_draft_gone_and_no_sent_message_needs_user(make_env: MakeEnv) -> None:
     env = make_env()
     pending = await seed_pending(env, MAIL)
-    await env.store.record_ref(pending.id, {"draft_id": "drf-gone", "thread_id": "thr-a-002"})
+    await env.store.record_ref(pending.id, DEAD, {"draft_id": "drf-gone", "thread_id": "thr-a-002"})
     record = await run(env, MAIL)
     assert record.status == NEEDS_USER
     assert env.calls("send_draft") == []
@@ -516,7 +642,7 @@ async def test_mail_draft_gone_and_no_sent_message_needs_user(make_env: MakeEnv)
 async def test_mail_draft_and_thread_gone_needs_user(make_env: MakeEnv) -> None:
     env = make_env()
     pending = await seed_pending(env, MAIL)
-    await env.store.record_ref(pending.id, {"draft_id": "drf-gone", "thread_id": "thr-gone"})
+    await env.store.record_ref(pending.id, DEAD, {"draft_id": "drf-gone", "thread_id": "thr-gone"})
     record = await run(env, MAIL)
     assert record.status == NEEDS_USER
 
@@ -598,3 +724,84 @@ async def test_error_records_contain_no_content(make_env: MakeEnv) -> None:
     text = repr(record)
     assert "bob@example.org" not in text and "합성 본문" not in text and "합성 제목" not in text
     assert ACCOUNT not in text
+
+
+async def test_modify_already_at_target_does_not_write(make_env: MakeEnv) -> None:
+    env = make_env()
+    current = await env.calendar.get_event(CALENDAR, EVENT_ID)
+    same = UpdateEventTime(
+        calendar_id=CALENDAR, event_id=EVENT_ID, start=current.start, end=current.end
+    )
+    record = await run(env, same)
+    assert record.status == SUCCEEDED
+    assert env.calls("update_event") == []
+    assert "before_version" not in record.external_ref
+
+
+async def test_cancel_already_cancelled_does_not_write(make_env: MakeEnv) -> None:
+    env = make_env()
+    event = await env.calendar.get_event(CALENDAR, EVENT_ID)
+    await env.calendar.cancel_event(CALENDAR, EVENT_ID, if_match=event.version)
+    record = await run(env, CANCEL)
+    assert record.status == SUCCEEDED
+    assert env.calls("cancel_event") == ["cancel_event"]  # 선행 호출뿐
+
+
+async def _draft_for_resend(env: Env, **overrides: Any) -> ExecutionRecord:
+    pending = await seed_pending(env, MAIL)
+    draft = await env.mail.create_draft(mail_spec(pending.id.hex, **overrides))
+    await env.store.record_ref(
+        pending.id, DEAD, {"draft_id": draft.draft_id, "thread_id": draft.thread_id}
+    )
+    return pending
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"to": (Address(email="evil@example.net"),)},
+        {"to": (Address(email="bob@example.org"), Address(email="evil@example.net"))},
+        {"cc": (Address(email="evil@example.net"),)},
+        {"subject": "다른 제목"},
+        {"body_text": "바뀐 본문"},
+    ],
+)
+async def test_resend_with_changed_draft_needs_user(
+    make_env: MakeEnv, overrides: dict[str, Any]
+) -> None:
+    env = make_env()
+    await _draft_for_resend(env, **overrides)
+    record = await run(env, MAIL)
+    assert record.status == NEEDS_USER
+    assert env.calls("send_draft") == []
+
+
+async def test_resend_with_unreadable_draft_content_needs_user(make_env: MakeEnv) -> None:
+    env = make_env()
+    await _draft_for_resend(env)
+    mail = env.mail
+
+    class NoSpec:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(mail, name)
+
+        async def get_draft(self, draft_id: str) -> Any:
+            return (await mail.get_draft(draft_id)).model_copy(update={"spec": None})
+
+    record = await execute_approved(
+        env.approval(MAIL),
+        MAIL,
+        calendar=env.calendar,
+        mail=NoSpec(),
+        store=env.store,
+        clock=env.clock,
+    )
+    assert record.status == NEEDS_USER
+    assert env.calls("send_draft") == []
+
+
+async def test_resend_with_same_draft_in_other_case(make_env: MakeEnv) -> None:
+    env = make_env()
+    await _draft_for_resend(env, to=(Address(email="BOB@example.org"),))
+    record = await run(env, MAIL)
+    assert record.status == SUCCEEDED

@@ -85,7 +85,7 @@ def make_env() -> Callable[..., Env]:
             conns=conns,
             calendar=conns.calendar[ACCOUNT],
             mail=conns.mail[ACCOUNT],
-            store=InMemoryExecutionStore(ids),
+            store=InMemoryExecutionStore(clock, ids),
             clock=clock,
         )
 
