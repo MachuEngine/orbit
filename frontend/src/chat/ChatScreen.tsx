@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRun } from "../api/endpoints";
 import { ApprovalPanel } from "../approvals/ApprovalPanel";
+import { useConnectionNotice } from "../connections/useConnections";
 import { useComposer } from "../composer/useComposer";
 import { useRunStream } from "../runs/useRunStream";
+import { Icon } from "../ui/Icon";
 import { Logo } from "../ui/Logo";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
@@ -11,7 +13,14 @@ import { connectionStatusItem, runStatusItem } from "./status";
 import { useStickToBottom } from "./useStickToBottom";
 import "./chat.css";
 
-export function ChatScreen({ onSignOut }: { onSignOut: () => void }) {
+export function ChatScreen({
+  onSignOut,
+  onOpenConnections,
+}: {
+  onSignOut: () => void;
+  onOpenConnections: () => void;
+}) {
+  const connectionNotice = useConnectionNotice();
   const [runId, setRunId] = useState<string | null>(null);
   const [outgoing, setOutgoing] = useState<string | null>(null);
   const conversationId = useRef<string | undefined>(undefined);
@@ -61,10 +70,33 @@ export function ChatScreen({ onSignOut }: { onSignOut: () => void }) {
     <main className="chat">
       <header className="chat-header">
         <Logo className="chat-logo" />
-        <button type="button" className="btn btn-secondary" onClick={onSignOut}>
-          로그아웃
-        </button>
+        <div className="chat-header-actions">
+          <button type="button" className="btn btn-secondary" onClick={onOpenConnections}>
+            계정 연결
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={onSignOut}>
+            로그아웃
+          </button>
+        </div>
       </header>
+
+      {/* 영역은 항상 그려 두고 내용만 바꿔야 화면낭독기가 변화를 읽는다. */}
+      <div role="status" className="connection-banner-slot">
+        {connectionNotice === "needs_connection" && (
+          <div className="connection-banner">
+            <p className="note tone-warning">
+              <Icon name="warning" />
+              <span>
+                Google 계정이 연결되지 않아 메일과 일정을 다룰 수 없습니다. 먼저 계정을 연결해
+                주세요.
+              </span>
+            </p>
+            <button type="button" className="btn btn-primary" onClick={onOpenConnections}>
+              계정 연결하기
+            </button>
+          </div>
+        )}
+      </div>
 
       <div className="chat-body">
         <div

@@ -123,7 +123,8 @@ def main() -> None:
     """개발용 워커 진입점: `python -m orbit.runflow.worker`.
 
     LLM은 `ORBIT_LLM_*`·`ORBIT_OPENROUTER_API_KEY` 설정으로, 커넥터는 개발용 Sim 스냅샷
-    (`ORBIT_SIM_SNAPSHOT_PATH`)으로 만든다. 6단계에서 Google Adapter 해석기로 바꾼다.
+    (`ORBIT_SIM_SNAPSHOT_PATH`)으로, `ORBIT_CONNECTOR_MODE=google`이면 워크스페이스의 활성 Google
+    연결(`GoogleConnectorResolver`, KEK는 `ORBIT_DATA_KEY_FILE`)로 만든다.
     """
     from zoneinfo import ZoneInfo
 
@@ -133,13 +134,16 @@ def main() -> None:
     from orbit.core.clock import SystemClock
     from orbit.core.config import get_llm_settings, get_settings
     from orbit.core.ids import Uuid7Generator
+    from orbit.crypto.envelope import EnvelopeCipher, EnvelopeError, load_kek_from_file
     from orbit.db.session import AsyncDatabase
     from orbit.llm.factory import build_llm
-    from orbit.runflow.deps import SimConnectorResolver
+    from orbit.runflow.deps import ConnectorResolver, GoogleConnectorResolver, SimConnectorResolver
 
     settings = get_settings()
-    if settings.env != "dev" or settings.sim_snapshot_path is None:
-        raise SystemExit("개발용 워커는 ORBIT_ENV=dev와 ORBIT_SIM_SNAPSHOT_PATH가 필요하다")
+    if settings.env != "dev":
+        raise SystemExit("개발용 워커는 ORBIT_ENV=dev가 필요하다")
+    if settings.connector_mode == "sim" and settings.sim_snapshot_path is None:
+        raise SystemExit("sim 모드 워커는 ORBIT_SIM_SNAPSHOT_PATH가 필요하다")
     try:
         llm_settings = get_llm_settings()
     except ValidationError:
@@ -150,12 +154,36 @@ def main() -> None:
         ) from None
     url = settings.database_url.get_secret_value()
     clock = SystemClock()
+    db = AsyncDatabase.from_url(url)
+    resolver: ConnectorResolver
+    if settings.connector_mode == "google":
+        missing = settings.missing_connection_settings()
+        if missing:
+            raise SystemExit("google 모드 워커에 필요한 설정이 없다: " + ", ".join(missing))
+        assert settings.data_key_file is not None  # noqa: S101 (missing 검사로 보장)
+        assert settings.google_client_id is not None  # noqa: S101
+        assert settings.google_client_secret is not None  # noqa: S101
+        try:
+            cipher = EnvelopeCipher(load_kek_from_file(settings.data_key_file))
+        except EnvelopeError as exc:
+            raise SystemExit(str(exc)) from None
+        resolver = GoogleConnectorResolver(
+            db=db,
+            cipher=cipher,
+            clock=clock,
+            client_id=settings.google_client_id,
+            client_secret=settings.google_client_secret,
+            token_url=settings.google_token_url,
+        )
+    else:
+        assert settings.sim_snapshot_path is not None  # noqa: S101
+        resolver = SimConnectorResolver(settings.sim_snapshot_path, settings.sim_account_id, clock)
     deps = RunDeps(
-        db=AsyncDatabase.from_url(url),
+        db=db,
         clock=clock,
         ids=Uuid7Generator(clock),
         llm=build_llm(llm_settings),
-        resolver=SimConnectorResolver(settings.sim_snapshot_path, settings.sim_account_id, clock),
+        resolver=resolver,
         tz=ZoneInfo(settings.user_timezone),
         checkpoint_conninfo=make_url(url).set(drivername="postgresql").render_as_string(False),
         approval_ttl=timedelta(seconds=settings.approval_ttl_seconds),
