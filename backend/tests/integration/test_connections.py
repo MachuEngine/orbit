@@ -681,3 +681,58 @@ async def test_connection_table_isolation_and_column_privileges(env: Env) -> Non
                 text("UPDATE connection SET account_email = 'z' WHERE id = :id"),
                 {"id": alice_row.id},
             )
+
+
+# ---------------------------------------------------------------- 철회 범위 (두 탭 경쟁)
+
+
+async def test_losing_tab_does_not_revoke_the_active_connection(env: Env) -> None:
+    first = await env.login(ALICE)
+    await _start(env, first)
+    saved = (env.mock.state, env.mock.nonce, env.mock.challenge)
+    second = await env.login(ALICE)  # 같은 사용자의 다른 탭(다른 세션, 같은 워크스페이스)
+    await _connect(env, second)
+    assert [r.status for r in _rows(env)] == ["active"]
+    env.mock.state, env.mock.nonce, env.mock.challenge = saved
+    # 먼저 시작한 탭의 콜백이 늦게 도착한다. 새 토큰은 버리고 철회하지 않는다.
+    assert _error_of(await _callback(env, first)) == "already_connected"
+    assert _mock(env).revoke_calls == []
+    [row] = _rows(env)
+    assert row.status == "active" and row.token_ciphertext is not None
+
+
+async def test_scope_missing_does_not_revoke_when_same_account_is_active(env: Env) -> None:
+    client = await env.login(ALICE)
+    await _start(env, client)
+    saved = (env.mock.state, env.mock.nonce, env.mock.challenge)
+    other = await env.login(ALICE)
+    await _connect(env, other)
+    env.mock.state, env.mock.nonce, env.mock.challenge = saved
+    _mock(env).granted_scope = " ".join(REQUEST_SCOPES[:-1])
+    assert _error_of(await _callback(env, client)) == "already_connected"
+    assert _mock(env).revoke_calls == []
+    assert [r.status for r in _rows(env)] == ["active"]
+
+
+async def test_new_token_is_revoked_when_active_connection_is_another_account(env: Env) -> None:
+    first = await env.login(ALICE)
+    await _start(env, first)
+    saved = (env.mock.state, env.mock.nonce, env.mock.challenge)
+    other = await env.login(ALICE)
+    await _connect(env, other)  # alice 계정으로 활성 연결
+    env.mock.state, env.mock.nonce, env.mock.challenge = saved
+    env.set_identity(BOB)  # 늦게 도착한 콜백은 다른 Google 계정의 토큰이다
+    _mock(env).refresh_token = "test-refresh-token-SYNTH-bob"
+    assert _error_of(await _callback(env, first)) == "already_connected"
+    assert _mock(env).revoke_calls == ["test-refresh-token-SYNTH-bob"]
+    assert [r.status for r in _rows(env)] == ["active"]
+
+
+def test_prod_start_rejects_wide_kek_permissions(app_url: str, tmp_path: Path) -> None:
+    wide = tmp_path / "wide.key"
+    wide.write_bytes(KEK_BYTES)
+    wide.chmod(0o644)
+    with pytest.raises(RuntimeError) as info:
+        create_app(_settings(app_url, tmp_path, wide))
+    assert str(wide) in str(info.value)
+    create_app(_settings(app_url, tmp_path, wide, env="dev"))  # dev는 경고만 한다

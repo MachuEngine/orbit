@@ -151,7 +151,9 @@ describe("연결 화면", () => {
     const group = screen.getByRole("group", { name: "연결 해제 확인" });
     await userEvent.click(within(group).getByRole("button", { name: "연결 해제" }));
     expect(
-      await screen.findByText(/보안 설정에서 Orbit의 접근 권한을 직접 삭제/),
+      await screen.findByText(
+        /myaccount\.google\.com\/permissions\)에서 Orbit의 접근 권한을 직접 삭제/,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -161,6 +163,43 @@ describe("연결 화면", () => {
     expect(await screen.findByText(/연결에 문제가 있습니다/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Google 계정 다시 연결" })).toBeInTheDocument();
     expect(screen.queryByText("일정 보기·만들기·수정")).toBeNull();
+  });
+
+  it("오류 연결의 다시 연결은 서버에 연결 설정이 없으면 막힌다", async () => {
+    stubApi(() =>
+      json(listing([{ ...activeConnection, status: "error" }], { connect_available: false })),
+    );
+    render(<ConnectionsScreen result={null} onBack={() => undefined} />);
+    expect(await screen.findByRole("button", { name: "Google 계정 다시 연결" })).toBeDisabled();
+    expect(screen.getByText(/지금은 다시 연결할 수 없습니다/)).toBeInTheDocument();
+  });
+
+  it("해제 확인이 열리면 그 안내로 포커스가 가고, 취소하면 해제 버튼으로 돌아온다", async () => {
+    stubApi(() => json(listing([activeConnection])));
+    render(<ConnectionsScreen result={null} onBack={() => undefined} />);
+    const trigger = await screen.findByRole("button", { name: "연결 해제" });
+    await userEvent.click(trigger);
+    const group = screen.getByRole("group", { name: "연결 해제 확인" });
+    expect(group).toHaveFocus();
+    await userEvent.click(within(group).getByRole("button", { name: "취소" }));
+    expect(screen.getByRole("button", { name: "연결 해제" })).toHaveFocus();
+  });
+
+  it("해제를 마치면 사라진 버튼 대신 제목으로 포커스가 간다", async () => {
+    let revoked = false;
+    stubApi((url, init) => {
+      if (init?.method === "DELETE") {
+        revoked = true;
+        return json({ id: "c1", status: "revoked", provider_revoke: "revoked" });
+      }
+      return json(listing(revoked ? [] : [activeConnection]));
+    });
+    render(<ConnectionsScreen result={null} onBack={() => undefined} />);
+    await userEvent.click(await screen.findByRole("button", { name: "연결 해제" }));
+    const group = screen.getByRole("group", { name: "연결 해제 확인" });
+    await userEvent.click(within(group).getByRole("button", { name: "연결 해제" }));
+    await screen.findByText(/연결된 계정이 없습니다/);
+    expect(screen.getByRole("heading", { name: "계정 연결" })).toHaveFocus();
   });
 
   it("연결 결과가 오류면 알려진 문구를, 모르는 값은 일반 문구를 보인다", async () => {

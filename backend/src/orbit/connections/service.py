@@ -74,9 +74,14 @@ async def save_grant(
     except ConnectError as exc:
         problem = exc
     if problem is not None:
-        # 쓰지 못하는 권한을 Google에 남기지 않는다(실패해도 연결 결과는 바뀌지 않는다).
+        # Google은 refresh token 하나를 철회하면 같은 사용자·클라이언트의 권한 전체를 거둔다고
+        # 보고 설계한다. 같은 워크스페이스에 같은 계정의 활성 연결이 있으면 새 토큰은 철회하지 않고
+        # 버린다(두 탭 경쟁에서 기존 연결을 끊지 않는다). 없을 때만 쓰지 못할 권한을 거둔다.
         if refresh is not None and problem.kind in ("scope_missing", "already_connected"):
-            await oauth.revoke(refresh.get_secret_value())
+            async with db.workspace_session(workspace_id) as s:
+                keep = await store.has_active_with_sub(s, workspace_id, grant.sub)
+            if not keep:
+                await oauth.revoke(refresh.get_secret_value())
         raise problem
     return connection_id
 

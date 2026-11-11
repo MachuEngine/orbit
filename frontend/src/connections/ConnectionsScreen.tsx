@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Connection } from "../api/schemas";
 import { PRODUCT_NAME } from "../brand";
 import { Icon } from "../ui/Icon";
@@ -46,6 +46,7 @@ export function ConnectionsScreen({
   const [notice, setNotice] = useState<Notice | null>(() => initialNotice(result));
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   const connect = () => {
     setBusy(true);
@@ -70,6 +71,8 @@ export function ConnectionsScreen({
       (res) => {
         setBusy(false);
         setConfirming(null);
+        // 눌렀던 버튼이 사라졌으므로 제목으로 포커스를 돌려 화면낭독기 사용자가 위치를 잃지 않게 한다.
+        headingRef.current?.focus();
         setNotice({
           tone: res.provider_revoke === "failed" ? "warning" : "success",
           text: REVOKE_MESSAGES[res.provider_revoke],
@@ -95,7 +98,9 @@ export function ConnectionsScreen({
       </header>
 
       <div className="conn-body">
-        <h1>계정 연결</h1>
+        <h1 ref={headingRef} tabIndex={-1}>
+          계정 연결
+        </h1>
         {/* 알림 영역은 비어 있어도 남겨 두어야 내용이 생길 때 화면낭독기가 읽는다. */}
         <div role="status" className="conn-notice">
           {notice !== null && notice.tone !== "error" && <NoticeLine notice={notice} />}
@@ -150,6 +155,7 @@ export function ConnectionsScreen({
                   key={item.id}
                   item={item}
                   busy={busy}
+                  canConnect={state.data.connect_available}
                   confirming={confirming === item.id}
                   onAskDisconnect={() => {
                     setConfirming(item.id);
@@ -183,6 +189,7 @@ function NoticeLine({ notice }: { notice: Notice }) {
 function ConnectionCard({
   item,
   busy,
+  canConnect,
   confirming,
   onAskDisconnect,
   onCancel,
@@ -191,6 +198,7 @@ function ConnectionCard({
 }: {
   item: Connection;
   busy: boolean;
+  canConnect: boolean;
   confirming: boolean;
   onAskDisconnect: () => void;
   onCancel: () => void;
@@ -199,6 +207,15 @@ function ConnectionCard({
 }) {
   const active = item.status === "active";
   const labels = scopeLabels(item.scopes);
+  const confirmRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const wasConfirming = useRef(false);
+  // 확인 단계가 열리면 그 안내로, 취소해서 닫히면 연 버튼으로 포커스를 옮긴다.
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus();
+    else if (wasConfirming.current) triggerRef.current?.focus();
+    wasConfirming.current = confirming;
+  }, [confirming]);
   return (
     <section className="conn-card" aria-labelledby={`conn-${item.id}`}>
       <h2 id={`conn-${item.id}`}>Google 계정</h2>
@@ -220,7 +237,13 @@ function ConnectionCard({
         </div>
       )}
       {confirming ? (
-        <div className="conn-confirm" role="group" aria-label="연결 해제 확인">
+        <div
+          className="conn-confirm"
+          role="group"
+          aria-label="연결 해제 확인"
+          ref={confirmRef}
+          tabIndex={-1}
+        >
           <p>
             연결을 해제하면 {PRODUCT_NAME}이 이 Google 계정의 메일과 일정을 더 이상 읽거나 바꿀 수
             없습니다. 해제할까요?
@@ -237,7 +260,12 @@ function ConnectionCard({
       ) : (
         <div className="conn-actions">
           {!active && (
-            <button type="button" className="btn btn-primary" disabled={busy} onClick={onReconnect}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy || !canConnect}
+              onClick={onReconnect}
+            >
               Google 계정 다시 연결
             </button>
           )}
@@ -246,10 +274,14 @@ function ConnectionCard({
             className="btn btn-secondary"
             disabled={busy}
             onClick={onAskDisconnect}
+            ref={triggerRef}
           >
             연결 해제
           </button>
         </div>
+      )}
+      {!active && !canConnect && !confirming && (
+        <p className="conn-hint">서버에 Google 연결 설정이 없어 지금은 다시 연결할 수 없습니다.</p>
       )}
     </section>
   );

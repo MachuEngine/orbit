@@ -8,7 +8,9 @@
   KEK ID는 키에서 도메인 분리 해시로 만든 짧은 식별자라 키 값을 알려 주지 않는다.
 - nonce(96비트)는 호출마다 무작위다. 같은 평문도 암호문이 매번 다르다.
 - 오류에는 종류만 담는다. 비밀·키·암호문은 메시지와 `repr`에 넣지 않는다.
-- KEK 파일: 32바이트 원시 값 또는 그 base64 문자열. 권한이 0600이 아니면 경고만 한다(경로만 기록).
+- KEK 파일: 정확히 32바이트인 원시 값, 또는 그 값의 엄격한 base64 문자열(끝의 공백·개행만 허용).
+  길이가 32바이트가 아닌 파일은 개행 하나가 붙은 원시 키여도 거부한다.
+  권한이 0600보다 넓으면 `strict_permissions`일 때 거부하고(운영), 아니면 경고만 한다(개발).
 """
 
 import base64
@@ -16,6 +18,7 @@ import binascii
 import hashlib
 import logging
 import os
+import re
 import secrets
 import stat
 import uuid
@@ -71,23 +74,31 @@ class KeyEncryptionKey:
             object.__setattr__(self, "kek_id", f"kek1-{digest}")
 
 
+_B64_STD = re.compile(rb"[A-Za-z0-9+/]{43}=")
+_B64_URL = re.compile(rb"[A-Za-z0-9_-]{43}=")
+
+
 def _parse_key_material(raw: bytes) -> bytes | None:
     if len(raw) == KEY_BYTES:
         return raw
-    text = raw.strip()
-    padded = text + b"=" * (-len(text) % 4)
-    for decoder in (base64.b64decode, base64.urlsafe_b64decode):
-        try:
-            decoded = decoder(padded)
-        except (binascii.Error, ValueError):
-            continue
-        if len(decoded) == KEY_BYTES:
-            return decoded
-    return None
+    text = raw.rstrip(b" \t\r\n")
+    try:
+        if _B64_STD.fullmatch(text):
+            decoded = base64.b64decode(text, validate=True)
+        elif _B64_URL.fullmatch(text):
+            decoded = base64.urlsafe_b64decode(text)
+        else:
+            return None
+    except (binascii.Error, ValueError):
+        return None
+    return decoded if len(decoded) == KEY_BYTES else None
 
 
-def load_kek_from_file(path: str | Path) -> KeyEncryptionKey:
-    """KEK 파일을 읽는다. 읽을 수 없거나 형식이 틀리면 `EnvelopeError`(메시지에 경로만)."""
+def load_kek_from_file(path: str | Path, *, strict_permissions: bool = False) -> KeyEncryptionKey:
+    """KEK 파일을 읽는다. 읽을 수 없거나 형식이 틀리면 `EnvelopeError`(메시지에 경로만).
+
+    `strict_permissions`이면 권한이 0600보다 넓은 파일을 거부한다(`ORBIT_ENV`가 dev가 아닐 때).
+    """
     target = Path(path)
     try:
         raw = target.read_bytes()
@@ -103,6 +114,10 @@ def load_kek_from_file(path: str | Path) -> KeyEncryptionKey:
             f"ORBIT_DATA_KEY_FILE 형식이 맞지 않는다(32바이트 또는 base64): {target}",
         )
     if mode & 0o077:
+        if strict_permissions:
+            raise EnvelopeError(
+                "kek_unavailable", f"ORBIT_DATA_KEY_FILE 권한이 0600보다 넓다(chmod 600): {target}"
+            )
         logger.warning("KEK 파일 권한이 0600보다 넓다. chmod 600 필요: %s", target)
     return KeyEncryptionKey(key)
 

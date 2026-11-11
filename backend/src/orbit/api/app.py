@@ -44,7 +44,9 @@ def build_connections(
     cipher: EnvelopeCipher | None = None
     if settings.data_key_file:
         try:
-            cipher = EnvelopeCipher(load_kek_from_file(settings.data_key_file))
+            cipher = EnvelopeCipher(
+                load_kek_from_file(settings.data_key_file, strict_permissions=settings.env != "dev")
+            )
         except EnvelopeError as exc:
             raise RuntimeError(str(exc)) from None
     key = settings.signing_key()

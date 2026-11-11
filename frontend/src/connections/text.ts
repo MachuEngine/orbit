@@ -47,7 +47,7 @@ export const CONNECTED_MESSAGE = "Google 계정을 연결했습니다.";
 export const REVOKE_MESSAGES = {
   revoked: "연결을 해제했습니다. Google에서도 권한을 거두었습니다.",
   none: "연결을 해제했습니다.",
-  failed: `${PRODUCT_NAME}에서는 연결을 해제했지만 Google에서 권한을 거두었는지 확인하지 못했습니다. Google 계정의 보안 설정에서 ${PRODUCT_NAME}의 접근 권한을 직접 삭제해 주세요.`,
+  failed: `${PRODUCT_NAME}에서는 연결을 해제했지만 Google에서 권한을 거두었는지 확인하지 못했습니다. Google 계정 권한 페이지(myaccount.google.com/permissions)에서 ${PRODUCT_NAME}의 접근 권한을 직접 삭제해 주세요.`,
 } as const;
 
 export type ConnectionResult = { kind: "connected" } | { kind: "error"; error: string };

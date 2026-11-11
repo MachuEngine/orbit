@@ -93,6 +93,20 @@ async def find_active_id(session: AsyncSession, ws: uuid.UUID) -> uuid.UUID | No
     return None if value is None else uuid.UUID(str(value))
 
 
+async def has_active_with_sub(session: AsyncSession, ws: uuid.UUID, sub: str) -> bool:
+    """같은 워크스페이스에 같은 Google 계정(`sub`)의 활성 연결이 있는지."""
+    found = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM connection WHERE workspace_id = :ws AND provider = :p"
+                " AND status = 'active' AND account_sub = :sub LIMIT 1"
+            ),
+            {"ws": ws, "p": PROVIDER, "sub": sub},
+        )
+    ).first()
+    return found is not None
+
+
 async def load_sealed(
     session: AsyncSession, ws: uuid.UUID, connection_id: uuid.UUID
 ) -> tuple[str, SealedSecret | None] | None:

@@ -135,3 +135,41 @@ def test_keygen_creates_0600_file_and_refuses_overwrite(
     assert len(key.key) == 32
     assert base64.b64encode(key.key).decode() not in capsys.readouterr().out
     assert keygen_main(["keygen", str(path)]) == 1
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        bytes(range(32)) + b"\n",  # 개행이 붙은 원시 키는 33바이트라 거부
+        base64.b64encode(bytes(range(32)))[:-1],  # 패딩 없음
+        b"!" + base64.b64encode(bytes(range(32)))[1:],  # base64 문자가 아닌 값이 섞임
+        b"AAAA" + base64.b64encode(bytes(range(32))),  # 길이 초과
+        base64.b64encode(bytes(range(31))),  # 디코딩 길이 부족
+        b"",
+    ],
+)
+def test_malformed_key_file_is_rejected(tmp_path: Path, content: bytes) -> None:
+    path = tmp_path / "x.key"
+    path.write_bytes(content)
+    path.chmod(0o600)
+    with pytest.raises(EnvelopeError) as info:
+        load_kek_from_file(path)
+    assert info.value.kind == "kek_unavailable"
+
+
+def test_urlsafe_base64_key_is_accepted(tmp_path: Path) -> None:
+    path = tmp_path / "u.key"
+    path.write_bytes(base64.urlsafe_b64encode(bytes([251, 255] * 16)) + b"\n")
+    path.chmod(0o600)
+    assert load_kek_from_file(path).key == bytes([251, 255] * 16)
+
+
+def test_strict_permissions_reject_wide_mode_but_accept_0600(tmp_path: Path) -> None:
+    path = tmp_path / "p.key"
+    path.write_bytes(bytes(32))
+    path.chmod(0o640)
+    with pytest.raises(EnvelopeError) as info:
+        load_kek_from_file(path, strict_permissions=True)
+    assert str(path) in str(info.value)
+    path.chmod(0o600)
+    load_kek_from_file(path, strict_permissions=True)
