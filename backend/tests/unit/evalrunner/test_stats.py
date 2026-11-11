@@ -17,10 +17,12 @@ def rec(
     split: str = "dev",
     repeats: int = 2,
     n_tasks: int | None = None,
+    cluster: str | None = None,
 ) -> dict[str, Any]:
     return {
         "task_id": task,
         "repeat": repeat,
+        "cluster_id": cluster or f"c-{task}",
         "config_fingerprint": fp,
         "config": {
             "dataset": dataset,
@@ -101,10 +103,13 @@ def test_pass_k() -> None:
     assert s2.pass_k == 0.75  # a, b, d
 
 
-def test_pass_k_excludes_tasks_with_fewer_repeats() -> None:
-    records = make({"a": [True] * 3, "b": [True]})
+def test_pass_k_follows_truncation_and_include_incomplete() -> None:
+    records = make({"a": [True] * 3, "b": [True]})  # b는 1회만: 완료한 라운드는 1회차뿐
     s = stats.pass_k(records)
-    assert (s.k, s.pass_k, s.n_tasks, s.n_excluded) == (3, 1.0, 1, 1)
+    assert (s.k, s.pass_k, s.n_tasks, s.n_excluded) == (1, 1.0, 2, 0)
+    assert (s.truncated, s.used_repeats, s.config_repeats) == (True, 1, 3)
+    full = stats.pass_k(records, include_incomplete=True)
+    assert (full.k, full.pass_k, full.n_tasks, full.n_excluded) == (3, 1.0, 1, 1)
 
 
 def test_failure_distribution() -> None:
@@ -152,7 +157,8 @@ def test_interrupted_run_is_cut_to_last_complete_round_and_reported() -> None:
     full = stats.success_rate(records, resamples=50, seed=0, include_incomplete=True)
     assert (full.truncated, full.used_repeats, full.n_tasks) == (False, 3, 3)
     assert full.rate == pytest.approx((1 + 0 + 1) / 3)
-    assert stats.pass_k(records).k == 3  # pass^k는 자신의 k 규칙을 따른다
+    assert stats.pass_k(records).k == 1  # pass^k도 같은 규칙으로 자른다
+    assert stats.pass_k(records, include_incomplete=True).k == 3
 
 
 def test_complete_run_is_not_truncated() -> None:
@@ -221,3 +227,67 @@ def test_config_repeats_must_exist_and_agree() -> None:
     del bare["config"]["repeats"]
     with pytest.raises(stats.ResultsError, match="repeats"):
         stats.success_rate([bare])
+
+
+def _clustered(n_clusters: int, per_cluster: int = 2) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for c in range(n_clusters):
+        for i in range(per_cluster):
+            ok = c % 2 == 0
+            rows.append(rec(f"t{c}-{i}", 1, ok, cluster=f"c{c}", repeats=1))
+    return rows
+
+
+def test_bootstrap_resamples_clusters_not_tasks() -> None:
+    # 클러스터 2개: A(과제 3개, 모두 성공), B(과제 1개, 실패). 과제 단위 재표본이면 CI 하한이
+    # 0보다 크게 나올 수 있지만, 클러스터 단위에서는 B만 뽑히는 재표본(0.0)이 반드시 생긴다.
+    rows = [rec(f"a{i}", 1, True, cluster="A", repeats=1) for i in range(3)]
+    rows.append(rec("b0", 1, False, cluster="B", repeats=1))
+    s = stats.success_rate(rows, resamples=2000, seed=0)
+    assert (s.ci_low, s.ci_high) == (0.0, 1.0)
+    assert s.rate == pytest.approx(0.75)  # 점추정은 과제 평균
+    assert s.n_clusters == 2 and s.cluster_rates == {"A": 1.0, "B": 0.0}
+
+
+def test_few_clusters_warning_and_report_fields() -> None:
+    few = stats.success_rate(_clustered(4), resamples=50, seed=0)
+    assert few.n_clusters == 4 and any("클러스터 수" in w for w in few.warnings)
+    assert few.cluster_rates["c0"] == 1.0 and few.cluster_rates["c1"] == 0.0
+    enough = stats.success_rate(_clustered(stats.MIN_CLUSTERS), resamples=50, seed=0)
+    assert enough.warnings == ()
+
+
+def test_rows_without_cluster_id_are_rejected() -> None:
+    bare = rec("a", 1, True, repeats=1)
+    del bare["cluster_id"]
+    with pytest.raises(stats.ResultsError, match="cluster_id"):
+        stats.success_rate([bare])
+    conflict = [rec("a", 1, True, cluster="x"), rec("a", 2, True, cluster="y")]
+    with pytest.raises(stats.ResultsError, match="cluster_id"):
+        stats.success_rate(conflict)
+
+
+def test_paired_difference_picks_same_clusters_and_reports_them() -> None:
+    a = _clustered(10)
+    b = [{**r, "outcome": {"success": False, "failure_type": "wrong_answer"}} for r in a]
+    p = stats.paired_difference(a, b, resamples=200, seed=0)
+    assert p.n_clusters == 10 and p.warnings == ()
+    assert p.cluster_differences["c0"] == 1.0 and p.cluster_differences["c1"] == 0.0
+    assert p.difference == pytest.approx(0.5)
+    few = stats.paired_difference(_clustered(3), [dict(r) for r in _clustered(3)], resamples=20)
+    assert any("클러스터 수" in w for w in few.warnings)
+
+
+def test_paired_difference_rejects_task_in_different_clusters() -> None:
+    a = [rec("x", 1, True, cluster="c1", repeats=1)]
+    b = [rec("x", 1, False, cluster="c2", repeats=1)]
+    with pytest.raises(stats.ResultsError, match="cluster_id"):
+        stats.paired_difference(a, b)
+
+
+def test_paired_warns_when_used_repeats_differ() -> None:
+    full = [rec(t, i, True, repeats=2) for t in ("a", "b") for i in (1, 2)]
+    cut = [rec("a", 1, True, repeats=2), rec("a", 2, True, repeats=2), rec("b", 1, True, repeats=2)]
+    p = stats.paired_difference(full, cut, resamples=20)
+    assert (p.used_repeats_a, p.used_repeats_b) == (2, 1)
+    assert any("반복 라운드" in w for w in p.warnings)

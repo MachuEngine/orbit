@@ -2,14 +2,23 @@ from typing import Any
 
 from orbit.connectors.sim.calls import CallRecord
 from orbit.connectors.sim.world import EventCancelled, WorldDiff
+from orbit.evaldata.schema import AnswerFact, Gold, RequiredCall
 from orbit.evalrunner.scoring import normalize_text, score_episode
-from orbit.evalrunner.task_source import FactRecord, GoldRecord, RequiredCallRecord
+
+
+def FactRecord(fact_id: str, any_of: tuple[str, ...], description: str) -> AnswerFact:  # noqa: N802
+    return AnswerFact(fact_id=fact_id, any_of=list(any_of), description=description)
+
+
+def RequiredCallRecord(tool: str, args: dict[str, Any]) -> RequiredCall:  # noqa: N802
+    return RequiredCall(tool=tool, args_subset=args)
+
 
 EMPTY = WorldDiff()
 CHANGED = WorldDiff(events_cancelled=(EventCancelled("acct", "cal", "ev"),))
 
 
-def gold(**kw: Any) -> GoldRecord:
+def gold(**kw: Any) -> Gold:
     base: dict[str, Any] = {
         "answer_facts": (FactRecord("f1", ("2026-11-12", "11월 12일"), "날짜"),),
         "must_not_contain": (),
@@ -17,7 +26,7 @@ def gold(**kw: Any) -> GoldRecord:
         "required_tool_calls": (),
         "forbidden_tools": (),
     }
-    return GoldRecord(**{**base, **kw})
+    return Gold(**{**base, **kw})
 
 
 def rec(tool: str, seq: int = 1, **args: Any) -> CallRecord:

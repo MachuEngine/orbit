@@ -36,6 +36,7 @@ from orbit.evalrunner.episode import (
     SystemUnderTest,
 )
 from orbit.evalrunner.scoring import FailureType, score_episode
+from orbit.evalrunner.structured import answer_ids
 from orbit.evalrunner.task_source import SPLITS, Dataset, DatasetError, TaskView
 from orbit.llm.interface import LLM, UsageRecorder
 
@@ -130,6 +131,7 @@ class EpisodeResult:
     config_fingerprint: str
     task_id: str
     scenario_id: str
+    cluster_id: str  # 근거를 공유하는 과제 묶음(통계의 재표본 단위)
     repeat: int
     success: bool | None  # None: 채점하지 못한 항목이 있어 성공도 실패도 아니다
     failure_type: FailureType | None
@@ -138,6 +140,7 @@ class EpisodeResult:
     checks: Mapping[str, bool | None]
     unscored: tuple[str, ...]
     text_fact_recall: float | None  # 구조화 채점 과제에서만. 사실이 없으면 None
+    answer_ids: dict[str, Any] | None  # SUT가 낸 구조화된 답의 일정 ID·시각 요약(원문 없음)
     trajectory: tuple[str, ...]
     llm_calls: int
     input_tokens: int
@@ -155,6 +158,7 @@ class EpisodeResult:
             "config_fingerprint": self.config_fingerprint,
             "task_id": self.task_id,
             "scenario_id": self.scenario_id,
+            "cluster_id": self.cluster_id,
             "repeat": self.repeat,
             "outcome": {
                 "success": self.success,
@@ -166,6 +170,7 @@ class EpisodeResult:
             "checks": dict(self.checks),
             "unscored": list(self.unscored),
             "text_fact_recall": self.text_fact_recall,
+            "answer_ids": self.answer_ids,
             "trajectory": list(self.trajectory),
             "usage": {
                 "llm_calls": self.llm_calls,
@@ -294,6 +299,7 @@ async def run_episode(
         config_fingerprint=fingerprint,
         task_id=task.task_id,
         scenario_id=task.scenario_id,
+        cluster_id=task.cluster_id,
         repeat=repeat,
         success=None if failure == "unscored" else failure is None,
         failure_type=failure,
@@ -302,6 +308,7 @@ async def run_episode(
         checks=checks,
         unscored=score.unscored,
         text_fact_recall=None if error_type is not None else score.text_fact_recall,
+        answer_ids=answer_ids(output.structured) if output is not None else None,
         trajectory=tuple(c.tool for c in calls),
         llm_calls=len(recorder.records),
         input_tokens=usage.input_tokens,

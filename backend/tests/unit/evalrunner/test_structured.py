@@ -1,19 +1,28 @@
+import json
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from orbit.evalrunner.structured import check_structured
-from orbit.evalrunner.task_source import EventRef, ExpectedAnswer
+from orbit.evaldata.schema import (
+    EventAnswer,
+    EventRef,
+    EventSetAnswer,
+    EventTimeAnswer,
+    TimeSlotAnswer,
+)
+from orbit.evalrunner.structured import answer_ids, check_structured
 
 E1 = {"calendar_id": "c1", "event_id": "e1"}
 E2 = {"calendar_id": "c1", "event_id": "e2"}
 START = datetime(2026, 11, 12, 1, 0, tzinfo=UTC)
 
-SET = ExpectedAnswer("event_set", events=(EventRef("c1", "e1"), EventRef("c1", "e2")))
-EVENT = ExpectedAnswer("event", event=EventRef("c1", "e1"))
-EVENT_TIME = ExpectedAnswer("event_time", event=EventRef("c1", "e1"), start=START)
-SLOT = ExpectedAnswer("time_slot", start=START)
+SET = EventSetAnswer(
+    events=[EventRef(calendar_id="c1", event_id="e1"), EventRef(calendar_id="c1", event_id="e2")]
+)
+EVENT = EventAnswer(event=EventRef(calendar_id="c1", event_id="e1"))
+EVENT_TIME = EventTimeAnswer(event=EventRef(calendar_id="c1", event_id="e1"), start=START)
+SLOT = TimeSlotAnswer(start=START)
 
 
 def test_event_set_matches_regardless_of_order() -> None:
@@ -32,7 +41,7 @@ def test_event_set_value_mismatch_is_wrong_answer() -> None:
 
 
 def test_empty_event_set_expectation() -> None:
-    empty = ExpectedAnswer("event_set", events=())
+    empty = EventSetAnswer(events=[])
     assert check_structured(empty, {"kind": "event_set", "events": []}) == "ok"
     assert check_structured(empty, {"kind": "event_set", "events": [E1]}) == "wrong_answer"
 
@@ -111,3 +120,35 @@ def test_time_slot_naive_time_is_format_error() -> None:
     assert check_structured(SLOT, {"kind": "time_slot", "start": "x", "event": E1}) == (
         "answer_format"
     )
+
+
+def test_answer_ids_keeps_only_ids_and_utc_instants() -> None:
+    got = answer_ids(
+        {
+            "kind": "event_time",
+            "event": E1,
+            "start": "2026-11-12T10:00:00+09:00",
+            "note": "free text",
+        }
+    )
+    assert got == {"kind": "event_time", "event": E1, "start": "2026-11-12T01:00:00+00:00"}
+    assert answer_ids({"kind": "event_set", "events": [E2, E1]}) == {
+        "kind": "event_set",
+        "events": [E2, E1],
+    }
+    assert answer_ids(None) is None and answer_ids("x") is None  # type: ignore[arg-type]
+
+
+def test_answer_ids_never_copies_free_text() -> None:
+    sentence = "10시에 회의가 있습니다. 비밀 문장"
+    got = answer_ids(
+        {
+            "kind": sentence,
+            "event": {"calendar_id": sentence, "event_id": "x" * 500},
+            "start": sentence,
+            "events": sentence,
+        }
+    )
+    assert got is not None and "비밀" not in json.dumps(got, ensure_ascii=False)
+    assert got["kind"] == "<invalid>" and got["start"] == "<invalid>"
+    assert got["event"] == {"calendar_id": "<invalid>", "event_id": "<invalid>"}

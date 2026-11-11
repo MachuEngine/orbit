@@ -5,7 +5,6 @@
 날짜·시각 계산은 생성기 함수를 쓰지 않고 여기서 다시 한다.
 """
 
-import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -22,35 +21,13 @@ from orbit.evaldata.schema import (
     TimeSlotAnswer,
 )
 from orbit.evaldata.timeutil import KST
-
-
-def _norm(text: str) -> str:
-    return "".join(text.split())
-
-
-def _match(text: str, cand: str) -> bool:
-    """공백 무시 + 숫자 경계 일치. 러너의 규칙과 같고, 통합 때 정리하려고 import하지 않는다."""
-    text, cand = _norm(text), _norm(cand)
-    start = 0
-    while (i := text.find(cand, start)) != -1:
-        j = i + len(cand)
-        ok = True
-        if i > 0 and text[i - 1].isdigit():
-            ok = False
-        if ok and cand[-1].isdigit() and j < len(text) and text[j].isdigit():
-            ok = False
-        if ok and cand.endswith("시") and re.match(r"(\d+분|반)", text[j:]):
-            ok = False
-        if ok:
-            return True
-        start = i + 1
-    return False
+from orbit.evalrunner.scoring import contains
 
 
 def _hit(task: Task, answer: str) -> list[str]:
     """응답에서 충족하지 못한 fact_id 목록."""
     return [
-        f.fact_id for f in task.gold.answer_facts if not any(_match(answer, x) for x in f.any_of)
+        f.fact_id for f in task.gold.answer_facts if not any(contains(answer, x) for x in f.any_of)
     ]
 
 
@@ -94,13 +71,13 @@ def _day_bounds(day: date) -> tuple[datetime, datetime]:
 
 
 def test_match_rules() -> None:
-    assert _match("10시에 만나요", "10시")
-    assert not _match("10시 30분에 만나요", "10시")
-    assert not _match("110시", "10시")
-    assert not _match("110:00", "10:00")
-    assert not _match("10:005", "10:00")
-    assert not _match("10시반", "10시")
-    assert _match("오전 10 시", "오전 10시")
+    assert contains("10시에 만나요", "10시")
+    assert not contains("10시 30분에 만나요", "10시")
+    assert not contains("110시", "10시")
+    assert not contains("110:00", "10:00")
+    assert not contains("10:005", "10:00")
+    assert not contains("10시반", "10시")
+    assert contains("오전 10 시", "오전 10시")
 
 
 async def test_every_gold_matches_sim(dataset_dir: Path) -> None:

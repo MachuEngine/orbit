@@ -367,7 +367,9 @@ def _rng() -> random.Random:
 def test_cluster_ids(dataset_dir: Path) -> None:
     ds = load_dataset(dataset_dir)
     groups = evidence_clusters(ds.tasks)
-    assert len(groups) >= 6
+    # 현재 데이터(seed 20261111)의 묶음 수. 생성기·월드 모델을 바꾸면 manifest.notes와 함께 고친다.
+    assert len(groups) == 15
+    assert Counter(g[0].split for g in groups) == {"dev": 6, "test": 9}
     for group in groups:
         expected = "c-" + min(t.task_id for t in group)
         assert {t.cluster_id for t in group} == {expected}
