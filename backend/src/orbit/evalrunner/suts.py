@@ -3,7 +3,10 @@
 import json
 from collections.abc import Callable
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from orbit.assistant.agent import ReadOnlyAssistant
+from orbit.assistant.prompt import PROMPT_VERSION
 from orbit.connectors.contracts import ConnectorError
 from orbit.evalrunner.episode import Episode, EpisodeOutput, SystemUnderTest
 from orbit.evalrunner.llm_script import SUBMIT_ANSWER
@@ -85,9 +88,44 @@ class ScriptedToolSUT:
         return EpisodeOutput(final_text="", structured=structured)
 
 
+class AssistantV0SUT:
+    """제품 경로 `ReadOnlyAssistant`(ADR-0011)를 감싸는 어댑터. 에피소드 입력을 변환할 뿐이다.
+
+    `version`에 프롬프트 버전을 넣어 결과의 설정 지문(`sut.version`)에 남긴다.
+    v0는 사용자 시간대를 `Asia/Seoul`로 고정한다. 사용자 발화(`role == "user"`)만 넘긴다.
+    """
+
+    name = "assistant_v0"
+    version = f"0+{PROMPT_VERSION}"
+    TIME_ZONE = "Asia/Seoul"
+
+    def __init__(self, *, max_turns: int = 20) -> None:
+        self._max_turns = max_turns
+
+    async def run(self, episode: Episode) -> EpisodeOutput:
+        assistant = ReadOnlyAssistant(
+            llm=episode.llm,
+            calendar=episode.connectors.calendar,
+            mail=episode.connectors.mail,
+            clock=episode.clock,
+            tz=ZoneInfo(self.TIME_ZONE),
+            on_step=episode.steps.consume,
+            max_turns=self._max_turns,
+            metadata={"task_id": episode.task.task_id},
+        )
+        text, structured = await assistant.run(
+            [t.content for t in episode.task.turns if t.role == "user"]
+        )
+        return EpisodeOutput(final_text=text, structured=structured)
+
+
 SutFactory = Callable[[], SystemUnderTest]
 
-_REGISTRY: dict[str, SutFactory] = {"noop": NoopSUT, "scripted_tool": ScriptedToolSUT}
+_REGISTRY: dict[str, SutFactory] = {
+    "noop": NoopSUT,
+    "scripted_tool": ScriptedToolSUT,
+    "assistant_v0": AssistantV0SUT,
+}
 
 
 def register_sut(name: str, factory: SutFactory) -> None:
