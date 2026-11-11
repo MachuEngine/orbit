@@ -5,6 +5,7 @@ API 키는 `Authorization` 헤더에만 쓰고, 로그·예외 메시지에는 �
 """
 
 import json
+import math
 import re
 from collections.abc import Callable
 from typing import Any
@@ -39,6 +40,17 @@ _FINISH_REASONS: dict[str, FinishReason] = {
     "length": "length",
     "content_filter": "content_filter",
 }
+
+
+_MAX_MODEL_ID_LEN = 200
+
+
+def _valid_cost(value: object) -> float | None:
+    """유한한 0 이상의 수(bool 제외)만 인정한다."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    cost = float(value)
+    return cost if math.isfinite(cost) and cost >= 0 else None
 
 
 def _normalize(name: str) -> str:
@@ -176,10 +188,14 @@ class OpenRouterLLM:
             output_tokens=int(usage_raw.get("completion_tokens") or 0),
             cached_input_tokens=int(details.get("cached_tokens") or 0),
         )
-        cost_usd = float(cost) if isinstance(cost, int | float) else None
+        cost_usd = _valid_cost(cost)
+        cost_invalid = cost is not None and cost_usd is None  # 있는데 못 믿는 값
 
+        too_long = model is not None and len(model) > _MAX_MODEL_ID_LEN
+        if model is not None and too_long:
+            model = model[:_MAX_MODEL_ID_LEN]  # 기록 크기를 제한한다
         mismatch: ModelMismatchError | None = None
-        if model is not None and not self._model_accepted(model):
+        if model is not None and (too_long or not self._model_accepted(model)):
             mismatch = ModelMismatchError(
                 f"응답 모델이 설정과 다르다: 설정={self._model_id!r}, 응답={model!r}"
             )
@@ -208,6 +224,7 @@ class OpenRouterLLM:
             latency_ms=0,  # run_with_retry가 시도 전체 시간으로 채운다
             model_id=model,
             provider=provider,
+            cost_incomplete=cost_invalid,
         )
 
 

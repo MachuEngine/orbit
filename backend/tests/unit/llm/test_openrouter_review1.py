@@ -1,5 +1,6 @@
 """3a 리뷰 1회차 수정에 대한 테스트: 모델 ID 허용 규칙, 파싱 실패, 비용 합산, 예외 체인."""
 
+import json
 import pickle
 import traceback
 from typing import Any
@@ -33,7 +34,13 @@ async def test_accepts_exact_and_date_suffixed_response_model(model: str) -> Non
 
 @pytest.mark.parametrize(
     "model",
-    [f"{MODEL}-mini", f"{MODEL}-2025-1-2", f"{MODEL}-2025-01-02-x", "openai/gpt-4o-2024-11-20"],
+    [
+        f"{MODEL}0-2025-01-02",
+        f"{MODEL}-mini",
+        f"{MODEL}-2025-1-2",
+        f"{MODEL}-2025-01-02-x",
+        "openai/gpt-4o-2024-11-20",
+    ],
 )
 async def test_rejects_other_response_model_and_records_its_id(model: str) -> None:
     recorder = UsageRecorder()
@@ -151,16 +158,47 @@ def _server_for(name: str) -> Server:
         "parse": Server(_json(200, {"choices": [], "x": leaked})),
         "badtype": Server(_json(200, _ok_body(usage={"prompt_tokens": leaked}))),
         "mismatch": Server(_json(200, _ok_body(model="x/y-1"))),
+        "5xx-exhausted": Server(*[_json(503, {"error": {"message": leaked}}) for _ in range(3)]),
+        "bad-tool-calls": Server(
+            _json(
+                200,
+                _ok_body(
+                    choices=[
+                        {
+                            "message": {
+                                "tool_calls": [
+                                    {"id": "c", "function": {"name": "n", "arguments": leaked}}
+                                ]
+                            }
+                        }
+                    ]
+                ),
+            )
+        ),
     }
     return servers[name]
 
 
 @pytest.mark.parametrize(
-    "name", ["connect", "timeout", "4xx", "5xx", "parse", "badtype", "mismatch"]
+    "name",
+    ["connect", "timeout", "4xx", "5xx", "parse", "badtype", "mismatch"],
 )
 async def test_error_has_no_chain_and_no_key_anywhere(name: str) -> None:
+    await _assert_clean(name, retries=0)
+
+
+@pytest.mark.parametrize("name", ["5xx-exhausted", "bad-tool-calls"])
+async def test_error_clean_with_retries_enabled(name: str) -> None:
+    await _assert_clean(name, retries=2)
+
+
+async def _assert_clean(name: str, *, retries: int) -> None:
+    server = _server_for(name)
     with pytest.raises(LLMError) as info:
-        await _llm(_server_for(name), llm_max_retries=0).complete(_request())
+        await _llm(server, llm_max_retries=retries).complete(_request())
+    if name == "5xx-exhausted":
+        assert len(server.requests) == 3
+        assert info.value.retries == 2
     exc = info.value
     assert exc.__cause__ is None
     assert exc.__context__ is None
@@ -184,3 +222,42 @@ def test_settings_reject_empty_key_and_non_https_url() -> None:
             openrouter_api_key=KEY,
             openrouter_base_url="http://example.test/v1",
         )
+
+
+@pytest.mark.parametrize("cost", [-0.1, float("inf"), float("nan"), True, "0.1", [1]])
+async def test_invalid_cost_becomes_none_and_incomplete(cost: object) -> None:
+    body = _ok_body(usage={"prompt_tokens": 1, "completion_tokens": 1, "cost": cost})
+    recorder = UsageRecorder()
+    raw = httpx.Response(200, content=json.dumps(body, allow_nan=True).encode())  # NaN 허용
+    resp = await RecordingLLM(_llm(Server(raw)), recorder).complete(_request())
+    assert resp.cost_usd is None
+    assert resp.cost_incomplete is True
+    assert recorder.records[0].cost_incomplete is True
+
+
+async def test_zero_cost_is_valid() -> None:
+    body = _ok_body(usage={"prompt_tokens": 1, "completion_tokens": 1, "cost": 0})
+    resp = await _llm(Server(_json(200, body))).complete(_request())
+    assert resp.cost_usd == 0.0
+    assert resp.cost_incomplete is False
+
+
+async def test_overlong_response_model_is_truncated_and_mismatch() -> None:
+    long_id = "x/" + "a" * 500
+    recorder = UsageRecorder()
+    llm = RecordingLLM(_llm(Server(_json(200, _ok_body(model=long_id)))), recorder)
+    with pytest.raises(ModelMismatchError):
+        await llm.complete(_request())
+    recorded = recorder.records[0].model_id
+    assert recorded == long_id[:200]
+
+
+async def test_overlong_model_equal_prefix_still_mismatch() -> None:
+    long_id = MODEL + "-2025-01-02" + "0" * 300
+    with pytest.raises(ModelMismatchError):
+        await _llm(Server(_json(200, _ok_body(model=long_id)))).complete(_request())
+
+
+def test_settings_reject_blank_key() -> None:
+    with pytest.raises(ValidationError):
+        LLMSettings(llm_model_id=MODEL, llm_provider_order=["openai"], openrouter_api_key="  \t ")

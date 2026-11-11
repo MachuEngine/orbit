@@ -44,6 +44,13 @@ class LLMSettings(BaseSettings):
     llm_timeout_seconds: float = Field(default=60.0, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
 
+    @field_validator("openrouter_api_key")
+    @classmethod
+    def _key_not_blank(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("API 키가 비어 있다")
+        return value
+
     @field_validator("openrouter_base_url")
     @classmethod
     def _require_https(cls, value: str) -> str:
