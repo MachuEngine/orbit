@@ -56,10 +56,12 @@ description: Orbit 백엔드(backend/) 코드를 작성·수정·검토할 때 �
 - 동시성·장애 규칙(쓰기 1번, 누출 0)은 스파이크 시나리오를 테스트로 옮겨 CI에서 매번 확인한다.
 - 실패를 숨기려고 테스트를 지우거나 건너뛰게 하지 않는다.
 
-## 명령 (1단계에서 확정)
-- 전체 검사: 저장소 루트에서 `scripts/check.sh`
-- 테스트: `uv run --directory backend pytest` (예정)
-- 정적 검사: `uv run --directory backend ruff check`, 타입 검사 도구는 1단계에서 결정
+## 명령 (1단계 확정)
+- 전체 검사: 저장소 루트에서 `scripts/check.sh` (CI와 같은 순서: ruff check → ruff format --check → mypy → pytest)
+- 개발 DB: `docker compose -f backend/compose.yml up -d --wait` → `set -a; source backend/dev.env; set +a` → `uv run --directory backend alembic upgrade head`. 테스트는 `orbit_test` DB를 쓴다(이름이 `_test`로 끝나지 않으면 통합 테스트가 시작하지 않는다)
+- 개별 실행: `uv run --directory backend pytest -q`, `uv run --directory backend ruff check --no-fix .`, `uv run --directory backend mypy`
+- 통합 테스트는 DB 환경 변수가 없으면 로컬에서는 사유를 출력하고 건너뛰고, `CI=true`에서는 실패한다
+- 의존성 추가: `uv add --directory backend <패키지>` 후 `uv.lock`을 함께 커밋한다
 
 ## 완료 체크리스트
 - [ ] 새 사용자 데이터 테이블에 `workspace_id`·RLS·FORCE가 있고 격리 테스트가 있다

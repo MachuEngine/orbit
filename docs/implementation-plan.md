@@ -26,13 +26,13 @@
 
 각 단계는 하나 이상의 PR로 끝내고, `scripts/check.sh`와 CI 통과를 완료 조건에 포함한다.
 
-### 0단계. 준비
+### 0단계. 준비 (완료, 2026-11-11, PR #3)
 1. 하네스 템플릿 v0.3.0: 리뷰어 훅이 저장소 루트 기준으로 `scripts/check.sh`를 실행하고 `uv run pytest`를 허용하도록 수정 → Orbit에 `copier update`
 2. 백엔드 개발 스킬 작성 (프로젝트 구조, 테스트 작성 규칙, RLS·실행 기록 규칙 체크리스트)
 3. `main` 브랜치 보호: CI 통과 필수
 4. ADR-0006: 그래프 상태·작업 인자에 사용자 본문 금지, 체크포인트 삭제 전파
 
-### 1단계. 백엔드 골격 (완료, 2026-11-11, PR 리뷰 대기)
+### 1단계. 백엔드 골격 (완료, 2026-11-11, PR #4)
 1. `backend/` uv 프로젝트, lint·타입 검사·테스트 도구 결정 후 `scripts/check.sh`와 CI(PostgreSQL 서비스 포함)에 연결
 2. 설정, 고정 시계(Clock) 주입, UUIDv7 생성기
 3. 마이그레이션 도구, 소유자·애플리케이션 DB 역할 분리, RLS 정책
@@ -41,7 +41,7 @@
 
 완료 조건: 다른 워크스페이스 데이터 노출 0을 CI가 매번 검증한다.
 
-결과: 로컬 PostgreSQL(pgvector 0.8.0-pg17)에서 `scripts/check.sh`가 통과했고, RLS 통합 테스트(설정 없음·교차 접근·풀 재사용·동기 스레드/비동기 태스크 동시성·역할 확인)와 마이그레이션 upgrade→downgrade→upgrade가 모두 실행됐다. CI는 PR에서 처음 실행된다.
+결과: 로컬 PostgreSQL(pgvector 0.8.0-pg17)에서 `scripts/check.sh`가 통과했고, RLS 통합 테스트(설정 없음·교차 접근·풀 재사용·동기 스레드/비동기 태스크 동시성·역할 확인)와 마이그레이션 upgrade→downgrade→upgrade가 모두 실행됐다. GitHub Actions(PostgreSQL 서비스)에서도 28건이 skip 없이 통과했다.
 
 ### 2단계. Connector 계약과 Sim Provider v0
 1. `MailConnector`·`CalendarConnector` 계약 (메일은 초안 생성·발송·조회 포함)
