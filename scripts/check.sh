@@ -54,8 +54,25 @@ check_frontend() {
     ok "frontend/ 없음, 건너뛴다"
     return
   fi
-  # TODO(스택 확정 후): lint / type check / test 명령을 여기에 추가하고 아래 fail을 지운다.
-  fail "frontend/가 있지만 검사 명령이 정의되지 않았다. scripts/check.sh를 갱신한다"
+  if ! command -v npm >/dev/null 2>&1; then
+    fail "npm이 설치되어 있지 않다 (Node.js 22.12 이상)"
+    return
+  fi
+  # package-lock.json 기준으로 정확히 설치한다. node_modules가 최신이면 건너뛴다.
+  if [ ! -d frontend/node_modules ] || [ frontend/package-lock.json -nt frontend/node_modules/.package-lock.json ]; then
+    if ! npm ci --prefix frontend; then
+      fail "npm ci"
+      return
+    fi
+  fi
+  run_frontend() {
+    local label="$1"; shift
+    if npm --prefix frontend run "$@"; then ok "$label"; else fail "$label"; fi
+  }
+  run_frontend "eslint" lint
+  run_frontend "prettier --check" format:check
+  run_frontend "tsc --noEmit" typecheck
+  if npm --prefix frontend test -- --run; then ok "vitest"; else fail "vitest"; fi
 }
 
 check_backend
