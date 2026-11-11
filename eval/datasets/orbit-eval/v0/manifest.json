@@ -1,0 +1,18 @@
+{
+  "counts": {
+    "events": 76,
+    "messages": 206,
+    "tasks": 60,
+    "users": 2
+  },
+  "created_with": "templates",
+  "generator_git_sha": "b86abc19f33103be7f63d823ac90600e8e0e9fa9",
+  "name": "orbit-eval",
+  "notes": "v0: 템플릿 문장으로만 생성한 합성 데이터(LLM 미사용). 1차 유형은 읽기 전용 일정 조회. split_ratio는 D2-3 미결정이라 임시값이다. 사용자는 모두 Asia/Seoul이지만 v0 날짜 처리는 UTC 기준이라 모든 일정을 평일 09:00~18:00(KST)에 두고 종일 일정은 만들지 않는다. 월드는 스냅샷 시각 하나의 최종 상태이며 과제의 as_of_time은 그 이후다.",
+  "seed": 20261111,
+  "split_ratio": {
+    "dev": 0.6,
+    "test": 0.4
+  },
+  "version": "v0"
+}
