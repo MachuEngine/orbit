@@ -14,6 +14,11 @@
 
 ## 먼저 읽을 문서
 - 경계와 구성: `docs/architecture.md`, `docs/adr/`
+- 구현 순서와 현재 단계: `docs/implementation-plan.md`
+- 백엔드 코드를 쓰거나 검토할 때: `.claude/skills/backend-dev/SKILL.md`
+- 화면을 만들 때: `.claude/skills/frontend-design/SKILL.md`(Anthropic 원본)와 `reference/orbit.md`(Orbit 보충, 충돌 시 우선)
+- 브랜드(색·서체·로고·토큰)를 정하거나 바꿀 때: `.claude/skills/brand-identity/SKILL.md`
+- 화면 변경을 검토할 때: `.claude/skills/design-review/SKILL.md`
 - 세부 결정과 근거: `private-docs/Orbit — 세부 설계 초안 v0.1.md` (D1~D10)
 - 하네스 운영 원칙: `private-docs/Orbit_코딩에이전트_하네스_설계_v0.1.md`
 
@@ -36,3 +41,6 @@ code-reviewer가 공통 검토 관점보다 먼저 확인할 항목이다.
 4. **Connector 경계**: 제공자 API를 Connector 계약 밖에서 직접 호출하지 않는가. Sim과 Google Adapter가 같은 계약 테스트를 통과하는가 (D1-1)
 5. **모델 ID와 핸들**: 모델이 제공자 ID를 직접 다루지 않고 작업 집합 핸들(E1, M3)로만 대상을 가리키는가 (D8-1)
 6. **재현성**: 실험 코드가 고정 시계, 고정 모델 ID, 설정 지문을 쓰는가 (D1-5, D3-2, D9-3)
+7. **RLS 밖 저장소**: LangGraph 그래프 상태와 Procrastinate 작업 인자에 메일·문서 본문, 주소, 이름, 프롬프트 원문이 들어가지 않는가. ID와 핸들만 있는가 (ADR-0006)
+8. **화면 변경**: diff에 프론트엔드 파일(css, html, ts/tsx, js/jsx 등)이 있으면 `.claude/skills/design-review/SKILL.md`를 Read로 읽고 그 점검표와 보고 형식을 함께 적용한다
+9. **백엔드 변경**: diff에 `backend/` 파일이 있으면 `.claude/skills/backend-dev/SKILL.md`의 완료 체크리스트를 함께 확인한다
