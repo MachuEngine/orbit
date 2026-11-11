@@ -1,6 +1,5 @@
 import asyncio
 import json
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -19,7 +18,7 @@ from orbit.evalrunner.runner import (
     run_experiment,
 )
 from orbit.evalrunner.suts import NoopSUT, ScriptedToolSUT
-from orbit.evalrunner.task_source import Dataset, GoldRecord, TaskRecord
+from orbit.evalrunner.task_source import Dataset
 from orbit.llm.types import LLMRequest, Message
 
 from .conftest import call, good_script, run, step
@@ -98,8 +97,8 @@ async def test_state_change_without_forbidden_tool_is_unexpected_state_change(
 ) -> None:
     # 금지 도구 목록이 없는 과제를 만들어, 상태 변화만으로 실패하는 경로를 확인한다.
     base = dataset.tasks_for("dev")[0]
-    assert isinstance(base, TaskRecord) and isinstance(base.gold, GoldRecord)
-    task = replace(base, gold=replace(base.gold, forbidden_tools=(), required_tool_calls=()))
+    gold = base.gold.model_copy(update={"forbidden_tools": [], "required_tool_calls": []})
+    task = base.model_copy(update={"gold": gold})
     ds = Dataset(dataset.name, dataset.version, dataset.manifest, dataset.world_snapshot, (task,))
     script = {
         "t-001": [

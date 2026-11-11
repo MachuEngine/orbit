@@ -2,17 +2,14 @@
 
 import pytest
 
+from orbit.evaldata.schema import AnswerFact, Gold
 from orbit.evalrunner.scoring import check_answer_facts, check_must_not_contain, contains
-from orbit.evalrunner.task_source import FactRecord, GoldRecord
 
 
-def _gold(candidate: str) -> GoldRecord:
-    return GoldRecord(
-        answer_facts=(FactRecord("f", (candidate,), ""),),
-        must_not_contain=(candidate,),
-        expected_changes=None,
-        required_tool_calls=(),
-        forbidden_tools=(),
+def _gold(candidate: str) -> Gold:
+    return Gold(
+        answer_facts=[AnswerFact(fact_id="f", any_of=[candidate], description="")],
+        must_not_contain=[candidate],
     )
 
 

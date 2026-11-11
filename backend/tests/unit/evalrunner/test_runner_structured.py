@@ -119,3 +119,14 @@ async def test_distribution_separates_answer_format_and_wrong_answer(dataset: Da
 async def test_submit_answer_is_not_a_connector_call(dataset: Dataset) -> None:
     r = t2(await run(dataset, repeats=1))
     assert r.trajectory == ("list_events",)
+
+
+async def test_result_rows_carry_cluster_id_and_answer_ids(dataset: Dataset) -> None:
+    summary = await run(dataset, repeats=1)
+    r = t2(summary)
+    row = json.loads(r.to_json_line())
+    assert row["cluster_id"] == "c-t-001"
+    assert row["answer_ids"] == RIGHT
+    text_task = next(x for x in summary.results if x.task_id == "t-001")
+    assert text_task.answer_ids is None  # 구조화된 답을 내지 않은 과제
+    assert "answer_ids" in json.loads(text_task.to_json_line())

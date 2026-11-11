@@ -77,8 +77,10 @@ def test_error_output_does_not_echo_input_values(
 ) -> None:
     root = tmp_path / "ds"
     root.mkdir()
-    for name in ("manifest.json", "tasks.jsonl"):
-        (root / name).write_text((DATASET_DIR / name).read_text(encoding="utf-8"), "utf-8")
+    (root / "tasks.jsonl").write_text((DATASET_DIR / "tasks.jsonl").read_text("utf-8"), "utf-8")
+    manifest = json.loads((DATASET_DIR / "manifest.json").read_text(encoding="utf-8"))
+    manifest["counts"].update(messages=0, events=0)  # 검증은 통과하고 Sim 로드에서 실패하게 한다
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     world = {
         "schema_version": 1,
         "seed": "SECRET-MARKER-XYZ",

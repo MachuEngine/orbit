@@ -3,7 +3,7 @@
 import asyncio
 import dataclasses
 import json
-from dataclasses import fields, replace
+from dataclasses import fields
 from typing import Any
 
 import pytest
@@ -14,7 +14,7 @@ from orbit.evalrunner.episode import Budget, Episode, EpisodeConnectors, Episode
 from orbit.evalrunner.llm_script import SCRIPTED_MODEL_ID
 from orbit.evalrunner.runner import ExperimentBudget, run_experiment
 from orbit.evalrunner.suts import ScriptedToolSUT
-from orbit.evalrunner.task_source import Dataset, GoldRecord, TaskRecord
+from orbit.evalrunner.task_source import Dataset
 from orbit.llm.types import LLMRequest, LLMResponse
 
 from .conftest import run
@@ -80,8 +80,8 @@ async def test_sut_authority_is_narrow(dataset: Dataset) -> None:
 
 def _no_forbidden(dataset: Dataset) -> Dataset:
     base = dataset.tasks_for("dev")[0]
-    assert isinstance(base, TaskRecord) and isinstance(base.gold, GoldRecord)
-    task = replace(base, gold=replace(base.gold, forbidden_tools=(), required_tool_calls=()))
+    gold = base.gold.model_copy(update={"forbidden_tools": [], "required_tool_calls": []})
+    task = base.model_copy(update={"gold": gold})
     return Dataset(dataset.name, dataset.version, dataset.manifest, dataset.world_snapshot, (task,))
 
 

@@ -1,7 +1,11 @@
 """결과 JSONL만 입력으로 받는 통계 (ADR-0009 §3, D3-3). 러너와 분리돼 있고 표준 라이브러리만 쓴다.
 
-- 단위는 과제다. 같은 과제의 반복은 독립 표본이 아니므로 과제별 성공률(반복 평균)을 먼저 구하고,
-  과제를 복원추출해서 bootstrap한다(percentile 방식). 점추정은 과제별 성공률의 평균이다.
+- 같은 과제의 반복은 독립 표본이 아니므로 과제별 성공률(반복 평균)을 먼저 구한다. 근거를 공유하는
+  과제도 독립이 아니므로(ADR-0010 §2) bootstrap은 결과 행의 `cluster_id` 단위로 클러스터를
+  복원추출한다(percentile 방식). 재표본마다 뽑힌 클러스터에 속한 과제들의 성공률 평균을 낸다.
+  점추정은 모든 과제의 성공률 평균이다. 짝지은 차이도 같은 클러스터를 함께 뽑는다.
+- 클러스터 수가 `MIN_CLUSTERS`(10) 미만이면 신뢰구간이 불안정하다는 경고를 `warnings`에 남긴다.
+  보고에는 클러스터 수와 클러스터별 값(성공률, 짝지은 차이)이 들어간다.
 - 신뢰구간: 재표본 통계 B개를 정렬해 `floor(a/2 * B)`번째와
   `ceil((1 - a/2) * B) - 1`번째 값을 쓴다(a는 유의수준).
 - 시드를 고정하면 결과가 같다(`random.Random(seed)`).
@@ -10,7 +14,8 @@
   수는 결과 행의 `config.repeats`(행마다 다르거나 없으면 오류), 과제 수는 `config.n_tasks`(없으면
   파일에 나온 과제 수)다. 잘랐다는 사실과 원래 `config.repeats`는 `RateSummary`에 남는다.
   남은 과제가 하나도 없으면 오류이고 메시지에 `--include-incomplete` 안내가 있다. 이 옵션
-  (`include_incomplete=True`)은 자르지 않고 있는 에피소드를 모두 쓴다.
+  (`include_incomplete=True`)은 자르지 않고 있는 에피소드를 모두 쓴다. `pass_k`도 같은 규칙으로
+  자른다(`k` 기본값은 `used_repeats`).
 - `(task_id, repeat)`가 겹치는 결과는 오류다.
 """
 
@@ -80,16 +85,7 @@ def _check_duplicates(records: Sequence[Record]) -> None:
         seen.add(key)
 
 
-def _per_task(records: Sequence[Record]) -> dict[str, list[bool | None]]:
-    """과제별 성공 여부(반복 번호 순). 채점 불가 에피소드는 None."""
-    _check_duplicates(records)
-    grouped: dict[str, list[tuple[int, bool | None]]] = {}
-    for r in records:
-        success = r["outcome"]["success"]
-        grouped.setdefault(str(r["task_id"]), []).append(
-            (int(r.get("repeat", 0)), None if success is None else bool(success))
-        )
-    return {t: [ok for _, ok in sorted(v)] for t, v in grouped.items()}
+MIN_CLUSTERS = 10
 
 
 def _expected_repeats(records: Sequence[Record]) -> int:
@@ -106,30 +102,28 @@ def _planned_tasks(records: Sequence[Record]) -> int | None:
     return only if len(values) == 1 and isinstance(only, int) else None
 
 
-def _complete_rounds(records: Sequence[Record], per_round: dict[int, int]) -> int:
-    """모든 과제가 완료한 최대 반복 라운드. 1회차부터 끊기지 않고 이어진 라운드만 센다."""
-    expected = _expected_repeats(records)
-    planned = _planned_tasks(records) or len({str(r["task_id"]) for r in records})
-    done = 0
-    for rnd in range(1, expected + 1):
-        if per_round.get(rnd, 0) < planned:
-            break
-        done = rnd
-    return done
+def _cluster_map(records: Sequence[Record]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for r in records:
+        cid = r.get("cluster_id")
+        if not isinstance(cid, str) or not cid:
+            raise ResultsError("결과 행에 cluster_id가 없다")
+        task = str(r["task_id"])
+        if out.setdefault(task, cid) != cid:
+            raise ResultsError(f"과제 {task}의 cluster_id가 행마다 다르다")
+    return out
 
 
 @dataclass(frozen=True)
-class TaskRates:
-    rates: dict[str, float]
-    n_incomplete_tasks: int  # 사용할 라운드에 에피소드가 부족해 제외한 과제
-    n_unscored_tasks: int  # 채점된 에피소드가 하나도 없는 과제
-    n_unscored_episodes: int
-    config_repeats: int
-    used_repeats: int  # 통계에 쓴 반복 라운드 수
+class _Rounds:
+    by_task: dict[str, dict[int, bool | None]]  # 과제 -> 반복 번호 -> 성공(None: 채점 불가)
+    expected: int  # config.repeats
+    used: int  # 통계에 쓸 반복 라운드 수
     truncated: bool  # 중단된 실험이라 라운드를 잘라 썼는가
 
 
-def _task_rates(records: Sequence[Record], include_incomplete: bool) -> TaskRates:
+def _rounds(records: Sequence[Record], include_incomplete: bool) -> _Rounds:
+    """모든 과제가 완료한 최대 반복 라운드(1회차부터 끊김 없이)를 구한다."""
     _check_duplicates(records)
     expected = _expected_repeats(records)
     by_task: dict[str, dict[int, bool | None]] = {}
@@ -140,17 +134,37 @@ def _task_rates(records: Sequence[Record], include_incomplete: bool) -> TaskRate
         by_task.setdefault(str(r["task_id"]), {})[rnd] = None if success is None else bool(success)
         per_round[rnd] = per_round.get(rnd, 0) + 1
     if include_incomplete:
-        used, truncated = expected, False
-    else:
-        used = _complete_rounds(records, per_round)
-        truncated = used < expected
+        return _Rounds(by_task, expected, expected, False)
+    planned = _planned_tasks(records) or len(by_task)
+    used = 0
+    for rnd in range(1, expected + 1):
+        if per_round.get(rnd, 0) < planned:
+            break
+        used = rnd
+    return _Rounds(by_task, expected, used, used < expected)
+
+
+@dataclass(frozen=True)
+class TaskRates:
+    rates: dict[str, float]
+    clusters: dict[str, str]  # 통계에 쓴 과제 -> cluster_id
+    n_incomplete_tasks: int  # 사용할 라운드에 에피소드가 부족해 제외한 과제
+    n_unscored_tasks: int  # 채점된 에피소드가 하나도 없는 과제
+    n_unscored_episodes: int
+    config_repeats: int
+    used_repeats: int  # 통계에 쓴 반복 라운드 수
+    truncated: bool  # 중단된 실험이라 라운드를 잘라 썼는가
+
+
+def _task_rates(records: Sequence[Record], include_incomplete: bool) -> TaskRates:
+    rd = _rounds(records, include_incomplete)
+    cluster_of = _cluster_map(records)
     rates: dict[str, float] = {}
-    incomplete = unscored_tasks = 0
-    n_unscored = 0
-    for t, rounds in by_task.items():
-        picked = [rounds[k] for k in sorted(rounds) if include_incomplete or k <= used]
+    incomplete = unscored_tasks = n_unscored = 0
+    for t, rounds in rd.by_task.items():
+        picked = [rounds[k] for k in sorted(rounds) if include_incomplete or k <= rd.used]
         n_unscored += sum(ok is None for ok in picked)
-        if not include_incomplete and len(picked) < used:
+        if not include_incomplete and len(picked) < rd.used:
             incomplete += 1
             continue
         scored = [ok for ok in picked if ok is not None]
@@ -158,29 +172,58 @@ def _task_rates(records: Sequence[Record], include_incomplete: bool) -> TaskRate
             unscored_tasks += 1
             continue
         rates[t] = sum(scored) / len(scored)
-    return TaskRates(rates, incomplete, unscored_tasks, n_unscored, expected, used, truncated)
+    return TaskRates(
+        rates,
+        {t: cluster_of[t] for t in rates},
+        incomplete,
+        unscored_tasks,
+        n_unscored,
+        rd.expected,
+        rd.used,
+        rd.truncated,
+    )
+
+
+def _group_by_cluster(
+    values: Mapping[str, float], cluster_of: Mapping[str, str]
+) -> dict[str, list[float]]:
+    groups: dict[str, list[float]] = {}
+    for task in sorted(values):
+        groups.setdefault(cluster_of[task], []).append(values[task])
+    return groups
 
 
 def _bootstrap_ci(
-    values: Sequence[float], *, resamples: int, seed: int, alpha: float
+    groups: Sequence[Sequence[float]], *, resamples: int, seed: int, alpha: float
 ) -> tuple[float, float]:
+    """클러스터를 복원추출한다. 통계는 뽑힌 클러스터에 속한 모든 과제 값의 평균이다."""
     if resamples < 1:
         raise ValueError("resamples는 1 이상이어야 한다")
     if not 0 < alpha < 1:
         raise ValueError("alpha는 0과 1 사이여야 한다")
-    if not values:
+    if not groups:
         raise ResultsError(
             "통계에 쓸 수 있는 과제가 없다(완료한 반복 라운드가 없거나 모두 채점 불가다). "
             "부분 실행 결과를 그대로 쓰려면 --include-incomplete를 쓴다"
         )
     rng = random.Random(seed)  # noqa: S311  재현성용 의사난수
-    n = len(values)
-    means = sorted(
-        statistics.fmean(values[rng.randrange(n)] for _ in range(n)) for _ in range(resamples)
-    )
+    n = len(groups)
+    sums = [sum(g) for g in groups]
+    counts = [len(g) for g in groups]
+    means: list[float] = []
+    for _ in range(resamples):
+        picks = [rng.randrange(n) for _ in range(n)]
+        means.append(sum(sums[i] for i in picks) / sum(counts[i] for i in picks))
+    means.sort()
     lo = math.floor(alpha / 2 * resamples)
     hi = math.ceil((1 - alpha / 2) * resamples) - 1
     return means[lo], means[min(max(hi, lo), resamples - 1)]
+
+
+def _few_clusters_warning(n: int) -> list[str]:
+    if n < MIN_CLUSTERS:
+        return [f"클러스터 수가 {n}개로 {MIN_CLUSTERS}개 미만이라 신뢰구간이 불안정하다"]
+    return []
 
 
 @dataclass(frozen=True)
@@ -196,6 +239,9 @@ class RateSummary:
     config_repeats: int  # 원래 설정의 반복 수
     used_repeats: int  # 통계에 쓴 반복 라운드 수
     truncated: bool  # 중단된 실험이라 라운드를 잘라 썼다
+    n_clusters: int
+    cluster_rates: dict[str, float]  # 클러스터별 과제 성공률 평균
+    warnings: tuple[str, ...]
 
 
 def success_rate(
@@ -207,13 +253,13 @@ def success_rate(
     include_incomplete: bool = False,
 ) -> RateSummary:
     tr = _task_rates(records, include_incomplete)
-    values = [tr.rates[t] for t in sorted(tr.rates)]
-    lo, hi = _bootstrap_ci(values, resamples=resamples, seed=seed, alpha=alpha)
+    groups = _group_by_cluster(tr.rates, tr.clusters)
+    lo, hi = _bootstrap_ci(list(groups.values()), resamples=resamples, seed=seed, alpha=alpha)
     return RateSummary(
-        statistics.fmean(values),
+        statistics.fmean(tr.rates.values()),
         lo,
         hi,
-        len(values),
+        len(tr.rates),
         len(records),
         tr.n_unscored_episodes,
         tr.n_unscored_tasks,
@@ -221,12 +267,15 @@ def success_rate(
         tr.config_repeats,
         tr.used_repeats,
         tr.truncated,
+        len(groups),
+        {c: statistics.fmean(v) for c, v in sorted(groups.items())},
+        tuple(_few_clusters_warning(len(groups))),
     )
 
 
 @dataclass(frozen=True)
 class PairedSummary:
-    """`a - b`의 과제별 성공률 차이. 같은 task_id만 짝짓는다."""
+    """`a - b`의 과제별 성공률 차이. 같은 task_id만 짝짓고 같은 클러스터를 함께 뽑는다."""
 
     difference: float
     ci_low: float
@@ -236,6 +285,9 @@ class PairedSummary:
     n_unpaired_b: int
     used_repeats_a: int
     used_repeats_b: int
+    n_clusters: int
+    cluster_differences: dict[str, float]  # 클러스터별 과제 차이 평균
+    warnings: tuple[str, ...]
 
 
 def _config_value(records: Sequence[Record], key: str) -> str:
@@ -254,7 +306,10 @@ def paired_difference(
     alpha: float = DEFAULT_ALPHA,
     include_incomplete: bool = False,
 ) -> PairedSummary:
-    """두 결과의 `config.dataset`과 `config.split`이 같아야 한다(다르면 `ResultsError`)."""
+    """두 결과의 `config.dataset`과 `config.split`이 같아야 한다(다르면 `ResultsError`).
+
+    두 설정의 `used_repeats`가 다르면(한쪽이 중단돼 잘렸다) 경고한다.
+    """
     for key in ("dataset", "split"):
         if _config_value(a, key) != _config_value(b, key):
             raise ResultsError(f"두 결과의 config.{key}가 다르다")
@@ -263,10 +318,19 @@ def paired_difference(
     common = sorted(set(ra) & set(rb))
     if not common:
         raise ResultsError("두 결과에 공통 task_id가 없다")
-    diffs = [ra[t] - rb[t] for t in common]
-    lo, hi = _bootstrap_ci(diffs, resamples=resamples, seed=seed, alpha=alpha)
+    for t in common:
+        if tra.clusters[t] != trb.clusters[t]:
+            raise ResultsError(f"과제 {t}의 cluster_id가 두 결과에서 다르다")
+    diffs = {t: ra[t] - rb[t] for t in common}
+    groups = _group_by_cluster(diffs, tra.clusters)
+    lo, hi = _bootstrap_ci(list(groups.values()), resamples=resamples, seed=seed, alpha=alpha)
+    warnings = _few_clusters_warning(len(groups))
+    if tra.used_repeats != trb.used_repeats:
+        warnings.append(
+            f"두 설정이 쓴 반복 라운드 수가 다르다(a={tra.used_repeats}, b={trb.used_repeats})"
+        )
     return PairedSummary(
-        statistics.fmean(diffs),
+        statistics.fmean(diffs.values()),
         lo,
         hi,
         len(common),
@@ -274,6 +338,9 @@ def paired_difference(
         len(set(rb) - set(ra)),
         tra.used_repeats,
         trb.used_repeats,
+        len(groups),
+        {c: statistics.fmean(v) for c, v in sorted(groups.items())},
+        tuple(warnings),
     )
 
 
@@ -283,21 +350,40 @@ class PassKSummary:
     pass_k: float  # k회 모두 성공한 과제 비율
     n_tasks: int
     n_excluded: int  # 반복이 k회보다 적거나 채점 불가가 있어 제외한 과제 수
+    config_repeats: int
+    used_repeats: int
+    truncated: bool
 
 
-def pass_k(records: Sequence[Record], k: int | None = None) -> PassKSummary:
-    """과제별로 반복 번호 순 앞 k회가 모두 성공한 과제의 비율. k 기본값은 최대 반복 횟수다."""
-    per_task = _per_task(records)
-    kk = k if k is not None else max(len(v) for v in per_task.values())
+def pass_k(
+    records: Sequence[Record], k: int | None = None, *, include_incomplete: bool = False
+) -> PassKSummary:
+    """과제별로 반복 1..k회가 모두 있고 모두 성공한 과제의 비율.
+
+    `k` 기본값은 `used_repeats`(중단된 실험은 완료한 라운드까지)이고, `include_incomplete`이면
+    `config.repeats`다.
+    """
+    rd = _rounds(records, include_incomplete)
+    kk = k if k is not None else rd.used
     if kk < 1:
-        raise ValueError("k는 1 이상이어야 한다")
+        raise ResultsError("완료한 반복 라운드가 없다. --include-incomplete를 쓰거나 k를 지정한다")
     eligible = {
-        t: v for t, v in per_task.items() if len(v) >= kk and all(ok is not None for ok in v[:kk])
+        t: [rounds[i] for i in range(1, kk + 1)]
+        for t, rounds in rd.by_task.items()
+        if all(i in rounds and rounds[i] is not None for i in range(1, kk + 1))
     }
     if not eligible:
-        raise ResultsError(f"반복이 {kk}회 이상이고 채점된 과제가 없다")
-    passed = sum(all(v[:kk]) for v in eligible.values())
-    return PassKSummary(kk, passed / len(eligible), len(eligible), len(per_task) - len(eligible))
+        raise ResultsError(f"반복 {kk}회가 모두 채점된 과제가 없다")
+    passed = sum(all(v) for v in eligible.values())
+    return PassKSummary(
+        kk,
+        passed / len(eligible),
+        len(eligible),
+        len(rd.by_task) - len(eligible),
+        rd.expected,
+        rd.used,
+        rd.truncated,
+    )
 
 
 def failure_distribution(records: Sequence[Record]) -> dict[str, int]:
