@@ -447,6 +447,11 @@ async def _find_sent(run: _Run, mail: MailConnector) -> ExecutionRecord:
     return await run.end(NEEDS_USER)  # 초안이 사라졌고 보낸 메일도 없다: 사용자가 지웠을 수 있다
 
 
+def _body_key(value: str) -> str:
+    """초안 본문 비교 키. Gmail 어댑터의 본문 규칙과 같다: NFC, CRLF·CR을 LF로, 끝 줄바꿈 제거."""
+    return _nfc(value).replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+
+
 def _same_draft(spec: DraftSpec | None, action: SendMail) -> bool:
     if spec is None:
         return False
@@ -457,8 +462,8 @@ def _same_draft(spec: DraftSpec | None, action: SendMail) -> bool:
     return (
         emails(spec.to) == emails(action.to)
         and emails(spec.cc) == emails(action.cc)
-        and _nfc(spec.subject) == _nfc(action.subject)
-        and _nfc(spec.body_text) == _nfc(action.body)
+        and _nfc(spec.subject.strip()) == _nfc(action.subject.strip())
+        and _body_key(spec.body_text) == _body_key(action.body)
     )
 
 
