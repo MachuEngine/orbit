@@ -22,7 +22,12 @@ export interface RequestOptions<S extends z.ZodType | undefined> {
 export function readCookie(name: string): string | undefined {
   for (const part of document.cookie.split(";")) {
     const [key, ...rest] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(rest.join("="));
+    if (key !== name) continue;
+    try {
+      return decodeURIComponent(rest.join("="));
+    } catch {
+      return undefined; // 잘못된 퍼센트 인코딩이면 값이 없는 것으로 본다
+    }
   }
   return undefined;
 }

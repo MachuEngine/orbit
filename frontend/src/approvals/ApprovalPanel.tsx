@@ -1,6 +1,7 @@
 import type { Approval } from "../api/schemas";
 import {
   actionLabel,
+  approvalStatusText,
   formatRemaining,
   isIrreversible,
   provenanceWarnings,
@@ -30,7 +31,9 @@ function ApprovalDetail({ approval, clock }: { approval: Approval; clock: Clock 
   const remaining = useRemainingMs(approval.expires_at, clock);
   const label = actionLabel(approval.tool_name);
   const warnings = provenanceWarnings(approval.provenance);
-  const locked = state.phase === "submitting" || state.phase === "done" || remaining === 0;
+  const decided = approval.status !== "pending";
+  const locked =
+    decided || state.phase === "submitting" || state.phase === "done" || remaining === 0;
 
   return (
     <section aria-labelledby="approval-title">
@@ -56,8 +59,9 @@ function ApprovalDetail({ approval, clock }: { approval: Approval; clock: Clock 
         {label?.confirm ?? "실행"}
       </button>
       <button type="button" disabled={locked} onClick={() => void submit("reject")}>
-        취소
+        실행하지 않기
       </button>
+      {decided && <p role="status">{approvalStatusText(approval.status)}</p>}
       {state.phase === "done" && <p role="status">결정을 전달했습니다.</p>}
       {state.phase === "conflict" && (
         <p role="alert">

@@ -12,8 +12,8 @@ export function useSession() {
   useEffect(() => {
     let cancelled = false;
     getSession().then(
-      () => {
-        if (!cancelled) setState({ phase: "signed_in" });
+      (session) => {
+        if (!cancelled) setState({ phase: session.authenticated ? "signed_in" : "signed_out" });
       },
       (error: unknown) => {
         if (cancelled) return;

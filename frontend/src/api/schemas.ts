@@ -23,7 +23,10 @@ export type Provenance = z.infer<typeof provenanceSchema>;
 export const approvalStatusSchema = z.enum(["pending", "approved", "rejected", "expired"]);
 export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
 
+// 백엔드는 승인이 거절·만료된 경우에도 승인 상태를 그대로 execution_result에 담는다(nodes.py).
 export const executionStatusSchema = z.enum([
+  "rejected",
+  "expired",
   "pending",
   "succeeded",
   "failed",
@@ -32,8 +35,12 @@ export const executionStatusSchema = z.enum([
 ]);
 export type ExecutionStatus = z.infer<typeof executionStatusSchema>;
 
-/** `GET /api/session`. 응답 본문은 쓰지 않고 200 여부만 본다. 알 수 없는 필드는 허용한다. */
-export const sessionSchema = z.looseObject({});
+/** `GET /api/session`. 로그인하지 않았어도 200이고 `authenticated`가 false다. */
+export const sessionSchema = z.object({
+  authenticated: z.boolean(),
+  workspace_id: z.string().nullable(),
+  expires_at: z.string().nullable(),
+});
 export type Session = z.infer<typeof sessionSchema>;
 
 /** `POST /api/runs` */

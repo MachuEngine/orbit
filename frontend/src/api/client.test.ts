@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { ApiClient } from "./client";
+import { ApiClient, readCookie } from "./client";
 import { ApiError } from "./errors";
 import { createRun, decideApproval, getApproval } from "./endpoints";
 
@@ -86,6 +86,16 @@ describe("ApiClient 오류 분류", () => {
       kind: "server",
       detail: null,
     });
+  });
+});
+
+describe("readCookie", () => {
+  it("값을 디코드하고, 잘못된 퍼센트 인코딩이면 undefined를 돌려준다", () => {
+    document.cookie = "orbit_csrf=a%20b";
+    expect(readCookie("orbit_csrf")).toBe("a b");
+    document.cookie = "bad=%E0%A4%A";
+    expect(readCookie("bad")).toBeUndefined();
+    expect(readCookie("missing")).toBeUndefined();
   });
 });
 

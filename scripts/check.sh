@@ -55,7 +55,7 @@ check_frontend() {
     return
   fi
   if ! command -v npm >/dev/null 2>&1; then
-    fail "npm이 설치되어 있지 않다 (Node.js 22.12 이상)"
+    fail "npm이 설치되어 있지 않다 (Node.js 22.19 이상)"
     return
   fi
   # package-lock.json 기준으로 정확히 설치한다. node_modules가 최신이면 건너뛴다.

@@ -14,7 +14,7 @@ jobs:
     env:
       GITLEAKS_VERSION: 8.18.4
       UV_VERSION: 0.11.28
-      NODE_VERSION: 22.12.0
+      NODE_VERSION: 22.19.0
       # CI 전용 합성 비밀번호. 서비스 컨테이너는 이 job 안에서만 열린다.
       ORBIT_PG_SUPERUSER_PASSWORD: ci_superuser_pw
       ORBIT_OWNER_PASSWORD: ci_owner_pw

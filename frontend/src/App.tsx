@@ -1,6 +1,7 @@
 // 상태 계층을 연결하는 최소 마크업이다. 색·글꼴·크기는 브랜드 토큰이 정해진 뒤에 입힌다.
 import { useCallback, useRef, useState } from "react";
 import { ApprovalPanel } from "./approvals/ApprovalPanel";
+import { executionResultText } from "./approvals/logic";
 import { createRun } from "./api/endpoints";
 import { useComposer } from "./composer/useComposer";
 import { useRunStream } from "./runs/useRunStream";
@@ -35,6 +36,8 @@ function Chat({ onSignOut }: { onSignOut: () => void }) {
 
   const send = useCallback(
     async (text: string) => {
+      // 미해결: 응답이 유실돼 사용자가 다시 보내면 같은 메시지로 run이 두 번 만들어질 수 있다.
+      // 백엔드에 멱등 키가 없어 화면에서 막을 수 없다. 멱등 키 도입 후 요청에 붙인다.
       const created = await createRun({
         message: text,
         ...(conversationId.current === undefined
@@ -77,9 +80,7 @@ function Chat({ onSignOut }: { onSignOut: () => void }) {
         {state.error !== null && <p role="alert">실행에 실패했습니다. 다시 시도해 주세요.</p>}
         {state.results.map((result) => (
           <p key={result.approvalId} role="status">
-            {result.status === "succeeded"
-              ? "요청한 작업을 실행했습니다."
-              : "요청한 작업을 끝내지 못했습니다. 상태를 확인해 주세요."}
+            {executionResultText(result.status)}
           </p>
         ))}
       </section>

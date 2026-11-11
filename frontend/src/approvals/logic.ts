@@ -1,4 +1,4 @@
-import type { Approval, Provenance } from "../api/schemas";
+import type { Approval, ExecutionStatus, Provenance } from "../api/schemas";
 
 /** 시각을 주입할 수 있게 한 시계. 테스트에서 고정 시각을 쓴다. */
 export interface Clock {
@@ -67,6 +67,39 @@ export function actionLabel(toolName: string): { name: string; confirm: string }
       return { name: "일정 취소", confirm: "일정 취소" };
     default:
       return null;
+  }
+}
+
+/** 이미 결정된 승인의 상태 문구. */
+export function approvalStatusText(status: Approval["status"]): string {
+  switch (status) {
+    case "pending":
+      return "";
+    case "approved":
+      return "이미 승인된 요청입니다.";
+    case "rejected":
+      return "실행하지 않기로 결정한 요청입니다.";
+    case "expired":
+      return "승인 시간이 지나 실행하지 않았습니다.";
+  }
+}
+
+/** 실행 결과(execution_result) 안내 문구. */
+export function executionResultText(status: ExecutionStatus): string {
+  switch (status) {
+    case "succeeded":
+      return "요청한 작업을 실행했습니다.";
+    case "rejected":
+      return "실행하지 않았습니다.";
+    case "expired":
+      return "승인 시간이 지나 실행하지 않았습니다.";
+    case "failed":
+      return "작업을 실행하지 못했습니다.";
+    case "needs_user":
+      return "실행 결과를 확인하지 못했습니다. 받은편지함·일정을 직접 확인해 주세요.";
+    case "pending":
+    case "unknown":
+      return "실행 결과를 확인하고 있습니다.";
   }
 }
 
