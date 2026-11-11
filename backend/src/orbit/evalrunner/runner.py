@@ -211,6 +211,7 @@ async def run_episode(
     recorder = UsageRecorder()
     recording_llm = EpisodeRecordingLLM(llm, recorder)
     account = task.account_id
+    step_counter = StepCounter(budget, recorder, connectors.calls, monotonic=monotonic)
     episode = Episode(
         # 정답(gold)과 분할·태그는 러너만 가진다. SUT에는 아래 네 필드만 준다.
         task=SutTask(
@@ -225,7 +226,7 @@ async def run_episode(
         clock=ReadOnlyClock(clock),
         llm=recording_llm,
         budget=budget,
-        steps=StepCounter(budget, recorder, monotonic=monotonic),
+        steps=step_counter,
     )
 
     error_type: FailureType | None = None
@@ -255,12 +256,10 @@ async def run_episode(
 
     calls = connectors.calls.records
     usage = recorder.total_usage
-    tokens = usage.input_tokens + usage.output_tokens
-    if error_type is None:  # SUT가 `consume()`을 건너뛰어도 호출 기록으로 다시 검사한다
-        if len(recorder.records) + len(calls) > budget.max_steps:
-            error_type, detail = "budget_exceeded", "steps"
-        elif tokens > budget.max_tokens:
-            error_type, detail = "budget_exceeded", "tokens"
+    if error_type is None:  # SUT가 `consume()`을 건너뛰어도 관찰한 호출 수로 다시 검사한다
+        over = step_counter.verify()
+        if over is not None:
+            error_type, detail = "budget_exceeded", over
 
     score = score_episode(
         task.gold,

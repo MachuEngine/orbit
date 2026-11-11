@@ -96,7 +96,8 @@ class ReadOnlyAssistant:
             )
             structured: dict[str, Any] | None = None
             for call in response.tool_calls:
-                self._step()
+                if call.name != SUBMIT_ANSWER:  # 제출은 LLM·커넥터 호출이 아니라 단계가 아니다
+                    self._step()
                 outcome = await tools.execute(call.name, dict(call.arguments))
                 if call.name == SUBMIT_ANSWER and outcome.structured is not None:
                     structured = outcome.structured  # 같은 응답의 마지막 유효 제출이 남는다

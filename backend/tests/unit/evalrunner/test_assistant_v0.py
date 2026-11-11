@@ -155,15 +155,50 @@ async def test_result_config_records_sut_version(tmp_path: Path) -> None:
     assert PROMPT_VERSION in json.dumps(summary.results[0].config["sut"])
 
 
-def test_step_counter_has_room_does_not_consume() -> None:
+def test_step_counter_counts_observed_llm_and_connector_calls() -> None:
+    from orbit.connectors.sim.calls import CallLog
     from orbit.evalrunner.episode import Budget, BudgetExceeded, StepCounter
-    from orbit.llm.interface import UsageRecorder
+    from orbit.llm.interface import UsageRecord, UsageRecorder
 
-    counter = StepCounter(Budget(max_steps=2), UsageRecorder())
-    assert counter.has_room()
-    counter.consume()
-    assert counter.has_room() and counter.steps == 1  # 확인만 하고 소비하지 않는다
-    counter.consume()
-    assert not counter.has_room()
+    recorder, log = UsageRecorder(), CallLog()
+    counter = StepCounter(Budget(max_steps=3), recorder, log)
+    assert counter.steps == 0 and counter.has_room()
+    recorder.record(UsageRecord("system_under_test", None, None, 0, 0, 0, None, None, 0))
+    log.record("list_events", {}, outcome="ok")
+    assert counter.steps == 2 and counter.has_room()
+    counter.consume()  # 확인만 한다. 상태가 바뀌지 않는다
+    assert counter.steps == 2 and counter.verify() is None
+    log.record("list_events", {}, outcome="ok")
+    assert counter.steps == 3 and not counter.has_room()
     with pytest.raises(BudgetExceeded):
         counter.consume()
+    assert counter.verify() is None  # 한도와 같으면 초과가 아니다
+    log.record("get_event", {}, outcome="ok")
+    assert counter.verify() == "steps"
+
+
+NO_TEXT = {
+    tid: [step(calls=[LIST_DAY]), {**step(None), "structured": sub}] for tid, sub in SUBMITS.items()
+}
+
+
+async def test_final_text_call_skipped_at_step_limit_keeps_submission(tmp_path: Path) -> None:
+    from orbit.evalrunner.episode import Budget
+
+    # 단계 = LLM 2회 + 커넥터 3회(list_calendars + 캘린더 2개 조회) = 5. 보충 호출은 6번째다.
+    summary = await run(
+        make_dataset(tmp_path), NO_TEXT, sut="assistant_v0", repeats=1, budget=Budget(max_steps=5)
+    )
+    assert outcome(summary) == {tid: (True, None) for tid in EXPECTED}  # budget_exceeded 아님
+    assert all(r.llm_calls == 2 for r in summary.results)
+
+
+async def test_final_text_call_runs_when_step_room_exists(tmp_path: Path) -> None:
+    from orbit.evalrunner.episode import Budget
+
+    scr = {tid: [*steps, step("짧은 답")] for tid, steps in NO_TEXT.items()}
+    summary = await run(
+        make_dataset(tmp_path), scr, sut="assistant_v0", repeats=1, budget=Budget(max_steps=6)
+    )
+    assert outcome(summary) == {tid: (True, None) for tid in EXPECTED}
+    assert all(r.llm_calls == 3 for r in summary.results)

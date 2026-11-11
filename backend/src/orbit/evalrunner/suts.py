@@ -70,12 +70,12 @@ class ScriptedToolSUT:
             )
             submitted = False
             for call in response.tool_calls:
-                episode.steps.consume()
                 if call.name == SUBMIT_ANSWER:  # 커넥터 호출이 아니다. 마지막 제출이 유효하다
                     structured = dict(call.arguments)
                     submitted = True
                     messages.append(Message(role="tool", content="ok", tool_call_id=call.id))
                     continue
+                episode.steps.consume()
                 try:
                     content = serialize_result(await dispatcher.call(call.name, call.arguments))
                 except (ConnectorError, ValueError) as exc:  # ValueError: 입력 위반, 인자 검증 실패
