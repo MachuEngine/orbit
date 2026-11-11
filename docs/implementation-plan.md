@@ -65,7 +65,7 @@
 
 진행(2026-11-11, 브랜치 `stage-3/eval-foundation`)
 - 3a `orbit.llm`: 내부 LLM 인터페이스, `ScriptedLLM`, `OpenRouterLLM`(제공자 라우팅 고정, 실제 응답 모델 검증, 비용 미상 표시). 완료.
-- 3b `orbit.evaldata`: 시나리오 우선 생성기, 세계 모델 `eval/worlds/orbit-v0.toml`(TOML), 데이터셋 `eval/datasets/orbit-eval/v0`(과제 60개, dev 36 / test 24, 근거 공유 묶음 15개). 정답은 구조화된 답(ADR-0010), dev와 test는 근거 일정·메일을 공유하지 않는다. 완료, **사람 검수 대기**.
+- 3b `orbit.evaldata`: 시나리오 우선 생성기, 세계 모델 `eval/worlds/orbit-v0.toml`(TOML), 데이터셋 `eval/datasets/orbit-eval/v0`(과제 60개, dev 36 / test 24, 근거 공유 묶음 15개). 정답은 구조화된 답(ADR-0010), dev와 test는 근거 일정·메일을 공유하지 않는다. 완료. 개발자 전수 검수 완료(2026-11-11, 60/60 승인, `review.jsonl`).
 - 3c `orbit.evalrunner`: 에피소드 실행, 구조화된 답 채점(텍스트 사실은 보조 지표), 결과 JSONL·설정 지문, 반복 우선 실행, 클러스터 bootstrap 신뢰구간·paired 차이·pass^k, 예산 상한, test 봉인. 완료.
 - 3d `orbit.assistant`: 읽기 전용 비서 경로(ADR-0011). 작업 집합 핸들, 읽기 도구 4개 + `submit_answer`, 외부 콘텐츠 표지, 프롬프트 `assistant-v0.2`, 온도 0. `ScriptedLLM`으로만 검증했다. 완료.
 - 3e 모델 파일럿: OpenRouter API 키(개발자)와 데이터 검수 후 진행.
