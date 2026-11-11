@@ -386,7 +386,7 @@ async def test_result_schema(dataset: Dataset) -> None:
     assert set(row["outcome"]) >= {"success", "failure_type"}
     assert set(row["usage"]) == {
         "llm_calls", "input_tokens", "output_tokens", "cost_usd", "models", "providers",
-        "length_finishes",
+        "length_finishes", "cached_input_tokens", "reasoning_tokens",
     }  # fmt: skip
     assert row["model_mismatch"] is False
     assert row["config"]["git_dirty"] is True  # 라이브러리 기본값: git 상태를 모르면 더럽다고 본다

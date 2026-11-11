@@ -15,9 +15,9 @@ from orbit.evalrunner.runner import estimate_experiment, run_experiment
 from orbit.evalrunner.suts import create_sut
 from orbit.evalrunner.task_source import Dataset
 from orbit.llm.scripted import ScriptedLLM
-from orbit.llm.types import LLMResponse
+from orbit.llm.types import LLMResponse, LLMUsage
 
-from .conftest import good_script
+from .conftest import DATASET_DIR, good_script
 
 ITEM = {"type": "reasoning", "id": "rs_1", "encrypted_content": "ENC"}
 
@@ -187,3 +187,43 @@ def test_stats_cli_warns_when_models_differ(
     assert report["response_models"]["single"] is False
     assert report["warnings"]
     assert "경고" in captured.err
+
+
+def _with_usage(r: LLMResponse) -> LLMResponse:
+    return dataclasses.replace(r, usage=LLMUsage(100, 40, 30, 25))
+
+
+async def test_usage_records_cached_and_reasoning_tokens(dataset: Dataset) -> None:
+    est, summary = await estimate_experiment(
+        dataset,
+        split="dev",
+        n=2,
+        repeats=1,
+        model_id=SCRIPTED_MODEL_ID,
+        sut_factory=lambda: create_sut("scripted_tool"),
+        llm_factory=_factory(good_script(), patch=_with_usage),
+        git_sha="t",
+    )
+    for r in summary.results:
+        row = json.loads(r.to_json_line())["usage"]
+        assert row["cached_input_tokens"] == 30 * r.llm_calls
+        assert row["reasoning_tokens"] == 25 * r.llm_calls
+        assert row["output_tokens"] == 40 * r.llm_calls
+    calls = sum(r.llm_calls for r in summary.results)
+    assert est.mean_reasoning_tokens == 25 * calls / len(summary.results)
+    assert est.to_dict()["mean_reasoning_tokens"] == est.mean_reasoning_tokens
+
+
+def test_out_parent_directories_are_created(tmp_path: Path) -> None:
+    out = tmp_path / "no" / "such" / "dir" / "r.jsonl"
+    args = [
+        "run", "--dataset", str(DATASET_DIR), "--split", "dev", "--sut", "noop",
+        "--repeats", "1", "--out", str(out),
+    ]  # fmt: skip
+    assert main(args) == 0
+    assert out.exists()
+    est_out = tmp_path / "other" / "deep" / "e.jsonl"
+    args[-1] = str(est_out)
+    assert main([*args, "--estimate", "1"]) == 0
+    assert (est_out.parent / "e.estimate.jsonl").exists()
+    assert not est_out.exists()
