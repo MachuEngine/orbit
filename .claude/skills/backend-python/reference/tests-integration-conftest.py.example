@@ -1,0 +1,58 @@
+"""backend/tests/integration/conftest.py 예시: 테스트 DB를 head로 올리고 DB 헬퍼를 준다."""
+
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.engine import make_url
+
+from app.db.session import AsyncDatabase, SyncDatabase
+
+BACKEND = Path(__file__).resolve().parents[2]
+
+
+def alembic_config(owner_url: str) -> Config:
+    cfg = Config(str(BACKEND / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND / "migrations"))
+    cfg.attributes["url"] = owner_url  # migrations/env.py가 이 값을 먼저 본다
+    return cfg
+
+
+def require_test_database(url: str) -> None:
+    """스키마를 내리는 테스트가 개발 DB에 실행되지 않도록 DB 이름을 확인한다."""
+    name = make_url(url).database or ""
+    if not name.endswith("_test"):
+        raise RuntimeError(f"테스트 DB 이름은 '_test'로 끝나야 한다: {name!r}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_test_database(app_url: str, owner_url: str) -> None:
+    """통합 테스트 시작 전에 테스트 DB를 head로 맞춘다(개발 DB는 건드리지 않는다)."""
+    require_test_database(app_url)
+    require_test_database(owner_url)
+    command.upgrade(alembic_config(owner_url), "head")
+
+
+@pytest.fixture
+def sync_db(app_url: str) -> Iterator[SyncDatabase]:
+    db = SyncDatabase.from_url(app_url)
+    yield db
+    db.dispose()
+
+
+@pytest.fixture
+async def async_db(app_url: str) -> AsyncIterator[AsyncDatabase]:
+    db = AsyncDatabase.from_url(app_url)
+    yield db
+    await db.dispose()
+
+
+@pytest.fixture
+def raw_engine(app_url: str) -> Iterator[Engine]:
+    """세션 헬퍼를 거치지 않는 엔진(연결 1개). 테넌트 설정이 없는 상태를 재현하는 데만 쓴다."""
+    engine = create_engine(app_url, pool_size=1, max_overflow=0)
+    yield engine
+    engine.dispose()

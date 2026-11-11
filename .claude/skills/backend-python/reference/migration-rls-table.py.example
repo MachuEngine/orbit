@@ -1,0 +1,42 @@
+"""backend/migrations/versions/ 예시: 테넌트 데이터 테이블과 RLS 정책.
+
+테이블·정책·FORCE·앱 역할 권한을 같은 마이그레이션에 넣는다. `note`, `app_user`는 예시 이름이다.
+"""
+
+from alembic import op
+
+revision = "0002"
+down_revision = "0001"
+branch_labels = None
+depends_on = None
+
+# NULLIF: 설정이 빠진 연결에서 ''::uuid 변환 오류 대신 NULL이 되어 0행이 된다.
+_TENANT_MATCH = "tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+
+
+def upgrade() -> None:
+    op.execute(
+        """
+        CREATE TABLE note (
+            id uuid PRIMARY KEY,
+            tenant_id uuid NOT NULL REFERENCES tenant (id) ON DELETE CASCADE,
+            body text NOT NULL,
+            created_at timestamptz NOT NULL
+        )
+        """
+    )
+    op.execute("CREATE INDEX note_tenant_idx ON note (tenant_id)")
+    op.execute("ALTER TABLE note ENABLE ROW LEVEL SECURITY")
+    # FORCE가 없으면 테이블 소유자는 정책을 우회한다.
+    op.execute("ALTER TABLE note FORCE ROW LEVEL SECURITY")
+    # 대상 역할을 지정하지 않으면 PUBLIC이다.
+    # USING은 읽기·수정·삭제 대상을, WITH CHECK는 새로 쓰는 값을 거른다.
+    op.execute(
+        f"CREATE POLICY note_tenant_isolation ON note USING ({_TENANT_MATCH}) "
+        f"WITH CHECK ({_TENANT_MATCH})"
+    )
+    op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON note TO app_user")
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE note")

@@ -1,9 +1,15 @@
 # 하네스 템플릿이 소유하는 파일 목록. 이 경로를 프로젝트에서 고치면 템플릿 저장소에도 반영해야 한다.
 # 알림 훅(.claude/hooks/template_drift_notice.py)과 scripts/harness-check.sh가 이 목록을 읽는다.
 # 한 줄에 경로 하나. /로 끝나면 그 디렉터리 전체를 뜻한다.
+# 스킬 팩 항목은 copier 질문 skill_packs에서 고른 팩만 들어간다.
 .claude/harness/
 .claude/agents/
 .claude/hooks/
 scripts/harness-check.sh
 tests/harness/
 .github/pull_request_template.md
+.claude/skills/backend-python/
+.claude/skills/frontend-react/
+.claude/skills/frontend-design/
+.claude/skills/brand-identity/
+.claude/skills/design-review/

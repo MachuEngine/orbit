@@ -1,0 +1,38 @@
+"""backend/migrations/env.py 예시. 소유자 역할(`APP_MIGRATION_DATABASE_URL`)로 실행한다.
+
+테스트는 `config.attributes["url"]`로 URL을 직접 넘길 수 있다(테스트 DB에 마이그레이션할 때).
+"""
+
+from alembic import context
+from sqlalchemy import create_engine
+
+from app.core.config import get_settings
+
+config = context.config
+
+
+def _url() -> str:
+    override = config.attributes.get("url")
+    if isinstance(override, str):
+        return override
+    migration_url = get_settings().migration_database_url
+    if migration_url is None:
+        raise RuntimeError("APP_MIGRATION_DATABASE_URL이 필요하다 (소유자 역할 접속 URL)")
+    return migration_url.get_secret_value()
+
+
+def run_migrations_online() -> None:
+    engine = create_engine(_url())
+    try:
+        with engine.connect() as connection:
+            # SQLAlchemy 모델의 metadata로 autogenerate를 쓰려면 target_metadata에 넘긴다.
+            context.configure(connection=connection, target_metadata=None)
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        engine.dispose()
+
+
+if context.is_offline_mode():
+    raise RuntimeError("오프라인 모드는 지원하지 않는다")
+run_migrations_online()

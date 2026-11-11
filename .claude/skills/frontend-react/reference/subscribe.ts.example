@@ -1,0 +1,104 @@
+// SSE 구독 예시: frontend/src/<기능>/subscribe.ts
+// 서버는 이벤트마다 단조 증가하는 id(seq)를 붙이고, 재접속 때 Last-Event-ID 이후를 다시 보낸다.
+// 이벤트 종류, 데이터 스키마, 종료 판정은 프로젝트에 맞게 바꾼다.
+import { z } from "zod";
+
+export const STREAM_EVENT_TYPES = ["message", "status"] as const;
+
+const MessagePayload = z.object({ text: z.string() });
+const StatusPayload = z.object({ status: z.enum(["running", "succeeded", "failed"]) });
+
+export type StreamEvent =
+  | { seq: number; type: "message"; payload: z.output<typeof MessagePayload> }
+  | { seq: number; type: "status"; payload: z.output<typeof StatusPayload> };
+
+type Parsed = { kind: "ok"; event: StreamEvent } | { kind: "invalid" } | { kind: "unknown_type" };
+
+function parseEvent(lastEventId: string, type: string, data: string): Parsed {
+  if (!(STREAM_EVENT_TYPES as readonly string[]).includes(type)) return { kind: "unknown_type" };
+  const seq = Number(lastEventId);
+  if (!Number.isSafeInteger(seq) || seq <= 0) return { kind: "invalid" };
+  let json: unknown;
+  try {
+    json = JSON.parse(data);
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (type === "message") {
+    const p = MessagePayload.safeParse(json);
+    return p.success ? { kind: "ok", event: { seq, type, payload: p.data } } : { kind: "invalid" };
+  }
+  const p = StatusPayload.safeParse(json);
+  return p.success
+    ? { kind: "ok", event: { seq, type: "status", payload: p.data } }
+    : { kind: "invalid" };
+}
+
+function isTerminal(event: StreamEvent): boolean {
+  return event.type === "status" && event.payload.status !== "running";
+}
+
+export interface StreamHandlers {
+  onEvent: (event: StreamEvent) => void;
+  /** 알려진 종류인데 형태가 다른 이벤트를 받았다. */
+  onInvalidEvent?: () => void;
+  /** 연결이 끊겨 브라우저가 재접속을 시도한다(Last-Event-ID는 브라우저가 붙인다). */
+  onReconnecting?: () => void;
+  /** 브라우저가 재접속을 포기했다(401 등). */
+  onClosed?: () => void;
+}
+
+// EventSource.CLOSED. 생성자가 없는 환경(jsdom)에서도 쓸 수 있게 상수로 둔다.
+const READY_STATE_CLOSED = 2;
+
+export type EventSourceFactory = (url: string) => EventSource;
+
+// 같은 출처 쿠키로 인증하므로 withCredentials는 필요 없다. 토큰을 URL에 넣지 않는다.
+const defaultFactory: EventSourceFactory = (url) => new EventSource(url);
+
+/** 이벤트를 구독하고 해제 함수를 돌려준다. 이미 받은 seq 이하는 버리고, 종료 이벤트를 받으면 닫는다. */
+export function subscribeEvents(
+  url: string,
+  handlers: StreamHandlers,
+  createEventSource: EventSourceFactory = defaultFactory,
+): () => void {
+  const source = createEventSource(url);
+  let lastSeq = 0;
+  let closed = false;
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    source.close();
+  };
+
+  const listener = (message: Event) => {
+    if (closed || !(message instanceof MessageEvent)) return;
+    const data = typeof message.data === "string" ? message.data : "";
+    const parsed = parseEvent(message.lastEventId, message.type, data);
+    if (parsed.kind === "unknown_type") return;
+    if (parsed.kind === "invalid") {
+      handlers.onInvalidEvent?.();
+      return;
+    }
+    const { event } = parsed;
+    if (event.seq <= lastSeq) return; // 재접속 때 다시 온 이벤트
+    lastSeq = event.seq;
+    handlers.onEvent(event);
+    if (isTerminal(event)) close();
+  };
+
+  for (const type of STREAM_EVENT_TYPES) source.addEventListener(type, listener);
+
+  source.onerror = () => {
+    if (closed) return;
+    if (source.readyState === READY_STATE_CLOSED) {
+      closed = true;
+      handlers.onClosed?.();
+    } else {
+      handlers.onReconnecting?.();
+    }
+  };
+
+  return close;
+}

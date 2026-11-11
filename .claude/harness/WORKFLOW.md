@@ -40,10 +40,17 @@
 ## 하네스 파일 소유 구분
 | 구분 | 파일 | 수정 위치 |
 | --- | --- | --- |
-| 템플릿 소유 | `.claude/harness/`, `.claude/agents/`, `.claude/hooks/`, `scripts/harness-check.sh`, `tests/harness/`, `.github/pull_request_template.md` (정확한 목록: `.claude/harness/owned-files.txt`) | 하네스 템플릿 저장소에서만 고친다 |
+| 템플릿 소유 | `.claude/harness/`, `.claude/agents/`, `.claude/hooks/`, `scripts/harness-check.sh`, `tests/harness/`, `.github/pull_request_template.md`, 선택한 스킬 팩의 `.claude/skills/<스킬>/` (정확한 목록: `.claude/harness/owned-files.txt`) | 하네스 템플릿 저장소에서만 고친다 |
 | 병합 | `.claude/settings.json`, `.gitignore`, `.github/workflows/ci.yml` | 프로젝트에서 고쳐도 된다. `copier update`가 템플릿 변경과 병합한다 |
-| 프로젝트 소유 | `CLAUDE.md`, `scripts/check.sh`, `.env.example` | 프로젝트에서 고친다. 템플릿이 다시 덮어쓰지 않는다 |
+| 프로젝트 소유 | `CLAUDE.md`, `scripts/check.sh`, `.env.example`, `.claude/project-skills/`, 스킬 팩 밖의 `.claude/skills/<스킬>/` | 프로젝트에서 고친다. 템플릿이 다시 덮어쓰지 않는다 |
 | 관리 파일 | `.copier-answers.yml` | 직접 고치지 않는다 |
+
+## 스킬 팩
+이 프로젝트에 설치한 스킬 팩: python-backend, react-frontend, ui-design
+
+- 스킬 팩의 스킬은 여러 프로젝트가 같이 쓰는 범용 규칙이다. 프로젝트에서 직접 고치지 않는다.
+- 프로젝트에만 해당하는 규칙은 `.claude/project-skills/<스킬>.md`(프로젝트 소유)에 쓴다. 스킬은 이 파일이 있으면 먼저 읽고, 충돌하면 이 파일을 따른다.
+- 범용 스킬에 빠진 규칙을 찾으면 아래 "하네스 개선 절차"에 따라 템플릿 저장소에 반영을 제안한다.
 
 ## 하네스 개선 절차
 하네스 개선은 실제 문제가 재현된 뒤에 한다. 같은 유형의 문제가 2회 이상 반복되거나, 보안·데이터 손상 위험이 1회라도 발견되면 검토한다.

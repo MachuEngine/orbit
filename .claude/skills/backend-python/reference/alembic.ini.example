@@ -1,0 +1,24 @@
+# backend/alembic.ini 예시. DB URL은 여기에 쓰지 않는다. migrations/env.py가 환경 변수에서 읽는다.
+[alembic]
+script_location = migrations
+
+[loggers]
+keys = root
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARNING
+handlers = console
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s

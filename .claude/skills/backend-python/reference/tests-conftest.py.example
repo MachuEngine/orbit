@@ -1,0 +1,47 @@
+"""backend/tests/conftest.py 예시. 통합 테스트용 DB URL은 환경 변수로 받는다.
+
+- APP_TEST_DATABASE_URL: 앱 역할 접속 URL
+- APP_TEST_MIGRATION_DATABASE_URL: 소유자 역할 접속 URL (마이그레이션 테스트용)
+
+값이 없으면 로컬에서는 이유와 실행 방법을 출력하고 건너뛴다. `CI=true`이면 실패시킨다.
+CI에서 환경 변수 설정이 빠졌을 때 통합 테스트가 조용히 건너뛰어 통과하는 일을 막는다.
+"""
+
+import os
+
+import pytest
+
+
+def _require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if value:
+        return value
+    if os.environ.get("CI", "").lower() == "true":
+        pytest.fail(
+            f"CI에서는 통합 테스트를 건너뛸 수 없다: {name}이 설정되지 않았다", pytrace=False
+        )
+    pytest.skip(
+        f"{name}이 설정되지 않아 통합 테스트를 건너뛴다. "
+        "로컬 실행: docker compose -f backend/compose.yml up -d --wait 후 "
+        "`set -a; source backend/dev.env; set +a`"
+    )
+
+
+@pytest.fixture(scope="session")
+def app_url() -> str:
+    return _require_env("APP_TEST_DATABASE_URL")
+
+
+@pytest.fixture(scope="session")
+def owner_url() -> str:
+    return _require_env("APP_TEST_MIGRATION_DATABASE_URL")
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """tests/integration/ 아래 테스트에 integration 마커를 붙인다.
+
+    `pytest -m "not integration"`으로 통합 테스트만 뺄 수 있다.
+    """
+    for item in items:
+        if "/integration/" in str(item.path).replace("\\", "/"):
+            item.add_marker(pytest.mark.integration)
