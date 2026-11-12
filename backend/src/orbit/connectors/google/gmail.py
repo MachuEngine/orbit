@@ -21,6 +21,11 @@ Gmail 실제 동작에 맞춘 점 (SPIKE-004·005):
 오류 메시지에는 HTTP 상태와 Google의 오류 사유 코드만 넣는다. 메일 본문·주소·토큰·서버 응답
 본문은 넣지 않는다.
 
+색인용 읽기(ADR-0019 §2): `labels.list`, `messages.list`(`labelIds` + `q=after:<epoch초>`),
+`users.getProfile`의 `historyId`, `history.list`. `history.list`의 404는 이력 만료라
+`HistoryExpired`로 옮긴다(다른 읽기의 404는 `NotFound`다). 새 OAuth 권한은 필요 없다
+(`gmail.readonly`).
+
 본문은 `text/plain`을 우선하고 없을 때만 HTML을 텍스트로 바꾼다(스크립트·스타일 제거, 링크·이미지를
 읽거나 가져오지 않는다). 첨부 내용은 내려받지 않는다. 검색 결과의 각 메시지는 `messages.get`을
 `format=full`로 순차 조회한다(첨부 유무를 알기 위해서다).
@@ -50,8 +55,12 @@ from orbit.connectors.contracts import (
     AttachmentMeta,
     Draft,
     DraftSpec,
+    HistoryExpired,
+    HistoryPage,
+    MailLabel,
     MailMessage,
     MailThread,
+    MessageIdPage,
     MessageSummary,
     NotFound,
     ResultUnknown,
@@ -67,6 +76,9 @@ DEFAULT_BASE_URL = "https://gmail.googleapis.com/gmail/v1"
 _READ_ATTEMPTS = 3
 _RETRY_DELAYS_S = (0.2, 0.5)
 _MAX_RESULTS_CAP = 100
+_LIST_PAGE_SIZE = 100
+_HISTORY_PAGE_SIZE = 500
+_HISTORY_TYPES = ("messageAdded", "messageDeleted", "labelAdded", "labelRemoved")
 _RATE_LIMIT_REASONS = frozenset(
     {"ratelimitexceeded", "userratelimitexceeded", "dailylimitexceeded", "quotaexceeded"}
 )
@@ -563,3 +575,84 @@ class GmailConnector:
             write=True,
             allow_empty=True,
         )
+
+    # -- 색인용 읽기 (ADR-0019 §2) -----------------------------------------------
+
+    async def list_labels(self) -> list[MailLabel]:
+        data = await self._get("labels", op="list_labels")
+
+        def build(res: Mapping[str, Any]) -> list[MailLabel]:
+            return [
+                MailLabel(
+                    id=str(item["id"]),
+                    name=str(item.get("name", item["id"])),
+                    kind="user" if item.get("type") == "user" else "system",
+                )
+                for item in res.get("labels") or []
+            ]
+
+        return _parsed(build, data)
+
+    async def list_message_ids(
+        self, label_id: str, *, after: datetime, page_token: str | None = None
+    ) -> MessageIdPage:
+        if after.tzinfo is None or after.utcoffset() is None:
+            raise ValueError("after는 시간대가 있는 시각이어야 한다")
+        params = [
+            ("labelIds", label_id),
+            ("q", f"after:{int(after.timestamp())}"),
+            ("maxResults", str(_LIST_PAGE_SIZE)),
+        ]
+        if page_token:
+            params.append(("pageToken", page_token))
+        data = await self._get("messages", op="list_message_ids", params=params, query=True)
+
+        def build(res: Mapping[str, Any]) -> MessageIdPage:
+            token = res.get("nextPageToken")
+            return MessageIdPage(
+                message_ids=tuple(str(m["id"]) for m in res.get("messages") or []),
+                next_page_token=str(token) if token else None,
+            )
+
+        return _parsed(build, data)
+
+    async def current_history_id(self) -> str:
+        data = await self._get("profile", op="current_history_id")
+
+        def build(res: Mapping[str, Any]) -> str:
+            return str(res["historyId"])
+
+        return _parsed(build, data)
+
+    async def list_history(
+        self, start_history_id: str, *, page_token: str | None = None
+    ) -> HistoryPage:
+        params = [("startHistoryId", start_history_id), ("maxResults", str(_HISTORY_PAGE_SIZE))]
+        params += [("historyTypes", t) for t in _HISTORY_TYPES]
+        if page_token:
+            params.append(("pageToken", page_token))
+        try:
+            data = await self._get("history", op="list_history", params=params)
+        except NotFound:
+            # Gmail은 보관 기간이 지난(또는 잘못된) 이력 위치에 404를 돌려준다.
+            raise HistoryExpired("Gmail 변경 이력 위치가 만료됐다") from None
+
+        def build(res: Mapping[str, Any]) -> HistoryPage:
+            def ids(key: str) -> tuple[str, ...]:
+                found: list[str] = []
+                for record in res.get("history") or []:
+                    for entry in record.get(key) or []:
+                        found.append(str(entry["message"]["id"]))
+                return tuple(dict.fromkeys(found))
+
+            token = res.get("nextPageToken")
+            return HistoryPage(
+                history_id=str(res["historyId"]),
+                added_ids=ids("messagesAdded"),
+                deleted_ids=ids("messagesDeleted"),
+                labels_added_ids=ids("labelsAdded"),
+                labels_removed_ids=ids("labelsRemoved"),
+                next_page_token=str(token) if token else None,
+            )
+
+        return _parsed(build, data)

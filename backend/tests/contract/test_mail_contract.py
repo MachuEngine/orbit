@@ -15,6 +15,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 import pytest
 
@@ -449,3 +450,48 @@ async def test_other_accounts_drafts_and_sent_messages_are_not_found(
         await bob.get_message(sent.id)
     with pytest.raises(NotFound):
         await bob.get_thread(sent.thread_id)
+
+
+# ------------------------------------------------------------------ 색인용 읽기 (ADR-0019 §2)
+
+
+async def test_list_labels_has_inbox_as_system_label(mail: MailConnector) -> None:
+    labels = {label.id: label for label in await mail.list_labels()}
+    assert labels["INBOX"].kind == "system"
+    assert all(label.name for label in labels.values())
+
+
+async def test_list_message_ids_by_label_and_after(mail: MailConnector) -> None:
+    long_ago = datetime(2000, 1, 1, tzinfo=UTC)
+    page = await mail.list_message_ids("INBOX", after=long_ago)
+    inbox_subjects = await subjects_of(mail, "in:inbox")
+    assert len(page.message_ids) == len(inbox_subjects) >= 2
+    # 최근순이다.
+    sent_at = [(await mail.get_message(i)).sent_at for i in page.message_ids]
+    assert sent_at == sorted(sent_at, reverse=True)
+    # 기간 경계: 11월 6일 이후에는 보고서 메일만 남는다.
+    recent = await mail.list_message_ids("INBOX", after=datetime(2026, 11, 6, tzinfo=UTC))
+    assert [(await mail.get_message(i)).subject for i in recent.message_ids] == [SUBJ_REPORT]
+    # 다른 라벨(보낸편지함)에는 받은편지함 메일이 섞이지 않는다.
+    sent = await mail.list_message_ids("SENT", after=long_ago)
+    assert page.message_ids[0] not in sent.message_ids
+
+
+async def test_list_message_ids_rejects_naive_after(mail: MailConnector) -> None:
+    with pytest.raises(ValueError, match="시간대"):
+        await mail.list_message_ids("INBOX", after=datetime(2026, 1, 1))  # noqa: DTZ001
+
+
+async def test_history_reports_sent_message_after_start_position(mail: MailConnector) -> None:
+    start = await mail.current_history_id()
+    assert start
+    quiet = await mail.list_history(start)
+    assert quiet.added_ids == () and quiet.deleted_ids == ()
+
+    draft = await mail.create_draft(spec(subject="이력확인 제목"))
+    sent = await mail.send_draft(draft.draft_id)
+    page = await mail.list_history(start)
+    assert sent.id in page.added_ids
+    assert page.history_id
+    # 새 위치부터는 이미 본 변경이 다시 나오지 않는다.
+    assert sent.id not in (await mail.list_history(page.history_id)).added_ids

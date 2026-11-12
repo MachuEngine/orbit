@@ -162,3 +162,37 @@ export const disconnectResponseSchema = z.object({
   provider_revoke: z.enum(["revoked", "failed", "none"]),
 });
 export type DisconnectResponse = z.infer<typeof disconnectResponseSchema>;
+
+/** `GET /api/connections/{id}/labels`. 라벨 이름은 외부 문자열이므로 텍스트로만 보여 준다. */
+export const mailLabelSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: z.enum(["system", "user"]),
+});
+export type MailLabel = z.infer<typeof mailLabelSchema>;
+export const labelsResponseSchema = z.object({ labels: z.array(mailLabelSchema) });
+
+/** 색인 범위 하나. `window_days`는 최근 며칠의 메일을 색인하는지다. */
+export const indexScopeSchema = z.object({
+  id: z.string(),
+  label_id: z.string(),
+  label_name: z.string(),
+  window_days: z.number().int(),
+  synced: z.boolean(),
+});
+export type IndexScope = z.infer<typeof indexScopeSchema>;
+
+/** `GET /api/connections/{id}/index`. 메일 제목·본문은 응답에 없다. */
+export const indexStatusSchema = z.object({
+  scopes: z.array(indexScopeSchema),
+  indexed_mail_count: z.number().int(),
+  last_synced_at: z.string().nullable(),
+  status: z.enum(["none", "pending", "ok", "error"]),
+  error_kind: z.string().nullable(),
+  sync_queued: z.boolean(),
+});
+export type IndexStatus = z.infer<typeof indexStatusSchema>;
+
+/** `POST /api/connections/{id}/index/sync`. 새로 등록했으면 `queued`가 참이다. */
+export const syncResponseSchema = z.object({ queued: z.boolean() });
+export const deleteScopeResponseSchema = z.object({ id: z.string() });

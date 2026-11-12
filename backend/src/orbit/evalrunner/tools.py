@@ -17,6 +17,7 @@ from pydantic_core import to_jsonable_python
 
 from orbit.connectors.contracts import (
     CALENDAR_TOOLS,
+    MAIL_SYNC_METHODS,
     MAIL_TOOLS,
     CalendarConnector,
     MailConnector,
@@ -36,7 +37,7 @@ def _build() -> dict[str, tuple[str, tuple[_Param, ...]]]:
     table: dict[str, tuple[str, tuple[_Param, ...]]] = {}
     for kind, proto, names in (
         ("calendar", CalendarConnector, CALENDAR_TOOLS),
-        ("mail", MailConnector, MAIL_TOOLS),
+        ("mail", MailConnector, MAIL_TOOLS - MAIL_SYNC_METHODS),
     ):
         for name in sorted(names):
             fn = getattr(proto, name)

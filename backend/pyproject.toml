@@ -8,6 +8,7 @@ dependencies = [
     "cryptography==50.0.2",
     "fastapi>=0.162.4",
     "httpx>=0.28.1",
+    "kiwipiepy>=0.24.1",
     "langgraph==1.2.20",
     "langgraph-checkpoint-postgres==3.2.0",
     "procrastinate==3.10.0",

@@ -68,6 +68,10 @@ class ResultUnknown(ConnectorError):
     """쓰기를 보냈지만 결과를 모른다. 재호출하지 말고 대조한다 (ADR-0003)."""
 
 
+class HistoryExpired(ConnectorError):
+    """변경 이력 위치가 만료됐다(ADR-0019 §2). 호출자는 전체 동기화로 돌아간다."""
+
+
 # ---------------------------------------------------------------- 모델 공통
 
 
@@ -252,6 +256,37 @@ class SearchPage(_Model):
     next_page_token: str | None = None
 
 
+class MailLabel(_Model):
+    """메일 라벨. `kind`는 INBOX 같은 제공자 기본 라벨이면 `system`, 사용자 라벨이면 `user`."""
+
+    id: str
+    name: str
+    kind: Literal["system", "user"]
+
+
+class MessageIdPage(_Model):
+    """라벨·기간 안의 메시지 ID 한 페이지(최근순). 본문은 `get_message`로 읽는다."""
+
+    message_ids: tuple[str, ...] = ()
+    next_page_token: str | None = None
+
+
+class HistoryPage(_Model):
+    """변경 이력 한 페이지(ADR-0019 §2).
+
+    네 목록은 이력에 나온 메시지 ID이고 서로 겹칠 수 있다(한 메시지가 추가된 뒤 삭제될 수 있다).
+    호출자는 삭제를 우선으로 보고, 나머지는 메시지를 다시 읽어 라벨 상태로 판단한다.
+    `history_id`는 이 응답을 만든 시점의 이력 위치이며 다음 `list_history`의 시작점이다.
+    """
+
+    history_id: str
+    added_ids: tuple[str, ...] = ()
+    deleted_ids: tuple[str, ...] = ()
+    labels_added_ids: tuple[str, ...] = ()
+    labels_removed_ids: tuple[str, ...] = ()
+    next_page_token: str | None = None
+
+
 # ---------------------------------------------------------------- Protocol
 
 
@@ -323,6 +358,24 @@ class MailConnector(Protocol):
 
     async def delete_draft(self, draft_id: str) -> None: ...
 
+    # -- 색인용 읽기 (ADR-0019 §2). 새 OAuth 권한 없이 `gmail.readonly`로 가능하다.
+
+    async def list_labels(self) -> list[MailLabel]: ...
+
+    async def list_message_ids(
+        self, label_id: str, *, after: datetime, page_token: str | None = None
+    ) -> MessageIdPage:
+        """`label_id`가 붙고 `after`(시간대 있는 시각) 이후인 메시지 ID를 최근순으로 돌려준다."""
+        ...
+
+    async def current_history_id(self) -> str: ...
+
+    async def list_history(
+        self, start_history_id: str, *, page_token: str | None = None
+    ) -> HistoryPage:
+        """`start_history_id` 이후의 변경. 위치가 만료됐으면 `HistoryExpired`."""
+        ...
+
 
 # ---------------------------------------------------------------- 도구 이름
 
@@ -338,6 +391,11 @@ def _tool_names(protocol: type) -> frozenset[str]:
 
 CALENDAR_TOOLS: frozenset[str] = _tool_names(CalendarConnector)
 MAIL_TOOLS: frozenset[str] = _tool_names(MailConnector)
+# 색인 동기화 전용 읽기 메서드(ADR-0019 §2). 장애 주입(FaultPlan)에는 쓰지만 평가 모델에는 노출하지
+# 않고 평가 데이터의 금지 도구 목록에도 넣지 않는다(9단계 이전과 같은 평가 도구 목록을 지킨다).
+MAIL_SYNC_METHODS: frozenset[str] = frozenset(
+    {"list_labels", "list_message_ids", "current_history_id", "list_history"}
+)
 
 # ---------------------------------------------------------------- 클라이언트 지정 일정 ID
 

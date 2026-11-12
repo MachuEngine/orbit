@@ -12,6 +12,10 @@
   헤더는 보존한다. 초안은 `DRAFT` 라벨 메시지로 저장되고 스레드 조회에 포함된다. 발송하면 초안과
   초안 메시지가 사라지고 새 메시지 ID, 같은 스레드 ID로 `SENT` 메시지가 생긴다(본인에게 보내면
   `INBOX`·`UNREAD`도). 발송된 초안을 다시 발송하거나 조회하면 404다.
+- 색인용 읽기(ADR-0019): `labels.list`, `messages.list`의 `labelIds`와 `q=after:<epoch초>`,
+  `users.getProfile`(`historyId`), `history.list`(`startHistoryId`, `historyTypes`, `pageToken`,
+  `maxResults`). 이력은 초안 생성·삭제와 발송에서 자동으로 남고, `add_message`·`remove_message`·
+  `change_labels`로 직접 남길 수도 있다. `expire_history`로 만료시키면 그 이전 위치는 404다.
 - 인증: `Authorization: Bearer <token>`이 `valid_token`과 다르면 401.
 - 다른 계정으로의 배달은 흉내 내지 않는다.
 """
@@ -33,6 +37,12 @@ import httpx
 
 from orbit.connectors.sim.world import AccountState
 
+_HISTORY_TYPE = {
+    "messagesAdded": "messageAdded",
+    "messagesDeleted": "messageDeleted",
+    "labelsAdded": "labelAdded",
+    "labelsRemoved": "labelRemoved",
+}
 _WORD = re.compile(r"\w+", re.UNICODE)
 _CLAUSE = re.compile(r'(-?)(?:(\w+):)?("[^"]*"|\S+)')
 
@@ -100,6 +110,16 @@ class FakeGmail:
         self.messages: dict[str, _Stored] = {}
         self.drafts: dict[str, str] = {}  # draft_id -> message_id
         self.requests: list[tuple[str, str]] = []  # (method, path) 기록
+        self.labels: list[dict[str, str]] = [
+            {"id": "INBOX", "name": "INBOX", "type": "system"},
+            {"id": "SENT", "name": "SENT", "type": "system"},
+            {"id": "DRAFT", "name": "DRAFT", "type": "system"},
+            {"id": "Label_1", "name": "프로젝트", "type": "user"},
+        ]
+        self._history: list[dict[str, Any]] = []  # {"id": 번호, "type": ..., "message": ...}
+        self.history_seq = 1000  # 시드 시점의 이력 위치
+        self.history_floor = 0
+        self.history_page_size: int | None = None  # 지정하면 maxResults 대신 이 크기로 나눈다
         self._seed(account)
 
     # -- 시드 -------------------------------------------------------------------
@@ -149,6 +169,40 @@ class FakeGmail:
                 d.message_id, d.thread_id, ["DRAFT"], self._tick(), mime
             )
             self.drafts[d.draft_id] = d.message_id
+
+    # -- 변경 이력 --------------------------------------------------------------
+
+    def _record(self, kind: str, msg: _Stored, labels: list[str] | None = None) -> None:
+        self.history_seq += 1
+        entry: dict[str, Any] = {
+            "id": self.history_seq,
+            "kind": kind,
+            "message": {"id": msg.id, "threadId": msg.thread_id, "labelIds": list(msg.labels)},
+        }
+        if labels is not None:
+            entry["labelIds"] = labels
+        self._history.append(entry)
+
+    def add_message(self, msg: _Stored) -> None:
+        self.messages[msg.id] = msg
+        self._record("messagesAdded", msg)
+
+    def remove_message(self, message_id: str) -> None:
+        self._record("messagesDeleted", self.messages.pop(message_id))
+
+    def change_labels(self, message_id: str, *, add: list[str], remove: list[str]) -> None:
+        msg = self.messages[message_id]
+        added = [x for x in add if x not in msg.labels]
+        removed = [x for x in remove if x in msg.labels]
+        msg.labels = [x for x in msg.labels if x not in remove] + added
+        if added:
+            self._record("labelsAdded", msg, added)
+        if removed:
+            self._record("labelsRemoved", msg, removed)
+
+    def expire_history(self) -> None:
+        self.history_seq += 1
+        self.history_floor = self.history_seq
 
     # -- 리소스 변환 ------------------------------------------------------------
 
@@ -219,8 +273,11 @@ class FakeGmail:
             elif op == "subject":
                 ok = _contains_phrase(_words(msg.header("Subject")), phrase)
             elif op in ("after", "before"):
-                y, mo, d = (int(x) for x in value.split("/"))
-                boundary = int(datetime(y, mo, d, tzinfo=UTC).timestamp() * 1000)
+                if value.isdigit():  # 에포크 초
+                    boundary = int(value) * 1000
+                else:
+                    y, mo, d = (int(x) for x in value.split("/"))
+                    boundary = int(datetime(y, mo, d, tzinfo=UTC).timestamp() * 1000)
                 ok = msg.internal_ms >= boundary if op == "after" else msg.internal_ms < boundary
             elif op == "has":
                 ok = msg.has_attachment()
@@ -247,6 +304,14 @@ class FakeGmail:
         try:
             if rest == "messages" and method == "GET":
                 return self._list(params)
+            if rest == "labels" and method == "GET":
+                return httpx.Response(200, json={"labels": self.labels})
+            if rest == "profile" and method == "GET":
+                return httpx.Response(
+                    200, json={"emailAddress": self.email, "historyId": str(self.history_seq)}
+                )
+            if rest == "history" and method == "GET":
+                return self._history_list(params)
             if rest.startswith("messages/") and method == "GET":
                 msg = self.messages.get(rest.split("/", 1)[1])
                 if msg is None:
@@ -271,8 +336,13 @@ class FakeGmail:
 
     def _list(self, params: httpx.QueryParams) -> httpx.Response:
         q = params.get("q", "")
+        wanted = params.get_list("labelIds")
         found = sorted(
-            (m for m in self.messages.values() if self._matches(m, q)),
+            (
+                m
+                for m in self.messages.values()
+                if self._matches(m, q) and all(x in m.labels for x in wanted)
+            ),
             key=lambda m: (m.internal_ms, m.id),
             reverse=True,
         )
@@ -284,6 +354,35 @@ class FakeGmail:
             body["messages"] = [{"id": m.id, "threadId": m.thread_id} for m in page]
         if offset + size < len(found):
             body["nextPageToken"] = f"p:{offset + size}"
+        return httpx.Response(200, json=body)
+
+    def _history_list(self, params: httpx.QueryParams) -> httpx.Response:
+        start = int(params["startHistoryId"])
+        if start < self.history_floor or start > self.history_seq:
+            return _error(404, "notFound")
+        types = set(params.get_list("historyTypes")) or {
+            "messageAdded",
+            "messageDeleted",
+            "labelAdded",
+            "labelRemoved",
+        }
+        entries = [e for e in self._history if e["id"] > start]
+        offset = int(params["pageToken"].removeprefix("h:")) if "pageToken" in params else 0
+        size = self.history_page_size or int(params.get("maxResults", "100"))
+        page = entries[offset : offset + size]
+        records: list[dict[str, Any]] = []
+        for e in page:
+            if _HISTORY_TYPE[e["kind"]] not in types:
+                continue
+            item: dict[str, Any] = {"message": e["message"]}
+            if "labelIds" in e:
+                item["labelIds"] = e["labelIds"]
+            records.append({"id": str(e["id"]), e["kind"]: [item]})
+        body: dict[str, Any] = {"historyId": str(self.history_seq)}
+        if records:
+            body["history"] = records
+        if offset + size < len(entries):
+            body["nextPageToken"] = f"h:{offset + size}"
         return httpx.Response(200, json=body)
 
     def _get_thread(self, thread_id: str) -> httpx.Response:
@@ -312,7 +411,7 @@ class FakeGmail:
         del mime["From"]
         mime["From"] = self.email
         stored = _Stored(msg_id, thread_id or self._next("t-new-"), ["DRAFT"], self._tick(), mime)
-        self.messages[msg_id] = stored
+        self.add_message(stored)
         draft_id = self._next("r-new-")
         self.drafts[draft_id] = msg_id
         return httpx.Response(
@@ -335,14 +434,15 @@ class FakeGmail:
         msg_id = self.drafts.pop(draft_id, None)
         if msg_id is None:
             return _error(404, "notFound")
-        del self.messages[msg_id]
+        self.remove_message(msg_id)
         return httpx.Response(204)
 
     def _send(self, draft_id: str) -> httpx.Response:
         msg_id = self.drafts.pop(draft_id, None)
         if msg_id is None:
             return _error(404, "notFound")
-        draft = self.messages.pop(msg_id)
+        draft = self.messages[msg_id]
+        self.remove_message(msg_id)
         new_id = self._next("m-sent-")
         mime = draft.mime
         del mime["Message-ID"]
@@ -354,7 +454,7 @@ class FakeGmail:
         if self.email.lower() in (a.lower() for a in addresses):
             labels += ["INBOX", "UNREAD"]
         sent = _Stored(new_id, draft.thread_id, labels, self._tick(), mime)
-        self.messages[new_id] = sent
+        self.add_message(sent)
         return httpx.Response(
             200, json={"id": new_id, "threadId": sent.thread_id, "labelIds": labels}
         )

@@ -10,6 +10,7 @@ import {
   scopeLabels,
   type ConnectionResult,
 } from "./text";
+import { MailIndexSection } from "./MailIndexSection";
 import { useConnections } from "./useConnections";
 import "./connections.css";
 
@@ -36,11 +37,14 @@ export function ConnectionsScreen({
   navigate = (url) => {
     window.location.assign(url);
   },
+  pollMs,
 }: {
   onBack: () => void;
   /** Google 연결을 마치고 돌아온 결과. 없으면 null. */
   result: ConnectionResult | null;
   navigate?: (url: string) => void;
+  /** 색인 동기화 상태를 다시 읽는 간격(ms). 테스트에서 줄인다. */
+  pollMs?: number;
 }) {
   const { state, start, disconnect } = useConnections();
   const [notice, setNotice] = useState<Notice | null>(() => initialNotice(result));
@@ -167,6 +171,7 @@ export function ConnectionsScreen({
                     confirmDisconnect(item.id);
                   }}
                   onReconnect={connect}
+                  pollMs={pollMs}
                 />
               ))
             )}
@@ -195,8 +200,10 @@ function ConnectionCard({
   onCancel,
   onConfirm,
   onReconnect,
+  pollMs,
 }: {
   item: Connection;
+  pollMs?: number | undefined;
   busy: boolean;
   canConnect: boolean;
   confirming: boolean;
@@ -236,6 +243,7 @@ function ConnectionCard({
           </ul>
         </div>
       )}
+      {active && <MailIndexSection connectionId={item.id} pollMs={pollMs} />}
       {confirming ? (
         <div
           className="conn-confirm"

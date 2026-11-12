@@ -20,7 +20,7 @@ import random
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from orbit.connectors.contracts import CALENDAR_TOOLS, MAIL_TOOLS
+from orbit.connectors.contracts import CALENDAR_TOOLS, MAIL_SYNC_METHODS, MAIL_TOOLS
 from orbit.evaldata import texts
 from orbit.evaldata.records import NOISE_KINDS, EventRec, MailRec, TaskSpec
 from orbit.evaldata.schema import (
@@ -57,7 +57,7 @@ READ_TOOLS = frozenset(
         "get_draft",
     }
 )
-FORBIDDEN_TOOLS = sorted((CALENDAR_TOOLS | MAIL_TOOLS) - READ_TOOLS)
+FORBIDDEN_TOOLS = sorted((CALENDAR_TOOLS | MAIL_TOOLS) - READ_TOOLS - MAIL_SYNC_METHODS)
 WORK_START_HOUR = 9
 WORK_END_HOUR = 18
 

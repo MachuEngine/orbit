@@ -144,12 +144,23 @@
 - 채널: system = 서버 지침만(외부 문자열 0), user = 사용자 원문, tool = 모든 도구 결과·대화 맥락을 데이터 봉투(`<orbit_data source boundary>`, 안쪽 꺾쇠는 엔티티 치환)로. 경계값은 run ID(실사용)·과제 ID(평가)에서 결정적으로. ADR-0017의 맥락 블록은 합성 `conversation_context` 도구 결과로 옮겼다. 프롬프트 `runflow-v0.4`, `assistant-v0.3`.
 - 확인: 실모델 인젝션 동작 확인(`ORBIT_LIVE_INJECTION=1 uv run pytest tests/live -s`) luna·terra 각 6건에서 지침 노출 0, 쓰기 도구 호출 0. 공격 성공률 측정이 아니다(평가 보류 목록 "인젝션 방어"). v0 dev 회귀 luna 1회 88.9%, 수정 후 77.8%(CI 65.6–88.9). 7단계 72.2%와 같은 범위이며 반복 간 편차가 크다.
 
-#### 9단계. RAG 파이프라인 (큼)
+#### 9단계. RAG 파이프라인 (큼, 완료)
 1. 인덱싱 범위 선택(사용자가 고른 라벨·기간·폴더, D7-1)과 화면
 2. 증분 동기화(폴링 + 질의 직전 동기화, D7-2), 최신성 표시(D7-3)
 3. 연결 해제·삭제 이벤트 시 삭제 전파와 남은 행 0 검증(D7-4)
 4. 한국어 처리와 검색: 기본 방식 하나(키워드+벡터 혼합 등)로 구현, ADR은 `실험 중`. 벡터 검색도 `workspace_id` 필터를 같은 SQL에(D4-1)
 5. 비서 도구에 검색 도구 추가(기존 Gmail 검색 도구와 공존)
+
+진행 기록 (2026-11-12, ADR-0019)
+- 범위: Gmail 본문만, 사용자가 연결 화면에서 고른 라벨·기간(30·90·365일)만 색인. 기본은 색인 없음. 읽음·별표 표시처럼 자주 바뀌는 시스템 라벨은 범위로 받지 않는다.
+- 계약: `MailConnector`에 `list_labels`·`list_message_ids`·`current_history_id`·`list_history`(`HistoryExpired`) 추가, Sim·Google 모의 계약 테스트 통과. 평가 도구 목록은 이전과 같게 고정(`MAIL_SYNC_METHODS` 제외).
+- 저장: 마이그레이션 0008(`index_scope`·`sync_state`·`source_item`·`chunk`, RLS FORCE, HNSW·GIN). 주기 대상 선별은 ID만 돌려주는 `SECURITY DEFINER` 함수.
+- 색인·검색(`실험 중`): 800자/100자 겹침 청크, Kiwi 형태소 토큰 `tsvector`, `text-embedding-3-small`, 한 SQL에서 `workspace_id` 필터 + 벡터·키워드 상위 50 → RRF.
+- 동기화: 별도 `mail_index` 큐(대화 run과 서로 막지 않음), 첫 동기화 후 history 증분, 15분 주기·검색 직전 5분 임계(10초 상한), 기간 밖 항목 정리, 영구 오류 제외·1시간 백오프.
+- 삭제 전파: 연결 해제·교체 시 같은 트랜잭션에서 네 테이블 삭제, 남은 행 0 테스트.
+- 도구·화면: 실사용 경로에 `search_indexed_mail`(M 핸들 등록, 데이터 봉투, "N분 전 기준"), 프롬프트 `runflow-v0.5`. 연결 화면에 색인 범위·상태·지금 동기화.
+- 확인: DB 포함 `scripts/check.sh`. 개발자 계정으로 받은편지함 30일 색인(219통, 143초), 내용 검색 질문과 후속 질문(핸들로 원문 읽기) 정상, 동기화 중 대화 run 즉시 실행. 평가 경로는 바꾸지 않아 v0 회귀는 다시 돌리지 않았다. 검색 품질 비교는 평가 보류 목록 "RAG 방식 비교".
+- 남은 위험: 동기화가 메일을 한 통씩 처리해 2,000통 첫 동기화는 약 20분. 대용량에서 HNSW 반복 스캔·지연 미측정.
 
 #### 10단계. 문서 연결 (중간)
 Google Drive·Docs Connector 계약과 Sim·Google 구현, 계약 테스트, 읽기 도구. 쓰기는 별도 결정

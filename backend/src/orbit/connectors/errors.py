@@ -6,6 +6,7 @@
 
 from orbit.connectors.contracts import (
     ConnectorError,
+    HistoryExpired,
     InvalidQuery,
     NotFound,
     PermissionRevoked,
@@ -36,6 +37,8 @@ def connector_error_kind(exc: ConnectorError) -> str:
         return "service_disabled"
     if reason in _QUOTA_EXCEEDED:
         return "quota_exceeded"
+    if isinstance(exc, HistoryExpired):
+        return "history_expired"
     if isinstance(exc, InvalidQuery):
         return "invalid_query"
     if isinstance(exc, NotFound):
