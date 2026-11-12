@@ -8,6 +8,7 @@ import pytest
 from alembic import command
 from sqlalchemy import Engine, create_engine
 
+from integration.mailindex_support import EXTRAS, IndexEnv, cleanup_users, env_iter
 from integration.runflow_support import Harness, build_harness
 from integration.support import WorkspaceFactory, alembic_config, require_test_database
 from orbit.db.session import AsyncDatabase, SyncDatabase
@@ -65,3 +66,21 @@ async def make_harness(
 
     yield make
     await stack.aclose()
+
+
+@pytest.fixture
+def owner_engine(owner_url: str) -> Iterator[Engine]:
+    """소유자 역할 엔진. orbit_app이 만들 수 없는 합성 사용자·연결을 준비하는 데 쓴다."""
+    engine = create_engine(owner_url, pool_size=1, max_overflow=0)
+    yield engine
+    cleanup_users(engine)
+    engine.dispose()
+
+
+@pytest.fixture
+async def ix(
+    async_db: AsyncDatabase, workspaces: WorkspaceFactory, owner_engine: Engine
+) -> AsyncIterator[IndexEnv]:
+    """활성 연결과 Sim 메일(합성 견적·점심 메일 포함)이 있는 색인 테스트 환경."""
+    async for env in env_iter(async_db, workspaces, owner_engine, extra=EXTRAS):
+        yield env

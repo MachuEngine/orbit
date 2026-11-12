@@ -5,29 +5,54 @@
   run이 없거나 종료 상태이거나 승인이 아직 `pending`이면 아무것도 하지 않고 정상 종료한다.
 - 처리기가 예외로 끝나면 재시도한다(작업 재실행은 처음부터이므로 멱등해야 한다). 외부 쓰기는
   `execution` 선기록과 lease(ADR-0003 조건 1)가 중복을 막는다.
+- 메일 색인(ADR-0019): `deps.mail_index`가 있으면 `sync_mail_index` 작업(인자 `workspace_id`,
+  `connection_id`뿐)과 마지막 동기화가 오래된 연결을 골라 등록하는 주기 작업을 함께 등록한다.
 - 멈춘 작업 복구 주기 작업(ADR-0005 조건 2): heartbeat가 끊긴 `doing` 작업을 `todo`로 되돌린다.
   복구 작업은 워커가 쓰는 연결과 따로 만든 앱으로 실행한다(열려 있는 앱을 다시 열지 않기 위해서다).
 """
 
+import asyncio
 import logging
 import math
 import uuid
 from datetime import timedelta
+from typing import Any
 
 import procrastinate
 from procrastinate.retry import BaseRetryStrategy, RetryDecision
 
+from orbit.mailindex.jobs import (
+    MAIL_INDEX_QUEUE,
+    MAIL_INDEX_TICK,
+    SYNC_MAIL_INDEX,
+    TICK_CRON,
+    enqueue_due_syncs,
+    validate_sync_args,
+)
+from orbit.mailindex.sync import sync_connection
 from orbit.records.errors import InvalidJobArgs
 from orbit.records.jobs import make_procrastinate_app, recover_stalled_jobs, validate_job_args
-from orbit.runflow.deps import RunDeps
+from orbit.runflow.deps import NoConnection, RunDeps
 from orbit.runflow.graph import advance_run, expire_if_due
 from orbit.runflow.jobs import EXECUTE_RUN, EXPIRE_APPROVALS, RECOVER_STALLED, RESUME_RUN
 from orbit.runflow.nodes import ExecutionNotSettled
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["EXECUTE_RUN", "EXPIRE_APPROVALS", "RECOVER_STALLED", "RESUME_RUN", "build_worker_app"]
+__all__ = [
+    "EXECUTE_RUN",
+    "EXPIRE_APPROVALS",
+    "MAIL_INDEX_QUEUE",
+    "MAIL_INDEX_TICK",
+    "RECOVER_STALLED",
+    "RESUME_RUN",
+    "RUN_QUEUE",
+    "SYNC_MAIL_INDEX",
+    "WorkerPool",
+    "build_worker_app",
+]
 
+RUN_QUEUE = "default"  # run 실행·재개, 승인 만료, 멈춘 작업 복구
 STALLED_AFTER_SECONDS = 60.0  # 워커 heartbeat 간격(10초)과 stalled_worker_timeout(30초)보다 길게
 RETRY_MAX_ATTEMPTS = 5
 RETRY_WAIT_SECONDS = 30
@@ -116,7 +141,122 @@ def build_worker_app(
         if recovered:
             logger.warning("멈춘 작업 %d개를 되돌렸다", len(recovered))
 
+    _register_mail_index_tasks(app, deps)
     return app
+
+
+class WorkerPool:
+    """큐마다 워커를 따로 돌리는 워커 프로세스 하나.
+
+    색인 동기화는 첫 동기화에 수 분이 걸린다. 같은 큐·같은 워커(동시성 1)에 두면 그동안 run 작업과
+    멈춘 작업 복구가 밀리므로, run 큐와 색인 큐에 각각 동시성 1인 워커를 동시에 돌린다.
+    종료 신호는 이 풀이 받아 모든 워커를 정상 종료시킨다(워커별 신호 처리기는 서로 덮어쓴다).
+    """
+
+    def __init__(
+        self,
+        app: procrastinate.App,
+        *,
+        queues: tuple[str, ...] = (RUN_QUEUE, MAIL_INDEX_QUEUE),
+        wait: bool = True,
+        install_signal_handlers: bool = True,
+        **options: Any,
+    ) -> None:
+        from procrastinate.worker import Worker
+
+        self._install_signals = install_signal_handlers
+        self._workers = [
+            Worker(
+                app=app,
+                queues=[queue],
+                concurrency=1,
+                name=f"worker-{queue}",
+                wait=wait,
+                install_signal_handlers=False,
+                **options,
+            )
+            for queue in queues
+        ]
+
+    def stop(self) -> None:
+        for worker in self._workers:
+            worker.stop()  # type: ignore[no-untyped-call]
+
+    async def _run_one(self, worker: Any) -> BaseException | None:
+        try:
+            await worker.run()
+        except Exception as exc:
+            logger.error("워커가 예외로 끝났다: %s %s", worker.worker_name, type(exc).__name__)
+            self.stop()
+            return exc
+        return None
+
+    async def run(self) -> None:
+        """앱이 열려 있어야 한다. 모든 워커가 끝나면 돌아온다."""
+        import signal
+
+        loop = asyncio.get_running_loop()
+        installed: list[signal.Signals] = []
+        if self._install_signals:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, self.stop)
+                installed.append(sig)
+        try:
+            # 한 워커가 예외로 끝나면 나머지를 정상 종료시키고, 모두 끝난 뒤 첫 예외를 다시 던진다.
+            results = await asyncio.gather(
+                *(self._run_one(worker) for worker in self._workers),
+            )
+            errors = [r for r in results if r is not None]
+            if errors:
+                raise errors[0]
+        finally:
+            for sig in installed:
+                loop.remove_signal_handler(sig)
+
+
+class SyncBusy(RuntimeError):
+    """같은 연결의 다른 동기화가 진행 중이다. 작업을 재시도한다."""
+
+
+def _register_mail_index_tasks(app: procrastinate.App, deps: RunDeps) -> None:
+    """색인 동기화 작업과 주기 작업을 등록한다(`deps.mail_index`가 있을 때만)."""
+    mail_index = deps.mail_index
+    if mail_index is None:
+        return
+    mail_index.jobs = app  # 범위 저장·지금 동기화가 같은 앱으로 작업을 등록한다
+
+    @app.task(
+        name=SYNC_MAIL_INDEX,
+        queue=MAIL_INDEX_QUEUE,
+        retry=procrastinate.RetryStrategy(max_attempts=3, wait=60),
+    )
+    async def sync_mail_index(workspace_id: str, connection_id: str) -> None:
+        # 연결이 없거나 해제됐으면 아무것도 하지 않고 끝난다. 오류 종류는 sync_state에 남는다.
+        try:
+            args = validate_sync_args(
+                {"workspace_id": workspace_id, "connection_id": connection_id}
+            )
+        except InvalidJobArgs:
+            logger.error("작업 인자가 올바르지 않다: %s", SYNC_MAIL_INDEX)
+            return
+        ws, cid = uuid.UUID(args["workspace_id"]), uuid.UUID(args["connection_id"])
+        try:
+            _, mail = await deps.resolver.connectors_for(ws)
+        except NoConnection:
+            logger.info("%s: connection %s -> no_connection", SYNC_MAIL_INDEX, cid)
+            return
+        result = await sync_connection(mail_index, mail, ws, cid)
+        logger.info("%s: connection %s -> %s", SYNC_MAIL_INDEX, cid, result.outcome)
+        if result.outcome == "busy":
+            # 다른 동기화가 돌고 있다. 그 동기화가 놓쳤을 수 있는 새 범위를 위해 잠시 뒤 다시 한다.
+            raise SyncBusy(f"connection {cid}")
+
+    @app.periodic(cron=TICK_CRON)
+    @app.task(name=MAIL_INDEX_TICK, queue=MAIL_INDEX_QUEUE, queueing_lock=MAIL_INDEX_TICK)
+    async def mail_index_tick(timestamp: int) -> None:
+        registered = await enqueue_due_syncs(mail_index, app)
+        if registered:
+            logger.info("%s: 동기화 %d건을 등록했다", MAIL_INDEX_TICK, registered)
 
 
 QUIET_LOGGERS = ("httpx", "httpcore")
@@ -149,6 +289,8 @@ def main() -> None:
     from orbit.crypto.envelope import EnvelopeCipher, EnvelopeError, load_kek_from_file
     from orbit.db.session import AsyncDatabase
     from orbit.llm.factory import build_llm
+    from orbit.mailindex.deps import MailIndexDeps
+    from orbit.mailindex.embedding import build_embedder
     from orbit.runflow.deps import ConnectorResolver, GoogleConnectorResolver, SimConnectorResolver
 
     settings = get_settings()
@@ -191,17 +333,37 @@ def main() -> None:
     else:
         assert settings.sim_snapshot_path is not None  # noqa: S101
         resolver = SimConnectorResolver(settings.sim_snapshot_path, settings.sim_account_id, clock)
+    try:
+        embedder = build_embedder(settings, llm_settings)
+    except ValueError as exc:
+        raise SystemExit(f"{exc} (테스트·Sim이면 ORBIT_EMBEDDING_PROVIDER=fake)") from None
+    ids = Uuid7Generator(clock)
     deps = RunDeps(
         db=db,
         clock=clock,
-        ids=Uuid7Generator(clock),
+        ids=ids,
         llm=build_llm(llm_settings),
         resolver=resolver,
         tz=ZoneInfo(settings.user_timezone),
         checkpoint_conninfo=make_url(url).set(drivername="postgresql").render_as_string(False),
         approval_ttl=timedelta(seconds=settings.approval_ttl_seconds),
+        mail_index=MailIndexDeps(
+            db=db,
+            clock=clock,
+            ids=ids,
+            embedder=embedder,
+            sync_interval=timedelta(seconds=settings.mail_index_sync_interval_seconds),
+            query_stale=timedelta(seconds=settings.mail_index_query_stale_seconds),
+            query_sync_timeout_s=settings.mail_index_query_sync_timeout_seconds,
+        ),
     )
-    build_worker_app(url, deps).run_worker(queues=["default"])
+    app = build_worker_app(url, deps)
+
+    async def serve() -> None:
+        async with app.open_async():
+            await WorkerPool(app).run()
+
+    asyncio.run(serve())
 
 
 if __name__ == "__main__":

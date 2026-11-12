@@ -57,6 +57,8 @@
 
 **검색 부분집합 (D1-6)**: `from:`, `to:`, `subject:`, `after:YYYY/MM/DD`, `before:YYYY/MM/DD`, `has:attachment`, `in:sent`·`in:inbox`·`in:drafts`, 일반 키워드, 큰따옴표 구문. 조건은 모두 AND, 대소문자 무시. 그 외 연산자(`OR`, `-`, `label:`, `rfc822msgid:` 등)는 `InvalidQuery`. Agent에게 주는 도구 설명도 이 부분집합으로 제한한다.
 
+추가(2026-11-12, ADR-0019 §2): 메일 색인 동기화를 위해 `list_labels() -> list[MailLabel]`, `list_message_ids(label_id, *, after, page_token) -> MessageIdPage`, `current_history_id() -> str`, `list_history(start_history_id, *, page_token) -> HistoryPage`를 추가한다. 이력 위치가 만료되면 `HistoryExpired`를 던진다. 새 OAuth 권한은 필요 없다(`gmail.readonly`).
+
 ### 5. Sim Provider
 - **SimWorld**: JSON 스냅샷(스키마 버전 포함)에서 읽는다. 계정별 메일함(메시지·스레드·초안)과 캘린더(일정)를 가진다. 스냅샷은 데이터셋 버전과 함께 Git으로 관리한다 (D1-2).
 - **에피소드**: `world.fork()`로 독립 복사본을 만든다. 한 에피소드의 쓰기가 다른 에피소드나 원본에 섞이지 않는다.

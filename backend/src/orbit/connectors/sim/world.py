@@ -121,9 +121,26 @@ class _WorldSnapshot(BaseModel):
     accounts: dict[str, _AccountSnapshot]
 
 
+HistoryKind = Literal["added", "deleted", "labels_added", "labels_removed"]
+
+
+@dataclass(frozen=True)
+class HistoryEntry:
+    """메일 변경 이력 한 건(ADR-0019 §2). `seq`는 이 항목을 기록한 뒤의 이력 위치다."""
+
+    seq: int
+    kind: HistoryKind
+    message_id: str
+
+
 @dataclass
 class AccountState:
-    """계정 하나의 변경 가능한 상태. Sim 커넥터가 직접 읽고 쓴다."""
+    """계정 하나의 변경 가능한 상태. Sim 커넥터가 직접 읽고 쓴다.
+
+    변경 이력(`history`)은 색인 동기화 재현용이다. 월드 스냅샷에는 담지 않으므로 불러온 월드의
+    이력 위치는 0이다. 이력 위치(`history_id`)는 변경이나 만료 주입이 있을 때마다 1씩 커진다.
+    이력 만료는 `expire_history`로 주입한다.
+    """
 
     email: str
     calendars: dict[str, Calendar] = field(default_factory=dict)
@@ -132,6 +149,55 @@ class AccountState:
     threads: dict[str, list[str]] = field(default_factory=dict)  # thread_id -> message_ids
     drafts: dict[str, Draft] = field(default_factory=dict)
     draft_log: list[DraftLogEntry] = field(default_factory=list)
+    history: list[HistoryEntry] = field(default_factory=list)
+    history_id: int = 0  # 지금 이력 위치
+    history_floor: int = 0  # 이 위치보다 앞선 이력 위치로는 이어 읽을 수 없다(만료)
+    user_labels: dict[str, str] = field(default_factory=dict)  # 사용자 라벨 ID -> 이름
+
+    # ---- 변경 이력 (색인 동기화 시나리오용). 월드를 바꾸는 쪽이 이 메서드로 바꾼다.
+
+    def record_history(self, kind: HistoryKind, message_id: str) -> None:
+        self.history_id += 1
+        self.history.append(HistoryEntry(self.history_id, kind, message_id))
+
+    def expire_history(self) -> None:
+        """지금까지 발급한 이력 위치를 모두 만료시킨다.
+
+        이전 위치로 `list_history`를 부르면 `HistoryExpired`다. 만료 뒤에 `current_history_id`로
+        받은 위치부터는 다시 읽을 수 있다.
+        """
+        self.history_id += 1
+        self.history_floor = self.history_id
+
+    def add_message(self, message: MailMessage) -> None:
+        """메시지를 메일함에 넣고 `added`를 기록한다."""
+        if message.id in self.messages:
+            raise ValueError(f"메시지 ID 중복 {message.id}")
+        self.messages[message.id] = message
+        self.threads.setdefault(message.thread_id, []).append(message.id)
+        self.record_history("added", message.id)
+
+    def delete_message(self, message_id: str) -> None:
+        message = self.messages.pop(message_id)
+        ids = self.threads.get(message.thread_id, [])
+        if message_id in ids:
+            ids.remove(message_id)
+        self.record_history("deleted", message_id)
+
+    def set_labels(
+        self, message_id: str, *, add: tuple[str, ...] = (), remove: tuple[str, ...] = ()
+    ) -> None:
+        """라벨을 붙이거나 뗀다. 실제로 바뀐 것만 이력에 남긴다."""
+        message = self.messages[message_id]
+        labels = [label for label in message.labels if label not in remove]
+        added = [label for label in add if label not in labels]
+        removed = [label for label in remove if label in message.labels]
+        labels += added
+        self.messages[message_id] = message.model_copy(update={"labels": tuple(labels)})
+        if added:
+            self.record_history("labels_added", message_id)
+        if removed:
+            self.record_history("labels_removed", message_id)
 
     def record_draft(
         self,

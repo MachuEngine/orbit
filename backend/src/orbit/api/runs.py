@@ -212,7 +212,11 @@ async def post_run(
             workspace_id=ws,
             conversation_id=conversation_id,
             pattern=PATTERN,
-            config_fingerprint=config_fingerprint(settings.llm_model_id, _llm_info()),
+            config_fingerprint=config_fingerprint(
+                settings.llm_model_id,
+                _llm_info(),
+                embedding_model_id=settings.embedding_model_id,
+            ),
             clock=clock,
             ids=ids,
             idempotency_key=ikey,

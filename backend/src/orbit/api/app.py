@@ -13,6 +13,7 @@ from fastapi import APIRouter, FastAPI, Request, Response, status
 
 from orbit.api.auth import build_auth_router, build_google_login, ensure_startable
 from orbit.api.connections import build_connections_router
+from orbit.api.mail_index import build_mail_index_router
 from orbit.api.runs import router as runs_router
 from orbit.auth.google import GoogleOIDCConfig
 from orbit.connections.oauth import GoogleConnectOAuth
@@ -21,7 +22,10 @@ from orbit.core.config import Settings, get_settings
 from orbit.core.ids import Uuid7Generator
 from orbit.crypto.envelope import EnvelopeCipher, EnvelopeError, load_kek_from_file
 from orbit.db.session import AsyncDatabase
+from orbit.mailindex.deps import MailIndexDeps
+from orbit.mailindex.embedding import NullEmbedder
 from orbit.records.jobs import make_procrastinate_app
+from orbit.runflow.deps import ConnectorResolver, GoogleConnectorResolver, SimConnectorResolver
 
 logger = logging.getLogger(__name__)
 
@@ -70,17 +74,43 @@ def build_connections(
     return oauth, cipher
 
 
+def _default_resolver(
+    settings: Settings, db: AsyncDatabase, clock: Clock, cipher: EnvelopeCipher | None
+) -> ConnectorResolver | None:
+    """라벨 조회용 커넥터 해석기. 설정이 모자라면 None이고 라벨 API는 503이다."""
+    if settings.connector_mode == "google":
+        if (
+            cipher is None
+            or settings.google_client_id is None
+            or settings.google_client_secret is None
+        ):
+            return None
+        return GoogleConnectorResolver(
+            db=db,
+            cipher=cipher,
+            clock=clock,
+            client_id=settings.google_client_id,
+            client_secret=settings.google_client_secret,
+            token_url=settings.google_token_url,
+        )
+    if settings.sim_snapshot_path is None:
+        return None
+    return SimConnectorResolver(settings.sim_snapshot_path, settings.sim_account_id, clock)
+
+
 def create_app(
     settings: Settings | None = None,
     *,
     clock: Clock | None = None,
     ids: Uuid7Generator | None = None,
     google_transport: httpx.AsyncBaseTransport | None = None,
+    resolver: ConnectorResolver | None = None,
 ) -> FastAPI:
     resolved = settings if settings is not None else get_settings()
     ensure_startable(resolved)  # dev가 아니고 Google 로그인 설정이 빠졌으면 시작하지 않는다
     resolved_clock: Clock = clock if clock is not None else SystemClock()
     resolved_ids = ids if ids is not None else Uuid7Generator(resolved_clock)
+    connect_oauth, cipher = build_connections(resolved, resolved_clock, google_transport)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -88,9 +118,21 @@ def create_app(
         db = AsyncDatabase.from_url(url)
         app.state.db = db
         app.state.jobs = make_procrastinate_app(url)
+        # 색인 범위 관리용 의존성. API 프로세스는 임베딩을 하지 않는다(워커가 동기화한다).
+        app.state.mail_index = MailIndexDeps(
+            db=db,
+            clock=resolved_clock,
+            ids=resolved_ids,
+            embedder=NullEmbedder(),
+            jobs=app.state.jobs,
+        )
+        app.state.resolver = resolver or _default_resolver(resolved, db, resolved_clock, cipher)
         try:
             yield
         finally:
+            closer = getattr(app.state.resolver, "aclose", None)
+            if closer is not None:
+                await closer()
             await db.dispose()
 
     app = FastAPI(title="Orbit", lifespan=lifespan)
@@ -100,8 +142,8 @@ def create_app(
     api = APIRouter(prefix="/api")
     google = build_google_login(resolved, resolved_clock, google_transport)
     api.include_router(build_auth_router(resolved, google))
-    connect_oauth, cipher = build_connections(resolved, resolved_clock, google_transport)
     api.include_router(build_connections_router(resolved, connect_oauth, cipher))
+    api.include_router(build_mail_index_router())
     api.include_router(runs_router)
 
     @api.get("/healthz")

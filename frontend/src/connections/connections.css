@@ -82,3 +82,121 @@
 .conn-notice:empty {
   margin-top: calc(-1 * var(--space-4));
 }
+
+/* 메일 검색 색인 영역 (ADR-0019) */
+.idx {
+  display: grid;
+  justify-items: stretch;
+  gap: var(--space-3);
+  width: 100%;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-divider);
+}
+
+.idx h3 {
+  font-size: var(--text-md);
+}
+
+.idx-notice:empty {
+  margin-top: calc(-1 * var(--space-3));
+}
+
+.idx-block {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+}
+
+.idx-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.idx-field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 10rem;
+}
+
+.idx-field label {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.idx select {
+  width: 100%;
+  min-height: var(--control-height);
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font: inherit;
+}
+
+.idx select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.idx-scopes {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.idx-scope {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+}
+
+.idx-scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.idx-scope-name {
+  flex: 1 1 8rem;
+  min-width: 0;
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.idx-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.idx-status {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+}
+
+.idx-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+}
+
+.idx-facts dd {
+  margin: 0;
+}
+
+.idx select:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

@@ -22,7 +22,9 @@ from orbit.records.runs import RunMessageRecord
 from orbit.runflow.context import CALL_ID_PREFIX, ConversationContext
 
 _STRUCTURED_EMAIL_KEYS = frozenset({"from", "to", "cc", "attendees", "organizer"})
-_EXTERNAL_TEXT_KEYS = frozenset({"body", "description", "subject", "title", "location", "name"})
+_EXTERNAL_TEXT_KEYS = frozenset(
+    {"body", "description", "subject", "title", "location", "name", "excerpt"}
+)
 
 
 @dataclass(frozen=True)

@@ -215,7 +215,8 @@ def test_transcript_builds_llm_messages_in_order() -> None:
 def test_model_gets_read_context_and_write_tools_without_submit_answer() -> None:
     names = [spec.name for spec in run_tool_specs()]
     assert sorted(names) == sorted(READ_TOOLS | WRITE_TOOLS)
-    assert len(names) == 9 and "conversation_context" in READ_TOOLS
+    assert len(names) == 10 and "conversation_context" in READ_TOOLS
+    assert "search_indexed_mail" in READ_TOOLS
     assert "submit_answer" not in names
 
 

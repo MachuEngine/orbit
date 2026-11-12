@@ -18,7 +18,8 @@ def _tables(owner_url: str) -> set[str]:
                     " OR tablename IN ('run', 'run_event', 'run_message', 'tool_call',"
                     " 'approval', 'execution', 'checkpoints', 'checkpoint_blobs',"
                     " 'checkpoint_writes', 'checkpoint_migrations', 'auth_session',"
-                    " 'app_user', 'membership', 'connection'))"
+                    " 'app_user', 'membership', 'connection', 'index_scope',"
+                    " 'sync_state', 'source_item', 'chunk'))"
                 )
             )
             return {r[0] for r in rows}
@@ -39,6 +40,20 @@ def _procrastinate_leftovers(owner_url: str) -> int:
                         " AND typtype <> 'c')"
                     )
                 ).scalar_one()
+            )
+    finally:
+        engine.dispose()
+
+
+def _due_function_exists(owner_url: str) -> bool:
+    engine = create_engine(owner_url)
+    try:
+        with engine.connect() as conn:
+            return (
+                conn.execute(
+                    text("SELECT 1 FROM pg_proc WHERE proname = 'mail_index_due_connections'")
+                ).first()
+                is not None
             )
     finally:
         engine.dispose()
@@ -65,6 +80,10 @@ def test_upgrade_downgrade_upgrade(owner_url: str) -> None:
         "app_user",
         "membership",
         "connection",
+        "index_scope",
+        "sync_state",
+        "source_item",
+        "chunk",
         "procrastinate_jobs",
         "procrastinate_events",
         "procrastinate_workers",
@@ -74,13 +93,16 @@ def test_upgrade_downgrade_upgrade(owner_url: str) -> None:
     try:
         command.upgrade(cfg, "head")
         assert _tables(owner_url) == expected
+        assert _due_function_exists(owner_url)
 
         command.downgrade(cfg, "base")
         assert _tables(owner_url) == set()
+        assert not _due_function_exists(owner_url)
         assert _procrastinate_leftovers(owner_url) == 0
 
         command.upgrade(cfg, "head")
         assert _tables(owner_url) == expected
+        assert _due_function_exists(owner_url)
         assert _procrastinate_leftovers(owner_url) > 0
 
         engine = create_engine(owner_url)

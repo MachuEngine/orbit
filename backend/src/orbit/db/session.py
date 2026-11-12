@@ -13,9 +13,9 @@
   트랜잭션이 열리지 않으므로 데이터가 보이지 않는다(SQLAlchemy 2.1.8에서 확인, 통합 테스트로 고정).
   나눠서 커밋해야 하면 `workspace_session`을 새로 연다.
 - 워크스페이스 없이 DB에 닿는 경로는 `ping()`, `unscoped_auth_session_lookup()`,
-  `unscoped_auth_session_profile()`, `unscoped_login_upsert_user()`뿐이다. `ping()` 말고는 모두
-  `SECURITY DEFINER` 함수 호출만 한다(마이그레이션 0004·0005). 새 경로가 필요하면 이름에
-  `unscoped`를 넣는다.
+  `unscoped_auth_session_profile()`, `unscoped_login_upsert_user()`,
+  `unscoped_mail_index_due_connections()`뿐이다. `ping()` 말고는 모두 `SECURITY DEFINER` 함수
+  호출만 한다(마이그레이션 0004·0005·0008). 새 경로가 필요하면 이름에 `unscoped`를 넣는다.
 """
 
 import uuid
@@ -149,6 +149,30 @@ class AsyncDatabase:
                 )
             ).one()
         return tuple(row)
+
+    async def unscoped_mail_index_due_connections(
+        self, stale_before: datetime, error_retry_before: datetime
+    ) -> list[tuple[uuid.UUID, uuid.UUID]]:
+        """색인 범위가 있고 `stale_before`보다 오래 동기화하지 않은 활성 연결의 ID 쌍.
+
+        오류 상태 연결은 영구 오류(`permission_revoked`)면 빼고, 그 밖의 오류는 마지막 시도가
+        `error_retry_before`보다 오래됐을 때만 포함한다.
+
+        주기 작업이 워크스페이스를 가로질러 대상을 고르는 유일한 경로다.
+        `mail_index_due_connections` 함수(SECURITY DEFINER, 마이그레이션 0008)만 호출하며
+        `(workspace_id, connection_id)`만 돌려준다. 제목·본문·주소는 읽지 않는다.
+        """
+        async with self._engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT workspace_id, connection_id FROM mail_index_due_connections(:b, :e)"
+                    ),
+                    {"b": stale_before, "e": error_retry_before},
+                )
+            ).all()
+            await conn.rollback()
+        return [(r[0], r[1]) for r in rows]
 
     async def dispose(self) -> None:
         await self._engine.dispose()

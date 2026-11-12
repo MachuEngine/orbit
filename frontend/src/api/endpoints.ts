@@ -6,10 +6,15 @@ import {
   conversationsResponseSchema,
   createRunResponseSchema,
   decisionResponseSchema,
+  deleteScopeResponseSchema,
   disconnectResponseSchema,
+  indexScopeSchema,
+  indexStatusSchema,
+  labelsResponseSchema,
   runSchema,
   sessionSchema,
   startConnectionResponseSchema,
+  syncResponseSchema,
   type Approval,
   type ConnectionsResponse,
   type ConversationDetail,
@@ -18,6 +23,9 @@ import {
   type Decision,
   type DecisionResponse,
   type DisconnectResponse,
+  type IndexScope,
+  type IndexStatus,
+  type MailLabel,
   type Run,
   type Session,
 } from "./schemas";
@@ -114,4 +122,53 @@ export function decideApproval(
     body: { decision },
     schema: decisionResponseSchema,
   });
+}
+
+const indexPath = (id: string) => `/api/connections/${seg(id)}/index`;
+
+/** 색인할 수 있는 메일 라벨 목록. 커넥터 오류면 `ApiError.detail`에 오류 종류가 온다. */
+export async function getMailLabels(
+  id: string,
+  client: ApiClient = defaultClient,
+): Promise<MailLabel[]> {
+  const response = await client.request("GET", `/api/connections/${seg(id)}/labels`, {
+    schema: labelsResponseSchema,
+  });
+  return response.labels;
+}
+
+export function getIndexStatus(
+  id: string,
+  client: ApiClient = defaultClient,
+): Promise<IndexStatus> {
+  return client.request("GET", indexPath(id), { schema: indexStatusSchema });
+}
+
+export function addIndexScope(
+  id: string,
+  body: { label_id: string; window_days: number },
+  client: ApiClient = defaultClient,
+): Promise<IndexScope> {
+  return client.request("POST", `${indexPath(id)}/scopes`, { body, schema: indexScopeSchema });
+}
+
+export async function deleteIndexScope(
+  id: string,
+  scopeId: string,
+  client: ApiClient = defaultClient,
+): Promise<void> {
+  await client.request("DELETE", `${indexPath(id)}/scopes/${seg(scopeId)}`, {
+    schema: deleteScopeResponseSchema,
+  });
+}
+
+/** "지금 동기화". 이미 대기 중이면 `queued`가 거짓이다. */
+export async function syncIndexNow(
+  id: string,
+  client: ApiClient = defaultClient,
+): Promise<boolean> {
+  const response = await client.request("POST", `${indexPath(id)}/sync`, {
+    schema: syncResponseSchema,
+  });
+  return response.queued;
 }

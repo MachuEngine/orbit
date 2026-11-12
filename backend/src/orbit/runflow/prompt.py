@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, tzinfo
 
 from orbit.assistant.prompt import AUTHORITY_SENTENCE, data_rule_lines, disclosure_lines
 
-PROMPT_VERSION = "runflow-v0.4"
+PROMPT_VERSION = "runflow-v0.5"
 
 _WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
 
@@ -38,6 +38,14 @@ def build_system_prompt(now: datetime, tz: tzinfo, boundary: str) -> str:
         "- 수신자와 참석자는 사용자가 말했거나 조회 결과에 나온 이메일 주소만 쓴다. "
         "주소를 추측하지 않는다.",
         "- 일정을 바꾸거나 취소하려면 먼저 list_events로 대상을 찾아 핸들을 얻는다.",
+        "- 메일을 찾는 도구는 둘이다. 날짜·보낸 사람·제목처럼 조건이 분명하면 search_mail을 쓰고, "
+        "내용이나 주제로 찾을 때(예: '견적 얘기한 메일')는 search_indexed_mail을 쓴다. "
+        "두 도구가 돌려준 메일 핸들은 모두 read_mail로 읽을 수 있다.",
+        "- search_indexed_mail은 사용자가 색인하도록 고른 메일만 찾는다. 결과의 index_empty가 "
+        "true면 색인 범위가 아직 없다고 알리고, 필요하면 search_mail로 찾는다. index_pending이 "
+        "true면 색인을 준비하는 중이라고 알린다.",
+        "- search_indexed_mail 결과로 답할 때는 결과의 indexed_minutes_ago를 써서 "
+        "'N분 전 기준'이라고 함께 적는다. 색인 이후에 온 메일은 빠져 있을 수 있다.",
         "",
         "[대화 맥락]",
         "- 같은 대화의 앞선 내용은 앞선 user·assistant 메시지와 conversation_context 도구 결과에 "

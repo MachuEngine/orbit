@@ -17,11 +17,21 @@ SPIKE-005에서 관측한 Gmail 초안 동작을 재현한다.
   호출자는 `DRAFT` 라벨로 걸러야 한다.
 - 초안 생성·발송·삭제는 `AccountState.draft_log`에 기록해 `diff`가 정확히 짝짓게 한다.
 - 페이지 토큰은 정렬된 결과의 오프셋(`o:<n>`)이라 결정적이다.
+
+색인용 읽기(ADR-0019 §2):
+- 라벨은 시스템 라벨(INBOX·SENT·DRAFT)과 `AccountState.user_labels`다. 메시지에 붙은 라벨 중
+  어느 쪽에도 없는 ID는 이름을 ID와 같게 둔 사용자 라벨로 본다.
+- 변경 이력은 `AccountState.history`다. 이력 위치는 `AccountState.history_id`(문자열)이고,
+  `list_history(start)`는 위치가 `start`보다 큰 항목을 돌려준다. `expire_history`로 만료시키면
+  그 이전 위치는 `HistoryExpired`다.
+  `send_draft`가 만든 메시지는 `added`로 남고, 그 밖의 변경(삭제·라벨)은 `AccountState`의
+  `add_message`·`delete_message`·`set_labels`가 남긴다.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime
 from typing import Any
 
 from orbit.connectors.contracts import (
@@ -29,9 +39,13 @@ from orbit.connectors.contracts import (
     Address,
     Draft,
     DraftSpec,
+    HistoryExpired,
+    HistoryPage,
     InvalidQuery,
+    MailLabel,
     MailMessage,
     MailThread,
+    MessageIdPage,
     MessageSummary,
     NotFound,
     SearchPage,
@@ -42,6 +56,8 @@ from orbit.connectors.sim.world import AccountState, SimWorld
 
 _SNIPPET_LEN = 100
 _CURSOR_PREFIX = "o:"
+DEFAULT_PAGE_SIZE = 100
+_SYSTEM_LABELS = ("INBOX", "SENT", "DRAFT")
 
 
 def _snippet(body: str) -> str:
@@ -49,7 +65,15 @@ def _snippet(body: str) -> str:
 
 
 class SimMailConnector:
-    def __init__(self, world: SimWorld, account_id: str, runtime: SimRuntime) -> None:
+    def __init__(
+        self,
+        world: SimWorld,
+        account_id: str,
+        runtime: SimRuntime,
+        *,
+        page_size: int = DEFAULT_PAGE_SIZE,
+    ) -> None:
+        self._page_size = page_size
         self._world = world
         self._account_id = account_id
         self._rt = runtime
@@ -215,6 +239,7 @@ class SimMailConnector:
             del self._state.drafts[draft_id]
             self._state.messages[message.id] = message
             self._state.threads.setdefault(draft.thread_id, []).append(message.id)
+            self._state.record_history("added", message.id)
             self._state.record_draft("sent", draft, sent_message_id=message.id)
             return self._detach(message)
 
@@ -227,3 +252,87 @@ class SimMailConnector:
             self._state.record_draft("deleted", self._state.drafts.pop(draft_id))
 
         await self._run("delete_draft", {"draft_id": draft_id}, apply)
+
+    # ------------------------------------------------------------ 색인용 읽기 (ADR-0019 §2)
+
+    @staticmethod
+    def _offset(page_token: str | None) -> int:
+        if page_token is None:
+            return 0
+        raw = page_token[len(_CURSOR_PREFIX) :]
+        if not page_token.startswith(_CURSOR_PREFIX) or not (raw.isascii() and raw.isdigit()):
+            raise InvalidQuery(f"잘못된 page_token: {page_token!r}")
+        return int(raw)
+
+    async def list_labels(self) -> list[MailLabel]:
+        def apply() -> list[MailLabel]:
+            labels = [MailLabel(id=i, name=i, kind="system") for i in _SYSTEM_LABELS]
+            known = {label.id for label in labels}
+            users = dict(self._state.user_labels)
+            for msg in self._state.messages.values():
+                for label in msg.labels:
+                    if label not in known and label not in users:
+                        users[label] = label
+            labels += [MailLabel(id=i, name=n, kind="user") for i, n in sorted(users.items())]
+            return labels
+
+        return await self._run("list_labels", {}, apply)
+
+    async def list_message_ids(
+        self, label_id: str, *, after: datetime, page_token: str | None = None
+    ) -> MessageIdPage:
+        args = {"label_id": label_id, "after": after, "page_token": page_token}
+
+        def apply() -> MessageIdPage:
+            if after.tzinfo is None or after.utcoffset() is None:
+                raise ValueError("after는 시간대가 있는 시각이어야 한다")
+            offset = self._offset(page_token)
+            found = sorted(
+                (
+                    m
+                    for m in self._state.messages.values()
+                    if label_id in m.labels and m.sent_at >= after
+                ),
+                key=lambda m: (m.sent_at, m.id),
+                reverse=True,
+            )
+            page = found[offset : offset + self._page_size]
+            next_offset = offset + self._page_size
+            token = f"{_CURSOR_PREFIX}{next_offset}" if next_offset < len(found) else None
+            return MessageIdPage(message_ids=tuple(m.id for m in page), next_page_token=token)
+
+        return await self._run("list_message_ids", args, apply)
+
+    async def current_history_id(self) -> str:
+        return await self._run("current_history_id", {}, lambda: str(self._state.history_id))
+
+    async def list_history(
+        self, start_history_id: str, *, page_token: str | None = None
+    ) -> HistoryPage:
+        args = {"start_history_id": start_history_id, "page_token": page_token}
+
+        def apply() -> HistoryPage:
+            if not (start_history_id.isascii() and start_history_id.isdigit()):
+                raise HistoryExpired("이력 위치를 해석할 수 없다")
+            start = int(start_history_id)
+            if start < self._state.history_floor or start > self._state.history_id:
+                raise HistoryExpired("이력 위치가 만료됐다")
+            offset = self._offset(page_token)
+            entries = [e for e in self._state.history if e.seq > start]
+            page = entries[offset : offset + self._page_size]
+            next_offset = offset + self._page_size
+            token = f"{_CURSOR_PREFIX}{next_offset}" if next_offset < len(entries) else None
+
+            def ids(kind: str) -> tuple[str, ...]:
+                return tuple(dict.fromkeys(e.message_id for e in page if e.kind == kind))
+
+            return HistoryPage(
+                history_id=str(self._state.history_id),
+                added_ids=ids("added"),
+                deleted_ids=ids("deleted"),
+                labels_added_ids=ids("labels_added"),
+                labels_removed_ids=ids("labels_removed"),
+                next_page_token=token,
+            )
+
+        return await self._run("list_history", args, apply)

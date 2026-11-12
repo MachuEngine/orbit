@@ -19,6 +19,12 @@
 - `ORBIT_SESSION_TTL_SECONDS`: 쿠키 세션 유효 시간. 기본 12시간.
 - `ORBIT_SIM_SNAPSHOT_PATH`, `ORBIT_SIM_ACCOUNT_ID`: 개발용 Sim 커넥터가 읽을 합성 스냅샷과 계정.
 - `ORBIT_USER_TIMEZONE`: 비서가 상대 날짜를 계산할 때 쓰는 IANA 시간대.
+- 메일 색인(ADR-0019): `ORBIT_EMBEDDING_PROVIDER`(`openai`|`fake`, 기본 openai. fake는 테스트·Sim용
+  결정적 임베더), `ORBIT_EMBEDDING_MODEL_ID`(기본 `text-embedding-3-small`, 1536차원이어야 한다),
+  `ORBIT_MAIL_INDEX_SYNC_INTERVAL_SECONDS`(주기 동기화 기준, 기본 15분),
+  `ORBIT_MAIL_INDEX_QUERY_STALE_SECONDS`(질의 직전 동기화 기준, 기본 5분),
+  `ORBIT_MAIL_INDEX_QUERY_SYNC_TIMEOUT_SECONDS`(질의 직전 동기화 시간 상한, 기본 10초).
+  OpenAI 임베더의 키와 주소는 `LLMSettings`의 `ORBIT_OPENAI_API_KEY`·`ORBIT_OPENAI_BASE_URL`을 쓴다.
 """
 
 import uuid
@@ -62,6 +68,13 @@ class Settings(BaseSettings):
     google_connect_redirect_uri: str | None = None
     data_key_file: str | None = None
     connector_mode: Literal["sim", "google"] = "sim"
+
+    # 메일 색인 (ADR-0019 §4·§6)
+    embedding_provider: Literal["openai", "fake"] = "openai"
+    embedding_model_id: str = Field(default="text-embedding-3-small", min_length=1)
+    mail_index_sync_interval_seconds: float = Field(default=900.0, gt=0)
+    mail_index_query_stale_seconds: float = Field(default=300.0, ge=0)
+    mail_index_query_sync_timeout_seconds: float = Field(default=10.0, gt=0)
 
     @field_validator("log_level", mode="before")
     @classmethod

@@ -27,6 +27,7 @@ from orbit.core.ids import Uuid7Generator
 from orbit.crypto.envelope import EnvelopeCipher
 from orbit.db.session import AsyncDatabase
 from orbit.llm.interface import LLM
+from orbit.mailindex.deps import MailIndexDeps
 
 DEFAULT_MAX_STEPS = 12  # 한 run의 LLM 호출 상한
 DEFAULT_LEASE_SECONDS = 300.0  # 커넥터 호출 타임아웃 x (1 + 재호출 1회)보다 길게(ADR-0012 §3)
@@ -152,3 +153,4 @@ class RunDeps:
     lease_seconds: float = DEFAULT_LEASE_SECONDS
     max_steps: int = DEFAULT_MAX_STEPS
     jobs: procrastinate.App | None = None  # 워커 앱. 있으면 승인 만료 확인 작업을 예약한다
+    mail_index: MailIndexDeps | None = None  # 색인 검색 도구·동기화 작업(ADR-0019). 없으면 비활성
