@@ -22,6 +22,7 @@ from orbit.runflow.state import MAX_STATE_STRING, StateViolation, validate_state
 from orbit.runflow.summary import approval_summary
 from orbit.runflow.transcript import Transcript
 from orbit.runflow.write_tools import (
+    LOCAL_TOOLS,
     READ_TOOLS,
     WRITE_TOOLS,
     build_action,
@@ -214,8 +215,9 @@ def test_transcript_builds_llm_messages_in_order() -> None:
 
 def test_model_gets_read_context_and_write_tools_without_submit_answer() -> None:
     names = [spec.name for spec in run_tool_specs()]
-    assert sorted(names) == sorted(READ_TOOLS | WRITE_TOOLS)
-    assert len(names) == 12 and "conversation_context" in READ_TOOLS  # 문서 도구 2개 포함
+    assert sorted(names) == sorted(READ_TOOLS | WRITE_TOOLS | LOCAL_TOOLS)
+    assert len(names) == 13 and "conversation_context" in READ_TOOLS  # 문서 2개, 리마인더 1개 포함
+    assert {"create_reminder"} == LOCAL_TOOLS and not LOCAL_TOOLS & (READ_TOOLS | WRITE_TOOLS)
     assert "search_indexed_mail" in READ_TOOLS
     assert "submit_answer" not in names
 

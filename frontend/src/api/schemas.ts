@@ -198,3 +198,38 @@ export type IndexStatus = z.infer<typeof indexStatusSchema>;
 /** `POST /api/connections/{id}/index/sync`. 새로 등록했으면 `queued`가 참이다. */
 export const syncResponseSchema = z.object({ queued: z.boolean() });
 export const deleteScopeResponseSchema = z.object({ id: z.string() });
+
+/**
+ * 알림 하나(ADR-0021). `title`은 일정 제목 같은 외부 문자열일 수 있으므로 화면은 텍스트로만 그린다.
+ * `kind`의 알려진 값은 `event_reminder`(일정 알림)와 `reminder`(대화 리마인더)다. 모르는 값도 받아서
+ * 일반 알림으로 보여 준다.
+ */
+export const notificationSchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  title: z.string(),
+  due_at: z.string(),
+  event_start: z.string().nullable(),
+  read: z.boolean(),
+  created_at: z.string(),
+});
+export type NotificationItem = z.infer<typeof notificationSchema>;
+
+/** `GET /api/notifications`. 도착한 알림(최근순, 최대 50개)과 읽지 않은 전체 수. */
+export const notificationsResponseSchema = z.object({
+  notifications: z.array(notificationSchema),
+  unread_count: z.number().int(),
+});
+export type NotificationsResponse = z.infer<typeof notificationsResponseSchema>;
+
+/** `GET /api/notifications/upcoming`. 예정된 알림(시각순). */
+export const upcomingResponseSchema = z.object({ notifications: z.array(notificationSchema) });
+
+export const notificationSettingsSchema = z.object({
+  event_reminders_enabled: z.boolean(),
+  lead_minutes: z.number().int(),
+});
+export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
+
+export const notificationIdResponseSchema = z.object({ id: z.string() });
+export const readAllResponseSchema = z.object({ updated: z.number().int() });

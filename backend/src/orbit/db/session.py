@@ -14,8 +14,10 @@
   나눠서 커밋해야 하면 `workspace_session`을 새로 연다.
 - 워크스페이스 없이 DB에 닿는 경로는 `ping()`, `unscoped_auth_session_lookup()`,
   `unscoped_auth_session_profile()`, `unscoped_login_upsert_user()`,
-  `unscoped_mail_index_due_connections()`뿐이다. `ping()` 말고는 모두 `SECURITY DEFINER` 함수
-  호출만 한다(마이그레이션 0004·0005·0008). 새 경로가 필요하면 이름에 `unscoped`를 넣는다.
+  `unscoped_mail_index_due_connections()`, `unscoped_event_reminder_due_connections()`,
+  `unscoped_notification_expired_workspaces()`뿐이다.
+  `ping()` 말고는 모두 `SECURITY DEFINER` 함수 호출만 한다(마이그레이션 0004·0005·0008·0010).
+  새 경로가 필요하면 이름에 `unscoped`를 넣는다.
 """
 
 import uuid
@@ -173,6 +175,41 @@ class AsyncDatabase:
             ).all()
             await conn.rollback()
         return [(r[0], r[1]) for r in rows]
+
+    async def unscoped_event_reminder_due_connections(
+        self,
+    ) -> list[tuple[uuid.UUID, uuid.UUID]]:
+        """일정 알림을 켠(설정 행이 없으면 켠 것으로 본다) 워크스페이스의 활성 연결 ID 쌍.
+
+        `event_reminder_due_connections` 함수(SECURITY DEFINER, 마이그레이션 0010)만 호출하며
+        `(workspace_id, connection_id)`만 돌려준다. 일정 제목·주소는 읽지 않는다.
+        """
+        async with self._engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text("SELECT workspace_id, connection_id FROM event_reminder_due_connections()")
+                )
+            ).all()
+            await conn.rollback()
+        return [(r[0], r[1]) for r in rows]
+
+    async def unscoped_notification_expired_workspaces(
+        self, event_before: datetime, reminder_before: datetime
+    ) -> list[uuid.UUID]:
+        """보존 기간이 지난 알림이 있는 워크스페이스 ID(마이그레이션 0010의 SECURITY DEFINER 함수).
+
+        일정 시작이 `event_before`보다 앞선 일정 알림이나 `due_at`이 `reminder_before`보다 앞선 대화
+        리마인더가 있는 워크스페이스만 돌려준다. 알림 내용은 읽지 않는다.
+        """
+        async with self._engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text("SELECT workspace_id FROM notification_expired_workspaces(:a, :b)"),
+                    {"a": event_before, "b": reminder_before},
+                )
+            ).all()
+            await conn.rollback()
+        return [r[0] for r in rows]
 
     async def dispose(self) -> None:
         await self._engine.dispose()

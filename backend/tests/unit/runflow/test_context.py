@@ -174,5 +174,5 @@ def test_fingerprint_includes_context_constants(monkeypatch: Any) -> None:
 
 
 def test_prompt_version_and_context_line() -> None:
-    assert PROMPT_VERSION == "runflow-v0.6"
+    assert PROMPT_VERSION == "runflow-v0.7"
     assert "conversation_context" in build_system_prompt(NOW, UTC, B)

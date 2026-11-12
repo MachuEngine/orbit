@@ -6,6 +6,7 @@ import {
   readConnectionResult,
   type ConnectionResult,
 } from "./connections/text";
+import { useNotifications } from "./notifications/useNotifications";
 import { ConnectionErrorScreen, LoadingScreen, LoginScreen } from "./session/LoginScreen";
 import { useSession } from "./session/useSession";
 
@@ -23,6 +24,11 @@ export function App() {
   }, []);
 
   const onStreamClosed = useCallback(() => void recheck(), [recheck]);
+  // 로그인해 있는 동안 도착한 알림을 읽는다(화면이 바뀌어도 이어진다). 로그인이 끝나면 세션을 다시 확인한다.
+  const notifications = useNotifications({
+    enabled: state.phase === "signed_in",
+    onUnauthorized: onStreamClosed,
+  });
 
   switch (state.phase) {
     case "loading":
@@ -50,6 +56,7 @@ export function App() {
         <ChatScreen
           onSignOut={() => void signOut()}
           onStreamClosed={onStreamClosed}
+          notifications={notifications}
           onOpenConnections={() => {
             setView("connections");
           }}

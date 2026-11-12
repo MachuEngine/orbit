@@ -7,6 +7,10 @@
   `execution` 선기록과 lease(ADR-0003 조건 1)가 중복을 막는다.
 - 메일 색인(ADR-0019): `deps.mail_index`가 있으면 `sync_mail_index` 작업(인자 `workspace_id`,
   `connection_id`뿐)과 마지막 동기화가 오래된 연결을 골라 등록하는 주기 작업을 함께 등록한다.
+- 일정 알림(ADR-0021): `sync_event_reminders` 작업(인자 `workspace_id`, `connection_id`뿐)과
+  알림을 켠 워크스페이스의 활성 연결을 5분마다 골라 등록하는 주기 작업
+  `schedule_event_reminders`를 `notify` 큐에 등록한다. 재시도하지 않는다(오류는 다음 주기에
+  다시 시도한다).
 - 멈춘 작업 복구 주기 작업(ADR-0005 조건 2): heartbeat가 끊긴 `doing` 작업을 `todo`로 되돌린다.
   복구 작업은 워커가 쓰는 연결과 따로 만든 앱으로 실행한다(열려 있는 앱을 다시 열지 않기 위해서다).
 """
@@ -30,6 +34,18 @@ from orbit.mailindex.jobs import (
     validate_sync_args,
 )
 from orbit.mailindex.sync import sync_connection
+from orbit.notify.event_sync import sync_event_reminders
+from orbit.notify.jobs import (
+    NOTIFY_QUEUE,
+    SCHEDULE_EVENT_REMINDERS,
+    SYNC_EVENT_REMINDERS,
+    enqueue_event_syncs,
+    purge_expired_notifications,
+)
+from orbit.notify.jobs import (
+    validate_sync_args as validate_event_sync_args,
+)
+from orbit.notify.limits import TICK_CRON as NOTIFY_TICK_CRON
 from orbit.records.errors import InvalidJobArgs
 from orbit.records.jobs import make_procrastinate_app, recover_stalled_jobs, validate_job_args
 from orbit.runflow.deps import NoConnection, RunDeps
@@ -44,9 +60,12 @@ __all__ = [
     "EXPIRE_APPROVALS",
     "MAIL_INDEX_QUEUE",
     "MAIL_INDEX_TICK",
+    "NOTIFY_QUEUE",
     "RECOVER_STALLED",
     "RESUME_RUN",
     "RUN_QUEUE",
+    "SCHEDULE_EVENT_REMINDERS",
+    "SYNC_EVENT_REMINDERS",
     "SYNC_MAIL_INDEX",
     "WorkerPool",
     "build_worker_app",
@@ -142,6 +161,7 @@ def build_worker_app(
             logger.warning("멈춘 작업 %d개를 되돌렸다", len(recovered))
 
     _register_mail_index_tasks(app, deps)
+    _register_notify_tasks(app, deps)
     return app
 
 
@@ -149,7 +169,7 @@ class WorkerPool:
     """큐마다 워커를 따로 돌리는 워커 프로세스 하나.
 
     색인 동기화는 첫 동기화에 수 분이 걸린다. 같은 큐·같은 워커(동시성 1)에 두면 그동안 run 작업과
-    멈춘 작업 복구가 밀리므로, run 큐와 색인 큐에 각각 동시성 1인 워커를 동시에 돌린다.
+    멈춘 작업 복구가 밀리므로, run 큐·색인 큐·알림 큐에 각각 동시성 1인 워커를 동시에 돌린다.
     종료 신호는 이 풀이 받아 모든 워커를 정상 종료시킨다(워커별 신호 처리기는 서로 덮어쓴다).
     """
 
@@ -157,7 +177,7 @@ class WorkerPool:
         self,
         app: procrastinate.App,
         *,
-        queues: tuple[str, ...] = (RUN_QUEUE, MAIL_INDEX_QUEUE),
+        queues: tuple[str, ...] = (RUN_QUEUE, MAIL_INDEX_QUEUE, NOTIFY_QUEUE),
         wait: bool = True,
         install_signal_handlers: bool = True,
         **options: Any,
@@ -165,6 +185,8 @@ class WorkerPool:
         from procrastinate.worker import Worker
 
         self._install_signals = install_signal_handlers
+        # 시작 전 워커는 `run()`이 먼저 온 정지 요청을 지운다. 정지 중이면 시작하지 않는다.
+        self._stopping = False
         self._workers = [
             Worker(
                 app=app,
@@ -179,10 +201,13 @@ class WorkerPool:
         ]
 
     def stop(self) -> None:
+        self._stopping = True
         for worker in self._workers:
             worker.stop()  # type: ignore[no-untyped-call]
 
     async def _run_one(self, worker: Any) -> BaseException | None:
+        if self._stopping:
+            return None
         try:
             await worker.run()
         except Exception as exc:
@@ -257,6 +282,47 @@ def _register_mail_index_tasks(app: procrastinate.App, deps: RunDeps) -> None:
         registered = await enqueue_due_syncs(mail_index, app)
         if registered:
             logger.info("%s: 동기화 %d건을 등록했다", MAIL_INDEX_TICK, registered)
+
+
+def _register_notify_tasks(app: procrastinate.App, deps: RunDeps) -> None:
+    """일정 알림 동기화 작업과 주기 작업을 등록한다(ADR-0021 §4)."""
+
+    @app.task(name=SYNC_EVENT_REMINDERS, queue=NOTIFY_QUEUE)
+    async def sync_event_reminders_task(workspace_id: str, connection_id: str) -> None:
+        # 오류는 종류만 로그에 남기고 끝난다(재시도 없음, 다음 주기에 다시 한다).
+        try:
+            args = validate_event_sync_args(
+                {"workspace_id": workspace_id, "connection_id": connection_id}
+            )
+        except InvalidJobArgs:
+            logger.error("작업 인자가 올바르지 않다: %s", SYNC_EVENT_REMINDERS)
+            return
+        ws, cid = uuid.UUID(args["workspace_id"]), uuid.UUID(args["connection_id"])
+        try:
+            calendar, _ = await deps.resolver.connectors_for(ws)
+        except NoConnection:
+            logger.info("%s: connection %s -> no_connection", SYNC_EVENT_REMINDERS, cid)
+            return
+        result = await sync_event_reminders(deps.db, deps.clock, deps.ids, calendar, ws, cid)
+        logger.info("%s: connection %s -> %s", SYNC_EVENT_REMINDERS, cid, result.outcome)
+
+    @app.periodic(cron=NOTIFY_TICK_CRON)
+    @app.task(
+        name=SCHEDULE_EVENT_REMINDERS, queue=NOTIFY_QUEUE, queueing_lock=SCHEDULE_EVENT_REMINDERS
+    )
+    async def schedule_event_reminders(timestamp: int) -> None:
+        registered = await enqueue_event_syncs(deps.db, app)
+        if registered:
+            logger.info("%s: 동기화 %d건을 등록했다", SCHEDULE_EVENT_REMINDERS, registered)
+        try:  # 정리가 실패해도 위 등록에는 영향이 없다. 오류 종류만 남긴다
+            purged = await purge_expired_notifications(deps.db, deps.clock)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "%s: 만료 알림 정리 실패 kind=%s", SCHEDULE_EVENT_REMINDERS, type(exc).__name__
+            )
+        else:
+            if purged:
+                logger.info("%s: 만료 알림 %d개를 지웠다", SCHEDULE_EVENT_REMINDERS, purged)
 
 
 QUIET_LOGGERS = ("httpx", "httpcore")

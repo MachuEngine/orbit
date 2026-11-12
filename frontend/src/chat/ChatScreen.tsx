@@ -4,6 +4,8 @@ import { isApiError } from "../api/errors";
 import { PRODUCT_NAME } from "../brand";
 import { ApprovalPanel } from "../approvals/ApprovalPanel";
 import { useConnectionNotice } from "../connections/useConnections";
+import { NotificationCenter } from "../notifications/NotificationCenter";
+import type { NotificationsApi } from "../notifications/useNotifications";
 import { useComposer } from "../composer/useComposer";
 import { CONVERSATION_PANEL_ID, ConversationPanel } from "../conversations/ConversationPanel";
 import { turnsToView } from "../conversations/turns";
@@ -33,9 +35,12 @@ export function ChatScreen({
   onSignOut,
   onOpenConnections,
   onStreamClosed,
+  notifications,
 }: {
   onSignOut: () => void;
   onOpenConnections: () => void;
+  /** 도착한 알림 상태(ADR-0021). 있으면 헤더에 알림 버튼을 보인다. */
+  notifications?: NotificationsApi;
   /** 실시간 연결이 끊긴 채 닫혔을 때 부른다. 세션이 끝났는지 다시 확인하는 데 쓴다. */
   onStreamClosed?: () => void;
 }) {
@@ -247,6 +252,7 @@ export function ChatScreen({
             )}
           </div>
           <div className="chat-header-actions">
+            {notifications !== undefined && <NotificationCenter notifications={notifications} />}
             <button type="button" className="btn btn-secondary" onClick={onOpenConnections}>
               계정 연결
             </button>
