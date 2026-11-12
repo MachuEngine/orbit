@@ -29,7 +29,7 @@ export function failureText(errorKind: string | null): string {
   return "작업을 마치지 못했습니다. 잠시 뒤 다시 요청해 주세요.";
 }
 
-const SERVICE_NAME = { calendar: "Google 캘린더", mail: "Gmail" } as const;
+const SERVICE_NAME = { calendar: "Google 캘린더", mail: "Gmail", drive: "Google Drive" } as const;
 const SAFE_REASON = /^[A-Za-z0-9_]{1,40}$/;
 
 /** 커넥터 알림 문구. 서버가 준 reason은 안전한 코드 형태일 때만 덧붙인다(외부 문자열 노출 방지). */
@@ -42,6 +42,8 @@ export function connectorNoticeText(notice: ConnectorNotice): string {
       return `${name} 사용 한도를 넘었습니다. 잠시 뒤 다시 시도해 주세요.`;
     case "rate_limited":
       return `${name} 요청이 많아 잠시 거절되었습니다. 잠시 뒤 다시 시도해 주세요.`;
+    case "scope_missing":
+      return "문서 권한이 없습니다. 계정 연결 화면에서 문서 권한을 추가해 주세요.";
     case "permission_revoked":
       return `${name} 접근 권한이 없습니다. 연결 화면에서 Google 계정을 다시 연결해 주세요.`;
     case "transient_error":

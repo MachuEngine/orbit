@@ -54,7 +54,7 @@ describe("실패 원인 문구", () => {
 });
 
 describe("connectorNoticeText", () => {
-  const text = (service: "calendar" | "mail", kind: string, reason = "") =>
+  const text = (service: "calendar" | "mail" | "drive", kind: string, reason = "") =>
     connectorNoticeText({ service, kind, reason });
 
   it("종류마다 서비스 이름을 넣은 고정 문구를 쓴다", () => {
@@ -67,6 +67,27 @@ describe("connectorNoticeText", () => {
     expect(text("mail", "rate_limited")).toContain("Gmail 요청이 많아");
     expect(text("mail", "permission_revoked")).toContain("다시 연결해 주세요");
     expect(text("calendar", "transient_error")).toContain("일시적으로 연결하지 못했습니다");
+  });
+
+  it("Drive의 문서 권한 부족은 권한을 추가하라고 안내한다", () => {
+    expect(text("drive", "scope_missing", "scope_missing")).toBe(
+      "문서 권한이 없습니다. 계정 연결 화면에서 문서 권한을 추가해 주세요.",
+    );
+    expect(text("drive", "rate_limited")).toContain("Google Drive 요청이 많아");
+    expect(text("drive", "connector_error", "")).toBe("Google Drive에서 오류가 발생했습니다.");
+  });
+
+  it("문서 권한 안내는 상태 표시줄에 한 줄로 보인다", () => {
+    render(
+      <StatusBar
+        items={connectorNoticeItems([
+          { service: "drive", kind: "scope_missing", reason: "scope_missing" },
+        ])}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "문서 권한이 없습니다. 계정 연결 화면에서 문서 권한을 추가해 주세요.",
+    );
   });
 
   it("모르는 종류는 connector_error처럼 보이고 안전한 reason만 오류 코드로 덧붙인다", () => {

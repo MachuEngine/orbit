@@ -141,6 +141,8 @@ export const connectionSchema = z.object({
   status: z.enum(["pending", "active", "revoked", "error"]),
   account_email: z.string(),
   scopes: z.array(z.string()),
+  /** Drive 파일 읽기 권한(선택 권한)을 허용했는지. 없는 응답은 허용하지 않은 것으로 본다. */
+  docs_granted: z.boolean().default(false),
   created_at: z.string(),
 });
 export type Connection = z.infer<typeof connectionSchema>;

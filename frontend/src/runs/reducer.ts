@@ -23,9 +23,9 @@ export interface ExecutionOutcome {
   toolName: string | null;
 }
 
-/** 커넥터(Google 캘린더·Gmail)가 알린 문제. 같은 서비스·종류는 한 번만 담는다. */
+/** 커넥터(Google 캘린더·Gmail·Drive)가 알린 문제. 같은 서비스·종류는 한 번만 담는다. */
 export interface ConnectorNotice {
-  service: "calendar" | "mail";
+  service: "calendar" | "mail" | "drive";
   kind: string;
   reason: string;
 }

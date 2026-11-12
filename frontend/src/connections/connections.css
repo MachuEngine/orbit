@@ -83,6 +83,20 @@
   margin-top: calc(-1 * var(--space-4));
 }
 
+/* 문서(Drive) 권한 영역 (ADR-0020) */
+.conn-docs {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  width: 100%;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-divider);
+}
+
+.conn-docs h3 {
+  font-size: var(--text-md);
+}
+
 /* 메일 검색 색인 영역 (ADR-0019) */
 .idx {
   display: grid;

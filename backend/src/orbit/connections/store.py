@@ -190,3 +190,57 @@ async def mark_dead(
         ),
         {"status": status, "now": now, "id": connection_id, "ws": ws},
     )
+
+
+@dataclass(frozen=True)
+class ActiveAccount:
+    status: str
+    account_sub: str
+    scopes: tuple[str, ...]
+
+
+async def lock_account(
+    session: AsyncSession, ws: uuid.UUID, connection_id: uuid.UUID
+) -> ActiveAccount | None:
+    """문서 권한 추가용: 연결 행을 잠그고 상태·계정(`sub`)·범위를 읽는다. 없으면 None."""
+    r = (
+        await session.execute(
+            text(
+                "SELECT status, account_sub, scopes FROM connection"
+                " WHERE id = :id AND workspace_id = :ws FOR UPDATE"
+            ),
+            {"id": connection_id, "ws": ws},
+        )
+    ).one_or_none()
+    if r is None:
+        return None
+    return ActiveAccount(str(r.status), str(r.account_sub), tuple(r.scopes))
+
+
+async def update_grant(
+    session: AsyncSession,
+    ws: uuid.UUID,
+    connection_id: uuid.UUID,
+    *,
+    scopes: list[str],
+    sealed: SealedSecret,
+    now: datetime,
+) -> None:
+    """활성 연결의 범위와 토큰 암호문을 새 값으로 바꾼다(문서 권한 추가). 행은 늘리지 않는다."""
+    await session.execute(
+        text(
+            "UPDATE connection SET scopes = :scopes, token_ciphertext = :ct, token_nonce = :nonce,"
+            " wrapped_dek = :dek, kek_id = :kek, updated_at = :now"
+            " WHERE id = :id AND workspace_id = :ws AND status = 'active'"
+        ),
+        {
+            "scopes": scopes,
+            "ct": sealed.ciphertext,
+            "nonce": sealed.nonce,
+            "dek": sealed.wrapped_dek,
+            "kek": sealed.kek_id,
+            "now": now,
+            "id": connection_id,
+            "ws": ws,
+        },
+    )

@@ -13,6 +13,7 @@ Revises: 0005
   `pending`은 허용하지만 v0 흐름은 쓰지 않는다(진행 중 상태는 서명 쿠키에 있다).
 - `orbit_app` 권한: SELECT, INSERT, 상태·토큰·시각 열만 UPDATE. DELETE는 workspace 삭제의
   CASCADE로만 일어난다. `account_*`·`scopes`는 바꿀 수 없다(바꾸려면 새 연결을 만든다).
+  (0009에서 권한 추가 시 갱신 허용)
 """
 
 from alembic import op

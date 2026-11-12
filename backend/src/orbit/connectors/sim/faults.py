@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_core import to_jsonable_python
 
 from orbit.connectors.contracts import (
+    SCOPE_MISSING_REASON,
     AlreadyExists,
     ConnectorError,
     NotFound,
@@ -33,6 +34,7 @@ from orbit.connectors.contracts import (
     RateLimited,
     ResultUnknown,
     TransientError,
+    UnsupportedFile,
 )
 
 FaultError = Literal[
@@ -42,6 +44,8 @@ FaultError = Literal[
     "rate_limited",
     "permission_revoked",
     "transient",
+    "scope_missing",
+    "unsupported_file",
     "result_unknown",
     "result_unknown_not_applied",
 ]
@@ -83,6 +87,10 @@ def build_error(rule: FaultRule) -> ConnectorError:
             return PermissionRevoked(msg)
         case "transient":
             return TransientError(msg)
+        case "scope_missing":
+            return ConnectorError(msg, reason=SCOPE_MISSING_REASON)
+        case "unsupported_file":
+            return UnsupportedFile(msg)
         case _:
             return ResultUnknown(msg)
 

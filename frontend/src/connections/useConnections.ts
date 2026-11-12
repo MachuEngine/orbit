@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { disconnectConnection, getConnections, startGoogleConnection } from "../api/endpoints";
+import {
+  disconnectConnection,
+  getConnections,
+  startDocsScope,
+  startGoogleConnection,
+} from "../api/endpoints";
 import type { ConnectionsResponse } from "../api/schemas";
 
 export type ConnectionsState =
@@ -35,6 +40,9 @@ export function useConnections() {
   /** Google 동의 화면 주소를 받아 온다. 실패하면 예외를 그대로 던진다. */
   const start = useCallback(() => startGoogleConnection(), []);
 
+  /** 문서 권한 추가용 Google 동의 화면 주소를 받아 온다. */
+  const addDocs = useCallback((id: string) => startDocsScope(id), []);
+
   const disconnect = useCallback(
     async (id: string) => {
       const result = await disconnectConnection(id);
@@ -44,7 +52,7 @@ export function useConnections() {
     [reload],
   );
 
-  return { state, reload, start, disconnect };
+  return { state, reload, start, addDocs, disconnect };
 }
 
 /** 채팅 화면 안내용. 실패하면 안내를 보이지 않는다(채팅을 막지 않는다). */

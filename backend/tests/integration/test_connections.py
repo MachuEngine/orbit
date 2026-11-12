@@ -25,8 +25,14 @@ from google_mock import CLIENT_ID, CLIENT_SECRET, CODE, SIGNING_KEY, attacker_ke
 from integration.test_google_login import ALICE, BOB, NOW, SUB_PATTERN, Env, _cleanup
 from orbit.api.app import create_app
 from orbit.connections.oauth import DATA_SCOPES, REQUEST_SCOPES
-from orbit.connectors.contracts import PermissionRevoked, TransientError
+from orbit.connectors.contracts import (
+    ConnectorError,
+    FileQuery,
+    PermissionRevoked,
+    TransientError,
+)
 from orbit.connectors.google.calendar import GoogleCalendarConnector
+from orbit.connectors.google.drive import GoogleDriveConnector
 from orbit.connectors.google.gmail import GmailConnector
 from orbit.connectors.google.provider import ConnectionTokenProvider
 from orbit.core.clock import FixedClock
@@ -38,7 +44,8 @@ from orbit.crypto.envelope import (
     SealedSecret,
     load_kek_from_file,
 )
-from orbit.runflow.deps import GoogleConnectorResolver, NoConnection
+from orbit.mailindex import store as mail_index_store
+from orbit.runflow.deps import GoogleConnectorResolver, NoConnection, ScopeMissingDrive
 
 KEK_BYTES = bytes(range(32))
 TOKEN_URL = "https://mock-google.test/token"
@@ -736,3 +743,242 @@ def test_prod_start_rejects_wide_kek_permissions(app_url: str, tmp_path: Path) -
         create_app(_settings(app_url, tmp_path, wide))
     assert str(wide) in str(info.value)
     create_app(_settings(app_url, tmp_path, wide, env="dev"))  # dev는 경고만 한다
+
+
+# ---------------------------------------------------------------- 문서 권한 추가 (ADR-0020 §1)
+
+DRIVE = "https://www.googleapis.com/auth/drive.readonly"
+NEW_REFRESH = "test-refresh-token-SYNTH-0002"
+
+
+async def _docs_start(env: Env, client: httpx.AsyncClient, connection_id: str) -> httpx.Response:
+    response = await client.post(
+        f"/api/connections/{connection_id}/scopes/docs/start", headers=_csrf(client)
+    )
+    if response.status_code == 200:
+        env.mock.observe_authorization(response.json()["authorization_url"])
+    return response
+
+
+async def _connected(env: Env, who: dict[str, str] = ALICE) -> tuple[httpx.AsyncClient, str]:
+    client = await env.login(who)
+    await _connect(env, client)
+    [item] = (await client.get("/api/connections")).json()["connections"]
+    return client, item["id"]
+
+
+def _grant_docs(env: Env) -> None:
+    _mock(env).granted_scope = " ".join((*REQUEST_SCOPES, DRIVE))
+    _mock(env).refresh_token = NEW_REFRESH
+
+
+async def test_connection_list_reports_docs_permission(env: Env) -> None:
+    client, cid = await _connected(env)
+    [item] = (await client.get("/api/connections")).json()["connections"]
+    assert item["docs_granted"] is False
+    assert DRIVE not in item["scopes"]  # 첫 연결에는 문서 범위를 요청하지 않았다
+    assert DRIVE not in REQUEST_SCOPES
+    _grant_docs(env)
+    await _docs_start(env, client, cid)
+    await _callback(env, client)
+    [item] = (await client.get("/api/connections")).json()["connections"]
+    assert item["docs_granted"] is True and DRIVE in item["scopes"]
+
+
+async def test_docs_start_asks_only_for_drive_with_incremental_consent(env: Env) -> None:
+    client, cid = await _connected(env)
+    response = await _docs_start(env, client, cid)
+    params = parse_qs(urlsplit(response.json()["authorization_url"]).query)
+    assert set(params["scope"][0].split()) == {"openid", "email", DRIVE}
+    assert params["include_granted_scopes"] == ["true"]
+    assert params["access_type"] == ["offline"] and params["prompt"] == ["consent"]
+    assert params["code_challenge_method"] == ["S256"]
+    assert params["redirect_uri"] == [CONNECT_REDIRECT_URI]
+    assert params["login_hint"] == [ALICE["email"]]
+    cookie = response.headers["set-cookie"].lower()
+    for attribute in ("orbit_connect=", "httponly", "samesite=lax", "secure", "max-age=600"):
+        assert attribute in cookie
+    assert "path=/api/connections/google" in cookie
+    assert response.headers["cache-control"] == "no-store"
+
+
+async def test_docs_start_requires_session_and_csrf(env: Env) -> None:
+    client, cid = await _connected(env)
+    path = f"/api/connections/{cid}/scopes/docs/start"
+    assert (await env.new_client().post(path)).status_code == 401
+    assert (await client.post(path)).status_code == 403  # CSRF 헤더 없음
+    bad = await client.post(path, headers={"X-CSRF-Token": "wrong"})
+    assert bad.status_code == 403
+
+
+async def test_docs_add_updates_the_same_row_keeps_index_and_old_token(env: Env) -> None:
+    client, cid = await _connected(env)
+    [before] = _rows(env)
+    ws = before.workspace_id
+    async with env.db.workspace_session(ws) as s:  # 메일 색인 상태(ADR-0019)
+        await mail_index_store.ensure_sync_state(s, ws, before.id, env.clock.now())
+    _grant_docs(env)
+    await _docs_start(env, client, cid)
+    response = await _callback(env, client)
+    assert (response.status_code, response.headers["location"]) == (302, "/?connection=docs_added")
+    [after] = _rows(env)  # 새 행이 생기지 않았다
+    assert after.id == before.id == uuid.UUID(cid) and after.status == "active"
+    assert DRIVE in after.scopes and set(DATA_SCOPES) <= set(after.scopes)
+    opened = _cipher().open(
+        SealedSecret(
+            bytes(after.token_ciphertext),
+            bytes(after.token_nonce),
+            bytes(after.wrapped_dek),
+            after.kek_id,
+        ),
+        connection_id=after.id,
+        workspace_id=after.workspace_id,
+    )
+    assert opened.get_secret_value() == NEW_REFRESH  # 암호문이 새 토큰으로 바뀌었다
+    assert _mock(env).revoke_calls == []  # 이전 토큰을 철회하지 않는다
+    assert _per_workspace(env, "SELECT connection_id FROM sync_state") == [(before.id,)]
+    body = (await client.get("/api/connections")).text
+    for secret in (REFRESH_TOKEN, NEW_REFRESH, ACCESS_PREFIX):
+        assert secret not in body
+
+
+async def test_docs_add_with_a_different_account_is_rejected(env: Env) -> None:
+    client, cid = await _connected(env)
+    [before] = _rows(env)
+    _grant_docs(env)
+    await _docs_start(env, client, cid)
+    env.set_identity(BOB)  # 다른 Google 계정으로 동의했다
+    assert _error_of(await _callback(env, client)) == "account_mismatch"
+    [after] = _rows(env)
+    assert (after.scopes, after.token_ciphertext) == (before.scopes, before.token_ciphertext)
+    assert after.status == "active"
+    # 쓰지 못할 다른 계정의 새 토큰만 철회하고 기존 연결 토큰은 건드리지 않는다.
+    assert _mock(env).revoke_calls == [NEW_REFRESH]
+
+
+async def test_docs_add_without_the_drive_scope_keeps_the_connection(env: Env) -> None:
+    client, cid = await _connected(env)
+    [before] = _rows(env)
+    _mock(env).refresh_token = NEW_REFRESH
+    await _docs_start(env, client, cid)  # 모의 Google은 기본 범위(문서 제외)만 허용한다
+    assert _error_of(await _callback(env, client)) == "docs_scope_missing"
+    [after] = _rows(env)
+    assert (after.scopes, after.token_ciphertext) == (before.scopes, before.token_ciphertext)
+    assert _mock(env).revoke_calls == []  # 같은 계정의 활성 연결이 있으면 새 토큰을 철회하지 않는다
+
+
+async def test_docs_add_without_refresh_token_keeps_the_connection(env: Env) -> None:
+    client, cid = await _connected(env)
+    [before] = _rows(env)
+    _grant_docs(env)
+    _mock(env).include_refresh = False
+    await _docs_start(env, client, cid)
+    assert _error_of(await _callback(env, client)) == "no_refresh_token"
+    [after] = _rows(env)
+    assert (after.scopes, after.token_ciphertext) == (before.scopes, before.token_ciphertext)
+
+
+async def test_docs_add_after_disconnect_is_rejected(env: Env) -> None:
+    client, cid = await _connected(env)
+    _grant_docs(env)
+    await _docs_start(env, client, cid)
+    await client.delete(f"/api/connections/{cid}", headers=_csrf(client))
+    assert _error_of(await _callback(env, client)) == "connection_inactive"
+    [row] = _rows(env)
+    assert row.status == "revoked" and row.token_ciphertext is None
+    assert _mock(env).revoke_calls[-1] == NEW_REFRESH  # 쓸 곳이 없는 새 토큰은 철회한다
+
+
+async def test_docs_add_state_mismatch_and_tampered_cookie_change_nothing(env: Env) -> None:
+    client, cid = await _connected(env)
+    [before] = _rows(env)
+    _grant_docs(env)
+    await _docs_start(env, client, cid)
+    wrong = await client.get(
+        "/api/connections/google/callback", params={"code": CODE, "state": "wrong-state"}
+    )
+    assert _error_of(wrong) == "state"
+    cookie = client.cookies.get("orbit_connect") or ""
+    forged = cookie.replace(".", "x.", 1)  # 서명이 깨진다
+    client.cookies.set("orbit_connect", forged, path="/api/connections/google")
+    assert _error_of(await _callback(env, client)) == "expired"
+    [after] = _rows(env)
+    assert (after.scopes, after.token_ciphertext) == (before.scopes, before.token_ciphertext)
+    assert _mock(env).revoke_calls == []
+
+
+async def test_docs_start_conflicts(env: Env) -> None:
+    client, cid = await _connected(env)
+    unknown = await _docs_start(env, client, str(uuid.uuid4()))
+    assert unknown.status_code == 404
+    _grant_docs(env)
+    await _docs_start(env, client, cid)
+    await _callback(env, client)
+    again = await _docs_start(env, client, cid)
+    assert (again.status_code, again.json()["detail"]) == (409, "docs_already_granted")
+
+
+async def test_docs_start_for_error_connection_is_conflict(env: Env) -> None:
+    client = await env.login(ALICE)
+    await _start(env, client)
+    _mock(env).include_refresh = False
+    await _callback(env, client)  # error 행
+    [row] = _rows(env)
+    response = await _docs_start(env, client, str(row.id))
+    assert (response.status_code, response.json()["detail"]) == (409, "connection_inactive")
+
+
+async def test_docs_add_is_isolated_between_workspaces(env: Env) -> None:
+    alice, alice_cid = await _connected(env)
+    [alice_row] = _rows(env, ALICE["sub"])
+    bob = await env.login(BOB)
+    assert (await _docs_start(env, bob, alice_cid)).status_code == 404
+    # Alice의 서명 쿠키를 Bob이 가로채 Bob 세션으로 콜백해도 Alice의 연결은 바뀌지 않는다.
+    _grant_docs(env)
+    await _docs_start(env, alice, alice_cid)
+    stolen = alice.cookies.get("orbit_connect") or ""
+    bob.cookies.set("orbit_connect", stolen, path="/api/connections/google")
+    env.set_identity(ALICE)
+    assert _error_of(await _callback(env, bob)) == "connection_inactive"
+    [after] = _rows(env, ALICE["sub"])
+    assert (after.scopes, after.token_ciphertext) == (
+        alice_row.scopes,
+        alice_row.token_ciphertext,
+    )
+
+
+async def test_resolver_gives_drive_only_with_the_scope_and_a_fresh_token(env: Env) -> None:
+    client, cid = await _connected(env)
+    resolver = _resolver(env)
+    [ws] = {r[0] for r in _workspaces(env)}
+    stub = await resolver.drive_for(ws)
+    assert isinstance(stub, ScopeMissingDrive)
+    with pytest.raises(ConnectorError) as caught:
+        await stub.search_files(FileQuery())
+    assert caught.value.reason == "scope_missing"
+    assert _mock(env).refresh_requests == 0  # 권한이 없으면 토큰도 받지 않는다
+    _grant_docs(env)
+    await _docs_start(env, client, cid)
+    await _callback(env, client)
+    drive = await resolver.drive_for(ws)
+    assert isinstance(drive, GoogleDriveConnector)
+    assert await resolver.drive_for(ws) is drive  # 같은 연결이면 재사용
+    await client.delete(f"/api/connections/{cid}", headers=_csrf(client))
+    with pytest.raises(NoConnection):
+        await resolver.drive_for(ws)
+    await resolver.aclose()
+
+
+async def test_concurrent_drive_for_builds_one_connector(env: Env) -> None:
+    import asyncio
+
+    client, cid = await _connected(env)
+    _grant_docs(env)
+    await _docs_start(env, client, cid)
+    await _callback(env, client)
+    resolver = _resolver(env)
+    [ws] = {r[0] for r in _workspaces(env)}
+    found = await asyncio.gather(*(resolver.drive_for(ws) for _ in range(8)))
+    assert len({id(d) for d in found}) == 1 and isinstance(found[0], GoogleDriveConnector)
+    assert len(resolver._drive) == 1  # noqa: SLF001
+    await resolver.aclose()

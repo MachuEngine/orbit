@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { isApiError } from "../api/errors";
 import type { Connection } from "../api/schemas";
 import { PRODUCT_NAME } from "../brand";
 import { Icon } from "../ui/Icon";
 import { Logo } from "../ui/Logo";
 import {
   CONNECTED_MESSAGE,
+  DOCS_ADDED_MESSAGE,
+  DOCS_TEXT,
   REVOKE_MESSAGES,
   connectionErrorMessage,
   scopeLabels,
@@ -21,9 +24,14 @@ interface Notice {
 
 function initialNotice(result: ConnectionResult | null): Notice | null {
   if (result === null) return null;
-  return result.kind === "connected"
-    ? { tone: "success", text: CONNECTED_MESSAGE }
-    : { tone: "error", text: connectionErrorMessage(result.error) };
+  switch (result.kind) {
+    case "connected":
+      return { tone: "success", text: CONNECTED_MESSAGE };
+    case "docs_added":
+      return { tone: "success", text: DOCS_ADDED_MESSAGE };
+    case "error":
+      return { tone: "error", text: connectionErrorMessage(result.error) };
+  }
 }
 
 /**
@@ -46,7 +54,7 @@ export function ConnectionsScreen({
   /** 색인 동기화 상태를 다시 읽는 간격(ms). 테스트에서 줄인다. */
   pollMs?: number;
 }) {
-  const { state, start, disconnect } = useConnections();
+  const { state, reload, start, addDocs, disconnect } = useConnections();
   const [notice, setNotice] = useState<Notice | null>(() => initialNotice(result));
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -65,6 +73,31 @@ export function ConnectionsScreen({
           tone: "error",
           text: "연결을 시작하지 못했습니다. 잠시 뒤 다시 눌러 주세요.",
         });
+      },
+    );
+  };
+
+  const addDocsScope = (id: string) => {
+    setBusy(true);
+    setNotice(null);
+    addDocs(id).then(
+      (url) => {
+        navigate(url);
+      },
+      (error: unknown) => {
+        setBusy(false);
+        // 서버와 화면의 연결 상태가 어긋난 경우(409)는 목록을 다시 읽어 맞추고 이유를 알린다.
+        const detail = isApiError(error) && error.status === 409 ? error.detail : null;
+        if (detail === "docs_already_granted" || detail === "connection_inactive") {
+          void reload();
+          setNotice(
+            detail === "docs_already_granted"
+              ? { tone: "success", text: DOCS_TEXT.alreadyGranted }
+              : { tone: "warning", text: DOCS_TEXT.inactive },
+          );
+          return;
+        }
+        setNotice({ tone: "error", text: DOCS_TEXT.startFailed });
       },
     );
   };
@@ -171,6 +204,9 @@ export function ConnectionsScreen({
                     confirmDisconnect(item.id);
                   }}
                   onReconnect={connect}
+                  onAddDocs={() => {
+                    addDocsScope(item.id);
+                  }}
                   pollMs={pollMs}
                 />
               ))
@@ -200,6 +236,7 @@ function ConnectionCard({
   onCancel,
   onConfirm,
   onReconnect,
+  onAddDocs,
   pollMs,
 }: {
   item: Connection;
@@ -211,6 +248,7 @@ function ConnectionCard({
   onCancel: () => void;
   onConfirm: () => void;
   onReconnect: () => void;
+  onAddDocs: () => void;
 }) {
   const active = item.status === "active";
   const labels = scopeLabels(item.scopes);
@@ -242,6 +280,28 @@ function ConnectionCard({
             ))}
           </ul>
         </div>
+      )}
+      {active && (
+        <section className="conn-docs" aria-labelledby={`conn-docs-${item.id}`}>
+          <h3 id={`conn-docs-${item.id}`}>{DOCS_TEXT.heading}</h3>
+          <p className={`note ${item.docs_granted ? "tone-success" : "tone-info"}`}>
+            <Icon name={item.docs_granted ? "success" : "info"} />
+            <span>{item.docs_granted ? DOCS_TEXT.granted : DOCS_TEXT.missing}</span>
+          </p>
+          {!item.docs_granted && (
+            <>
+              <p className="conn-hint">{DOCS_TEXT.intro}</p>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busy || !canConnect}
+                onClick={onAddDocs}
+              >
+                {DOCS_TEXT.add}
+              </button>
+            </>
+          )}
+        </section>
       )}
       {active && <MailIndexSection connectionId={item.id} pollMs={pollMs} />}
       {confirming ? (

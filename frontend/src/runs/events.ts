@@ -37,7 +37,7 @@ const connectorNoticeEvent = z.object({
   type: z.literal("connector_notice"),
   payload: z.object({
     step: z.number(),
-    service: z.enum(["calendar", "mail"]),
+    service: z.enum(["calendar", "mail", "drive"]),
     kind: z.string(),
     reason: z.string(),
   }),

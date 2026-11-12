@@ -27,6 +27,7 @@ from orbit.connectors.contracts import (
     Calendar,
     CalendarConnector,
     CalendarEvent,
+    DriveConnector,
     EventDraft,
     EventPatch,
     MailConnector,
@@ -115,13 +116,23 @@ class FlakyCalendar:
 
 
 class StubResolver:
-    def __init__(self, calendar: CalendarConnector, mail: MailConnector) -> None:
+    def __init__(
+        self,
+        calendar: CalendarConnector,
+        mail: MailConnector,
+        drive: DriveConnector | None = None,
+    ) -> None:
         self._pair = (calendar, mail)
+        self._drive = drive
 
     async def connectors_for(
         self, workspace_id: uuid.UUID
     ) -> tuple[CalendarConnector, MailConnector]:
         return self._pair
+
+    async def drive_for(self, workspace_id: uuid.UUID) -> DriveConnector:
+        assert self._drive is not None, "이 테스트는 문서 커넥터를 준비하지 않았다"
+        return self._drive
 
 
 @dataclass
@@ -303,7 +314,7 @@ async def build_harness(
         clock=clock,
         ids=ids,
         llm=llm,
-        resolver=StubResolver(calendar, conns.mail[ACCOUNT]),
+        resolver=StubResolver(calendar, conns.mail[ACCOUNT], conns.drive[ACCOUNT]),
         tz=TZ,
         checkpoint_conninfo=conninfo,
         approval_ttl=approval_ttl,

@@ -11,7 +11,7 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, overload
 
-from orbit.connectors.contracts import CALENDAR_TOOLS, MAIL_TOOLS
+from orbit.connectors.contracts import CALENDAR_TOOLS, DRIVE_TOOLS, MAIL_TOOLS
 from orbit.connectors.sim.calls import CallLog
 from orbit.connectors.sim.faults import FaultInjector, FaultPlan, build_error
 
@@ -22,7 +22,8 @@ class SimRuntime:
     - 기본(`shared=False`): 런타임은 커넥터 하나 전용이다. 규칙의 `tool`이 그 커넥터의 Protocol
       메서드 이름이 아니면 `bind`가 `ValueError`를 던진다(오타로 규칙이 조용히 무시되는 것 방지).
     - `shared=True`: 메일·캘린더 커넥터가 한 런타임(하나의 FaultPlan, 하나의 호출 기록)을 공유한다.
-      `bind` 시점에는 규칙의 `tool`이 계약 전체(캘린더 ∪ 메일) 도구 이름이 아니면 `ValueError`다.
+      `bind` 시점에는 규칙의 `tool`이 계약 전체(캘린더 ∪ 메일 ∪ 문서) 도구 이름이 아니면
+      `ValueError`다.
       바인딩 순서와 무관하게 하려고 개별 `bind`는 이 느슨한 검사만 하고, 모든 커넥터를 만든 뒤
       `check_bound()`를 부르면 어느 커넥터에도 속하지 않는 규칙을 `ValueError`로 알린다.
       공유 런타임은 `seal()`로 봉인하기 전에는 `run_tool`을 거절하고(`RuntimeError`), 봉인 뒤에는
@@ -52,7 +53,7 @@ class SimRuntime:
         """커넥터가 제공하는 도구 이름을 등록하고 규칙의 `tool`을 검증한다."""
         if self._sealed:
             raise RuntimeError("봉인된 런타임에는 커넥터를 더 바인딩할 수 없다")
-        allowed = (CALENDAR_TOOLS | MAIL_TOOLS) if self.shared else tools
+        allowed = (CALENDAR_TOOLS | MAIL_TOOLS | DRIVE_TOOLS) if self.shared else tools
         for rule in self.faults.rules:
             if rule.tool not in allowed:
                 raise ValueError(

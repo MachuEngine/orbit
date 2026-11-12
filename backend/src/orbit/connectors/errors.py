@@ -5,6 +5,7 @@
 """
 
 from orbit.connectors.contracts import (
+    SCOPE_MISSING_REASON,
     ConnectorError,
     HistoryExpired,
     InvalidQuery,
@@ -12,6 +13,7 @@ from orbit.connectors.contracts import (
     PermissionRevoked,
     RateLimited,
     TransientError,
+    UnsupportedFile,
 )
 
 _SERVICE_DISABLED = frozenset({"accessnotconfigured", "service_disabled"})
@@ -26,6 +28,7 @@ CONNECTOR_NOTICE_KINDS = frozenset(
         "permission_revoked",
         "transient_error",
         "connector_error",
+        "scope_missing",
     }
 )
 
@@ -33,12 +36,16 @@ CONNECTOR_NOTICE_KINDS = frozenset(
 def connector_error_kind(exc: ConnectorError) -> str:
     """사유 코드를 먼저 보고, 없으면 오류 클래스로 종류를 정한다."""
     reason = exc.reason.casefold()
+    if reason == SCOPE_MISSING_REASON:
+        return "scope_missing"
     if reason in _SERVICE_DISABLED:
         return "service_disabled"
     if reason in _QUOTA_EXCEEDED:
         return "quota_exceeded"
     if isinstance(exc, HistoryExpired):
         return "history_expired"
+    if isinstance(exc, UnsupportedFile):
+        return "unsupported_file"
     if isinstance(exc, InvalidQuery):
         return "invalid_query"
     if isinstance(exc, NotFound):

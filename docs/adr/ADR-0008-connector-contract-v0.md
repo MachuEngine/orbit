@@ -59,6 +59,8 @@
 
 추가(2026-11-12, ADR-0019 §2): 메일 색인 동기화를 위해 `list_labels() -> list[MailLabel]`, `list_message_ids(label_id, *, after, page_token) -> MessageIdPage`, `current_history_id() -> str`, `list_history(start_history_id, *, page_token) -> HistoryPage`를 추가한다. 이력 위치가 만료되면 `HistoryExpired`를 던진다. 새 OAuth 권한은 필요 없다(`gmail.readonly`).
 
+추가(2026-11-12, ADR-0020 §2): 문서 계약 `DriveConnector`(`search_files`, `get_file`, `read_file_text`)를 둔다. 검색 조건은 구조화된 값(텍스트, 종류, 수정일 범위)이고 어댑터가 Drive `q` 문법으로 바꾼다. 링크 필드는 계약에 없다. 미지원 형식은 `UnsupportedFile`, 범위 부족은 사유 `scope_missing`. 읽기 전용이다.
+
 ### 5. Sim Provider
 - **SimWorld**: JSON 스냅샷(스키마 버전 포함)에서 읽는다. 계정별 메일함(메시지·스레드·초안)과 캘린더(일정)를 가진다. 스냅샷은 데이터셋 버전과 함께 Git으로 관리한다 (D1-2).
 - **에피소드**: `world.fork()`로 독립 복사본을 만든다. 한 에피소드의 쓰기가 다른 에피소드나 원본에 섞이지 않는다.

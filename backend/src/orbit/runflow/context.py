@@ -43,7 +43,7 @@ CONVERSATION_CONTEXT = "conversation_context"
 CONTEXT_CALL_ID = "orbit_ctx_0"  # 서버가 합성하는 호출의 고정 ID
 CALL_ID_PREFIX = "orbit_ctx_"  # 서버 전용. 모델 호출 ID가 이 접두어면 전송 때 바꾼다
 
-_HANDLE = re.compile(r"[EM][1-9][0-9]*")
+_HANDLE = re.compile(r"[EMD][1-9][0-9]*")
 
 
 @dataclass(frozen=True)
@@ -157,7 +157,7 @@ def context_json(payload: dict[str, Any]) -> str:
 def context_tool_spec() -> ToolSpec:
     return ToolSpec(
         CONVERSATION_CONTEXT,
-        "같은 대화의 앞선 요청과 참조 가능한 일정·메일 대상(핸들)을 돌려준다. 인자는 없다.",
+        "같은 대화의 앞선 요청과 참조 가능한 일정·메일·문서 대상(핸들)을 돌려준다. 인자는 없다.",
         {"type": "object", "properties": {}, "additionalProperties": False},
     )
 
@@ -198,6 +198,13 @@ def _describe(handle: str, item: dict[str, Any]) -> dict[str, Any]:
             "title": _ext(item.get("title")),
             "start": _plain(item.get("start")),
             "end": _plain(item.get("end")),
+        }
+    elif handle.startswith("D"):
+        fields = {
+            "handle": handle,
+            "kind": "document",
+            "name": _ext(item.get("name")),
+            "modified": _plain(item.get("modified")),
         }
     else:
         fields = {
