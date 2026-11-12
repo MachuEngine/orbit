@@ -1,5 +1,4 @@
 import json
-import re
 from typing import Any
 
 import pytest
@@ -7,8 +6,8 @@ import pytest
 from orbit.assistant.tools import (
     MAX_EXTERNAL_CHARS,
     ReadOnlyTools,
+    limit_external,
     tool_specs,
-    wrap_external,
 )
 from orbit.assistant.workset import UnknownHandleError, WorkSet
 
@@ -106,37 +105,23 @@ async def test_no_provider_ids_in_any_result(tools: ReadOnlyTools) -> None:
         assert pid not in text
 
 
-async def test_get_event_wraps_and_truncates_description(tools: ReadOnlyTools) -> None:
+async def test_get_event_truncates_description_and_has_no_markers(tools: ReadOnlyTools) -> None:
     await call(tools, "list_events", **DAY)
     out = await call(tools, "get_event", handle="E3")
     desc = out["description"]
-    assert desc.startswith("<external_content>") and desc.endswith("</external_content>")
     assert out["description_truncated"] is True
-    inner = desc[len("<external_content>") : -len("</external_content>")]
-    assert len(inner) <= MAX_EXTERNAL_CHARS + 10  # 이스케이프로 약간 늘 수 있다
-    assert "</external_content>" not in inner  # 본문이 표지를 닫지 못한다
-    assert INJECTION.split(" ")[0] in inner  # 내용은 데이터로 그대로 전달
+    assert len(desc) == MAX_EXTERNAL_CHARS
+    assert "<external_content>" not in desc  # 필드별 표지는 없다(ADR-0018)
+    assert INJECTION.split(" ")[0] in desc  # 내용은 데이터로 그대로 전달
 
 
-async def test_get_event_without_description_is_wrapped_and_not_truncated(
+async def test_get_event_without_description_is_empty_and_not_truncated(
     tools: ReadOnlyTools,
 ) -> None:
     await call(tools, "list_events", **DAY)
     out = await call(tools, "get_event", handle="E2")
-    assert out["description"] == "<external_content></external_content>"
+    assert out["description"] == ""
     assert out["description_truncated"] is False
-
-
-def test_closing_marker_variants_are_neutralized() -> None:
-    for variant in (
-        "</external_content>",
-        "</ EXTERNAL_content >",
-        "< / External_Content>",
-        "<EXTERNAL_CONTENT",
-    ):
-        wrapped, _ = wrap_external(f"앞 {variant} 뒤")
-        inner = wrapped[len("<external_content>") : -len("</external_content>")]
-        assert not re.search(r"<\s*/?\s*external_content", inner, re.IGNORECASE), variant
 
 
 async def test_short_fields_are_capped(make_connectors: Any) -> None:
@@ -172,11 +157,11 @@ async def test_unexpected_errors_are_not_swallowed(tools: ReadOnlyTools) -> None
         await t.execute("list_events", DAY)
 
 
-def test_wrap_external_limit() -> None:
-    wrapped, truncated = wrap_external("a" * MAX_EXTERNAL_CHARS)
-    assert not truncated and wrapped.count("a") - 2 == MAX_EXTERNAL_CHARS
-    wrapped, truncated = wrap_external("a" * (MAX_EXTERNAL_CHARS + 1))
-    assert truncated and wrapped.count("a") - 2 == MAX_EXTERNAL_CHARS
+def test_limit_external() -> None:
+    text, truncated = limit_external("a" * MAX_EXTERNAL_CHARS)
+    assert not truncated and len(text) == MAX_EXTERNAL_CHARS
+    text, truncated = limit_external("a" * (MAX_EXTERNAL_CHARS + 1))
+    assert truncated and len(text) == MAX_EXTERNAL_CHARS
 
 
 async def test_search_and_read_mail(tools: ReadOnlyTools) -> None:
@@ -188,7 +173,7 @@ async def test_search_and_read_mail(tools: ReadOnlyTools) -> None:
     assert mail["from"] == {"name": "밥", "email": "bob@example.org"}
     assert mail["to"] == [{"name": "앨리스", "email": "alice@example.com"}]
     assert mail["date"].endswith("+09:00")
-    assert mail["body"].startswith("<external_content>")
+    assert "external_content" not in mail["body"]
     assert mail["body_truncated"] is False
 
 
@@ -197,7 +182,7 @@ async def test_read_long_mail_is_truncated(tools: ReadOnlyTools) -> None:
     handle = found["messages"][0]["handle"]
     mail = await call(tools, "read_mail", handle=handle)
     assert mail["body_truncated"] is True
-    assert len(mail["body"]) <= MAX_EXTERNAL_CHARS + 60
+    assert len(mail["body"]) == MAX_EXTERNAL_CHARS
 
 
 async def test_errors_are_returned_to_model_without_raw_messages(tools: ReadOnlyTools) -> None:

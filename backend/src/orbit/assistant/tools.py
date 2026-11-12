@@ -1,13 +1,13 @@
 """읽기 전용 도구 정의와 실행 (ADR-0011).
 
 - 도구 결과의 일정·메일은 핸들과 요약 필드로만 모델에 보인다. 제공자 ID는 결과에 넣지 않는다.
-- 메일 본문·일정 설명은 `<external_content>` 표지로 감싸고 길이 상한을 둔다 (D6-1).
+- 결과는 순수 JSON이다. 외부 텍스트는 길이 상한을 두고(`*_truncated` 표시), 데이터 봉투
+  (`orbit.assistant.envelope`)는 LLM 메시지를 만들 때 호출자가 씌운다 (ADR-0018, D6-1).
 - 인자 검증 실패와 커넥터 오류는 `{"error": "<종류>"}`로 돌려준다. 원문 메시지는 넣지 않는다.
 - 쓰기 도구는 정의하지 않는다.
 """
 
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import Any
@@ -33,11 +33,8 @@ SUBMIT_ANSWER = "submit_answer"
 CALENDAR_TOOLS = frozenset({LIST_EVENTS, GET_EVENT})
 MAIL_TOOLS = frozenset({SEARCH_MAIL, READ_MAIL})
 
-EXTERNAL_OPEN = "<external_content>"
-EXTERNAL_CLOSE = "</external_content>"
 MAX_EXTERNAL_CHARS = 4000
 MAX_FIELD_CHARS = 200  # 제목·이름·장소 같은 짧은 외부 문자열 필드의 상한
-_MARKER_START = re.compile(r"<(\s*/?\s*external_content)", re.IGNORECASE)
 MAX_SEARCH_RESULTS = 20
 DEFAULT_SEARCH_RESULTS = 10
 
@@ -71,7 +68,7 @@ def tool_specs() -> tuple[ToolSpec, ...]:
         ),
         ToolSpec(
             GET_EVENT,
-            "일정 하나의 상세를 조회한다. 설명은 외부 콘텐츠 표지 안에 담겨 온다.",
+            "일정 하나의 상세를 조회한다. 설명은 description에 담겨 온다.",
             {
                 "type": "object",
                 "properties": {"handle": {"type": "string", "description": "일정 핸들(예: E1)"}},
@@ -99,7 +96,7 @@ def tool_specs() -> tuple[ToolSpec, ...]:
         ),
         ToolSpec(
             READ_MAIL,
-            "메일 한 통을 읽는다. 본문은 외부 콘텐츠 표지 안에 담겨 온다.",
+            "메일 한 통을 읽는다. 본문은 body에 담겨 온다.",
             {
                 "type": "object",
                 "properties": {"handle": {"type": "string", "description": "메일 핸들(예: M1)"}},
@@ -148,13 +145,9 @@ def _dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def wrap_external(text: str) -> tuple[str, bool]:
-    """본문을 데이터 표지로 감싼다. 상한을 넘으면 자르고 True를 함께 돌려준다."""
-    truncated = len(text) > MAX_EXTERNAL_CHARS
-    body = text[:MAX_EXTERNAL_CHARS]
-    # 본문 안의 표지 문자열(대소문자·공백 변형 포함)로 표지를 일찍 닫지 못하게 한다.
-    body = _MARKER_START.sub(r"&lt;\1", body)
-    return f"{EXTERNAL_OPEN}{body}{EXTERNAL_CLOSE}", truncated
+def limit_external(text: str) -> tuple[str, bool]:
+    """긴 외부 본문을 상한에서 자른다. 잘렸으면 True를 함께 돌려준다."""
+    return text[:MAX_EXTERNAL_CHARS], len(text) > MAX_EXTERNAL_CHARS
 
 
 def _short(text: str | None) -> str | None:
@@ -277,7 +270,7 @@ class ReadOnlyTools:
         calendar_id, event_id = self.workset.resolve_event(args["handle"])
         event = await self._calendar.get_event(calendar_id, event_id)
         summary = self._event_summary(event)
-        description, truncated = wrap_external(event.description)
+        description, truncated = limit_external(event.description)
         summary["description"] = description
         summary["description_truncated"] = truncated
         return summary
@@ -315,7 +308,7 @@ class ReadOnlyTools:
             raise ToolInputError("invalid_arguments")
         message_id = self.workset.resolve_message(args["handle"])
         message = await self._mail.get_message(message_id)
-        body, truncated = wrap_external(message.body_text)
+        body, truncated = limit_external(message.body_text)
         return {
             "handle": self.workset.message_handle(message.id),
             "subject": _short(message.subject),

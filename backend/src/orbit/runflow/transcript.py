@@ -15,10 +15,11 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from orbit.assistant.envelope import safe_source, wrap_data
 from orbit.assistant.workset import WorkSet
 from orbit.llm.types import Message, ToolCall
 from orbit.records.runs import RunMessageRecord
-from orbit.runflow.context import ConversationContext
+from orbit.runflow.context import CALL_ID_PREFIX, ConversationContext
 
 _STRUCTURED_EMAIL_KEYS = frozenset({"from", "to", "cc", "attendees", "organizer"})
 _EXTERNAL_TEXT_KEYS = frozenset({"body", "description", "subject", "title", "location", "name"})
@@ -67,15 +68,20 @@ class Transcript:
                 return WorkSet.restore(row.content["handles"])
         return self.prior.latest_workset() or WorkSet()
 
-    def llm_messages(self, system_prompt: str) -> list[Message]:
-        messages = [Message(role="system", content=system_prompt), *self.prior.messages()]
+    def llm_messages(self, system_prompt: str, boundary: str) -> list[Message]:
+        """LLM 요청 메시지. 도구 결과는 저장된 JSON을 데이터 봉투로 감싸 넘긴다(ADR-0018 §2)."""
+        messages = [Message(role="system", content=system_prompt), *self.prior.messages(boundary)]
         for row in self.rows:
             content = row.content
             if row.role == "user":
                 messages.append(Message(role="user", content=str(content.get("text", ""))))
             elif row.role == "assistant":
                 calls = tuple(
-                    ToolCall(id=str(c["id"]), name=str(c["name"]), arguments=dict(c["arguments"]))
+                    ToolCall(
+                        id=_wire_id(str(c["id"])),
+                        name=str(c["name"]),
+                        arguments=dict(c["arguments"]),
+                    )
                     for c in content.get("tool_calls", [])
                 )
                 messages.append(
@@ -85,8 +91,12 @@ class Transcript:
                 messages.append(
                     Message(
                         role="tool",
-                        content=str(content.get("text", "")),
-                        tool_call_id=str(content["tool_call_id"]),
+                        content=wrap_data(
+                            str(content.get("text", "")),
+                            source=safe_source(str(content.get("name", ""))),
+                            boundary=boundary,
+                        ),
+                        tool_call_id=_wire_id(str(content["tool_call_id"])),
                     )
                 )
         return messages
@@ -104,6 +114,11 @@ class Transcript:
                 continue
             _collect(payload, emails, texts, in_structured=False)
         return emails, texts
+
+
+def _wire_id(call_id: str) -> str:
+    """모델이 낸 호출 ID가 서버 전용 접두어로 시작하면 합성 호출과 겹치지 않게 바꾼다(전송용)."""
+    return f"model_{call_id}" if call_id.startswith(CALL_ID_PREFIX) else call_id
 
 
 def _collect(node: Any, emails: list[str], texts: list[str], *, in_structured: bool) -> None:

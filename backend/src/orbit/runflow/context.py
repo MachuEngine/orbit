@@ -1,7 +1,9 @@
-"""같은 대화의 앞선 run에서 모델 입력 맥락을 만든다 (ADR-0017 §1·§2, ADR-0006).
+"""같은 대화의 앞선 run에서 모델 입력 맥락을 만든다 (ADR-0017 §1·§2, ADR-0018 §3, ADR-0006).
 
 맥락은 노드에 진입할 때마다 `run_message`(RLS)에서 다시 만든다. 그래프 상태·작업 인자에는 ID만 둔다.
-앞선 run의 도구 호출·결과 원문은 모델 입력에 넣지 않고, 도구 결과에서는 핸들과 짧은 설명만 뽑는다.
+앞선 run의 도구 호출·결과 원문은 모델 입력에 넣지 않고, 도구 결과에서는 핸들과 짧은 필드만 뽑는다.
+이전 요청·참조 가능한 대상은 system 메시지가 아니라 `conversation_context` 합성 도구 호출 결과
+(데이터 봉투 안)로 모델에 보인다.
 상수는 `실험 중` 기본값이며(ADR-0017) `run.config_fingerprint`에 포함한다.
 """
 
@@ -14,9 +16,9 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orbit.assistant.tools import wrap_external
+from orbit.assistant.envelope import wrap_data
 from orbit.assistant.workset import WorkSet
-from orbit.llm.types import Message
+from orbit.llm.types import Message, ToolCall, ToolSpec
 from orbit.records.runs import TERMINAL_RUN_STATUSES, RunMessageRecord
 
 RECENT_TURNS = 6
@@ -36,6 +38,10 @@ CONTEXT_CONFIG: dict[str, int] = {
     "target_field_chars": TARGET_FIELD_CHARS,
     "prior_runs_max": PRIOR_RUNS_MAX,
 }
+
+CONVERSATION_CONTEXT = "conversation_context"
+CONTEXT_CALL_ID = "orbit_ctx_0"  # 서버가 합성하는 호출의 고정 ID
+CALL_ID_PREFIX = "orbit_ctx_"  # 서버 전용. 모델 호출 ID가 이 접두어면 전송 때 바꾼다
 
 _HANDLE = re.compile(r"[EM][1-9][0-9]*")
 
@@ -81,9 +87,9 @@ class ConversationContext:
         """대화의 가장 최근 핸들 기록으로 작업 집합을 복원한다. 없으면 None."""
         return None if self.handles is None else WorkSet.restore(self.handles)
 
-    def targets(self) -> list[tuple[str, str]]:
-        """(핸들, 설명). 최근에 나온 결과가 먼저이고, 같은 핸들은 가장 최근 등장만 쓴다."""
-        found: dict[str, tuple[int, int, str]] = {}  # 핸들 -> (결과 순번, 결과 안 순서, 설명)
+    def targets(self) -> list[dict[str, Any]]:
+        """참조 가능한 대상. 최근에 나온 결과가 먼저이고, 같은 핸들은 가장 최근 등장만 쓴다."""
+        found: dict[str, tuple[int, int, dict[str, Any]]] = {}  # 핸들 -> (결과 순번, 순서, 대상)
         index = 0
         for row in self.rows:
             if row.role != "tool" or row.content.get("is_error"):
@@ -96,31 +102,64 @@ class ConversationContext:
             for position, item in enumerate(_handle_objects(payload)):
                 handle = str(item["handle"]).upper()
                 found[handle] = (index, position, _describe(handle, item))
-        ordered = sorted(found.items(), key=lambda kv: (-kv[1][0], kv[1][1]))
-        return [(handle, desc) for handle, (_, _, desc) in ordered[:WORKSET_TOP_K]]
+        ordered = sorted(found.values(), key=lambda v: (-v[0], v[1]))
+        return [target for _, _, target in ordered[:WORKSET_TOP_K]]
 
-    def messages(self) -> list[Message]:
-        """시스템 프롬프트 뒤, 지금 run의 메시지 앞에 들어갈 메시지. 앞선 run이 없으면 비어 있다."""
+    def earlier_requests(self) -> list[str]:
+        """최근 턴보다 오래된 사용자 요청. 최근 것이 먼저이고 한 줄·길이 상한을 둔다."""
+        older = self.turns()[:-RECENT_TURNS]
+        requests = [_one_line(t.user, OLDER_REQUEST_CHARS) for t in reversed(older)]
+        return [r for r in requests if r][:OLDER_REQUESTS_MAX]
+
+    def payload(self) -> dict[str, Any]:
+        """`conversation_context` 도구 결과 JSON. 앞선 run이 없으면 둘 다 비어 있다."""
+        if not self.runs:
+            return {"earlier_requests": [], "targets": []}
+        return {"earlier_requests": self.earlier_requests(), "targets": self.targets()}
+
+    def messages(self, boundary: str) -> list[Message]:
+        """시스템 프롬프트 뒤, 지금 run의 메시지 앞에 들어갈 메시지. 앞선 run이 없으면 비어 있다.
+
+        이전 요청·대상이 있으면 `conversation_context` 합성 호출과 봉투에 싼 결과가 맨 앞에 온다.
+        """
         turns = self.turns()
         if not turns:
             return []
-        older, recent = turns[:-RECENT_TURNS], turns[-RECENT_TURNS:]
-        blocks: list[str] = []
-        requests = [_one_line(t.user, OLDER_REQUEST_CHARS) for t in reversed(older)]
-        requests = [r for r in requests if r][:OLDER_REQUESTS_MAX]
-        if requests:
-            blocks.append("[이전 대화]\n" + "\n".join(f"- {r}" for r in requests))
-        targets = self.targets()
-        if targets:
-            blocks.append("[참조 가능한 대상]\n" + "\n".join(f"- {h}: {d}" for h, d in targets))
         messages: list[Message] = []
-        if blocks:
-            messages.append(Message(role="system", content="\n\n".join(blocks)))
-        for turn in recent:
+        payload = self.payload()
+        if payload["earlier_requests"] or payload["targets"]:
+            messages.append(
+                Message(
+                    role="assistant",
+                    tool_calls=(ToolCall(CONTEXT_CALL_ID, CONVERSATION_CONTEXT, {}),),
+                )
+            )
+            messages.append(
+                Message(
+                    role="tool",
+                    content=wrap_data(
+                        context_json(payload), source=CONVERSATION_CONTEXT, boundary=boundary
+                    ),
+                    tool_call_id=CONTEXT_CALL_ID,
+                )
+            )
+        for turn in turns[-RECENT_TURNS:]:
             messages.append(Message(role="user", content=turn.user))
             if turn.assistant is not None:
                 messages.append(Message(role="assistant", content=turn.assistant))
         return messages
+
+
+def context_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def context_tool_spec() -> ToolSpec:
+    return ToolSpec(
+        CONVERSATION_CONTEXT,
+        "같은 대화의 앞선 요청과 참조 가능한 일정·메일 대상(핸들)을 돌려준다. 인자는 없다.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    )
 
 
 def _one_line(value: str, limit: int) -> str:
@@ -147,26 +186,28 @@ def _ext(value: Any) -> str | None:
         value = value.get("name") or value.get("email")
     if not isinstance(value, str) or not value.strip():
         return None
-    return wrap_external(_one_line(value, TARGET_FIELD_CHARS))[0]
+    return _one_line(value, TARGET_FIELD_CHARS)
 
 
-def _describe(handle: str, item: dict[str, Any]) -> str:
+def _describe(handle: str, item: dict[str, Any]) -> dict[str, Any]:
+    """대상 하나의 JSON 항목. 값이 없는 필드는 뺀다."""
     if handle.startswith("E"):
-        parts = [
-            _ext(item.get("title")),
-            _plain(item.get("start")),
-            _plain(item.get("end")),
-        ]
-        start, end = parts[1], parts[2]
-        when = " ~ ".join(p for p in (start, end) if p)
-        return " ".join(p for p in (parts[0], when) if p) or "(설명 없음)"
-    sender = _ext(item.get("from"))
-    parts2 = [
-        _ext(item.get("subject")),
-        f"보낸 사람 {sender}" if sender else None,
-        _plain(item.get("date")),
-    ]
-    return " ".join(p for p in parts2 if p) or "(설명 없음)"
+        fields: dict[str, Any] = {
+            "handle": handle,
+            "kind": "event",
+            "title": _ext(item.get("title")),
+            "start": _plain(item.get("start")),
+            "end": _plain(item.get("end")),
+        }
+    else:
+        fields = {
+            "handle": handle,
+            "kind": "message",
+            "subject": _ext(item.get("subject")),
+            "from": _ext(item.get("from")),
+            "date": _plain(item.get("date")),
+        }
+    return {k: v for k, v in fields.items() if v is not None}
 
 
 def _plain(value: Any) -> str | None:

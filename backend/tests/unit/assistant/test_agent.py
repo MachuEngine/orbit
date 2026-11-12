@@ -4,10 +4,14 @@ from typing import Any
 
 import pytest
 
+from orbit.assistant.agent import ReadOnlyAssistant
+from orbit.assistant.envelope import boundary_for
 from orbit.assistant.prompt import PROMPT_VERSION, build_system_prompt
-from orbit.llm.scripted import ScriptExhaustedError
+from orbit.core.clock import FixedClock
+from orbit.evalrunner.llm_script import build_response
+from orbit.llm.scripted import ScriptedLLM, ScriptExhaustedError
 
-from .conftest import DAY, NOW, TZ, make_assistant, provider_ids, tc
+from .conftest import ACCOUNT, DAY, NOW, TZ, make_assistant, provider_ids, tc, world_snapshot
 
 QUESTION = ["내일 일정 알려줘"]
 
@@ -68,7 +72,7 @@ async def test_bad_calls_return_errors_and_loop_continues(make_connectors: Any) 
     text, structured = await assistant.run(QUESTION)
     assert (text, structured) == ("모르겠습니다.", None)
     tool_msgs = [m.content for m in llm.requests[-1].messages if m.role == "tool"]
-    assert [json.loads(c or "")["error"] for c in tool_msgs] == [
+    assert [json.loads((c or "").split("\n")[1])["error"] for c in tool_msgs] == [
         "unknown_handle",
         "invalid_time",
         "invalid_query",
@@ -127,15 +131,20 @@ async def test_tools_given_to_model_have_no_write_tools(make_connectors: Any) ->
     assert names == {"list_events", "get_event", "search_mail", "read_mail", "submit_answer"}
 
 
+BOUNDARY = "0123456789ab"
+
+
 def test_system_prompt_content() -> None:
-    prompt = build_system_prompt(NOW, TZ)
+    prompt = build_system_prompt(NOW, TZ, BOUNDARY)
     assert "2026-11-11T09:00:00+09:00" in prompt and "수요일" in prompt
     assert "2026-11-09" in prompt  # 이번 주 월요일
     for needle in (
         "월요일",
         "취소된 일정을 이미 제외",
-        "모든 텍스트 필드",
-        "external_content",
+        "[데이터 규칙]",
+        "[지침 공개]",
+        "orbit_data",
+        BOUNDARY,
         "submit_answer",
         "event_set",
     ):
@@ -185,3 +194,51 @@ async def test_final_text_call_is_skipped_without_step_room(make_connectors: Any
     text, structured = await assistant.run(QUESTION)
     assert text == "" and structured is not None  # 제출한 답은 남는다
     assert len(llm.requests) == 2  # 보충 호출 없음
+
+
+async def test_tool_messages_are_enveloped_and_system_has_no_external_text(
+    make_connectors: Any,
+) -> None:
+    script: list[dict[str, Any]] = [
+        {"tool_calls": [tc("list_events", **DAY), tc("search_mail", query="subject:긴")]},
+        {"tool_calls": [tc("read_mail", handle="M1"), tc("get_event", handle="E9")]},
+        {"text": "끝."},
+    ]
+    assistant, llm = make_assistant(make_connectors, script)
+    await assistant.run(QUESTION)
+    messages = llm.requests[-1].messages
+    boundary = boundary_for("episode:")
+    assert messages[0].role == "system" and boundary in (messages[0].content or "")
+    tool_messages = [m for m in messages if m.role == "tool"]
+    assert len(tool_messages) == 4
+    for m in tool_messages:
+        content = m.content or ""
+        assert content.startswith("<orbit_data source=")
+        assert content.endswith(f'</orbit_data boundary="{boundary}">')
+        assert content.count("</orbit_data") == 1
+    external = [e["title"] for e in world_snapshot()["accounts"][ACCOUNT]["events"]]
+    external += [m["subject"] for m in world_snapshot()["accounts"][ACCOUNT]["messages"]]
+    system = messages[0].content or ""
+    assert not any(text in system for text in external)
+    assert "<external_content>" not in "".join(m.content or "" for m in messages)
+
+
+async def test_boundary_is_stable_per_episode_and_differs_between_episodes(
+    make_connectors: Any,
+) -> None:
+    async def system_of(task_id: str) -> str:
+        calendar, mail = make_connectors()
+        llm = ScriptedLLM([build_response({"text": "응"})])
+        assistant = ReadOnlyAssistant(
+            llm=llm,
+            calendar=calendar,
+            mail=mail,
+            clock=FixedClock(NOW),
+            tz=TZ,
+            metadata={"task_id": task_id},
+        )
+        await assistant.run(QUESTION)
+        return llm.requests[0].messages[0].content or ""
+
+    assert await system_of("t1") == await system_of("t1")
+    assert await system_of("t1") != await system_of("t2")
