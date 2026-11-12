@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import asdict
 from typing import Any
 
+from orbit.runflow.context import CONTEXT_CONFIG
 from orbit.runflow.nodes import TEMPERATURE
 from orbit.runflow.prompt import PROMPT_VERSION
 from orbit.runflow.write_tools import run_tool_specs
@@ -26,6 +27,7 @@ def config_fingerprint(
         "model_id": model_id or "unset",
         "prompt_version": PROMPT_VERSION,
         "temperature": TEMPERATURE,
+        "context": CONTEXT_CONFIG,
         "tools": [asdict(spec) for spec in run_tool_specs()],
     }
     if llm_info is not None:

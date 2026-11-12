@@ -2,6 +2,8 @@ import { api as defaultClient, type ApiClient } from "./client";
 import {
   approvalSchema,
   connectionsResponseSchema,
+  conversationDetailSchema,
+  conversationsResponseSchema,
   createRunResponseSchema,
   decisionResponseSchema,
   disconnectResponseSchema,
@@ -10,6 +12,8 @@ import {
   startConnectionResponseSchema,
   type Approval,
   type ConnectionsResponse,
+  type ConversationDetail,
+  type ConversationsResponse,
   type CreateRunResponse,
   type Decision,
   type DecisionResponse,
@@ -63,6 +67,26 @@ export function createRun(
     body,
     schema: createRunResponseSchema,
     ...(idempotencyKey === undefined ? {} : { headers: { "Idempotency-Key": idempotencyKey } }),
+  });
+}
+
+/** 최근 활동 순 대화 목록. */
+export function listConversations(
+  limit = 50,
+  client: ApiClient = defaultClient,
+): Promise<ConversationsResponse> {
+  return client.request("GET", `/api/conversations?limit=${String(limit)}`, {
+    schema: conversationsResponseSchema,
+  });
+}
+
+/** 대화의 턴을 오래된 순으로 받는다. 없거나 다른 계정의 대화면 404(`not_found`)다. */
+export function getConversation(
+  id: string,
+  client: ApiClient = defaultClient,
+): Promise<ConversationDetail> {
+  return client.request("GET", `/api/conversations/${seg(id)}`, {
+    schema: conversationDetailSchema,
   });
 }
 

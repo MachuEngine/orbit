@@ -42,12 +42,23 @@ export function MessageList({
           메일, 일정, 문서에 대해 물어보세요. 예: “내일 일정 알려 줘”
         </li>
       )}
-      {messages.map((message) => (
-        <li key={message.id} className={`message message-${message.role}`}>
-          <span className="visually-hidden">{message.role === "user" ? "나" : PRODUCT_NAME}</span>
-          {message.role === "assistant" ? <Markdown text={message.text} /> : <p>{message.text}</p>}
-        </li>
-      ))}
+      {messages.map((message) =>
+        message.role === "notice" ? (
+          <li key={message.id} className="message-notice">
+            <Icon name="info" />
+            <span>{message.text}</span>
+          </li>
+        ) : (
+          <li key={message.id} className={`message message-${message.role}`}>
+            <span className="visually-hidden">{message.role === "user" ? "나" : PRODUCT_NAME}</span>
+            {message.role === "assistant" ? (
+              <Markdown text={message.text} />
+            ) : (
+              <p>{message.text}</p>
+            )}
+          </li>
+        ),
+      )}
       {outgoing !== null && (
         <li className="message message-user message-unsent" data-send-status={sendStatus}>
           <span className="visually-hidden">나</span>

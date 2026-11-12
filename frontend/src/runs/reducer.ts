@@ -4,7 +4,8 @@ import type { RunEvent } from "./events";
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant";
+  /** `notice`는 비서 말풍선이 아닌 차분한 상태 안내(예: 처리하지 못한 요청)다. */
+  role: "user" | "assistant" | "notice";
   text: string;
 }
 
@@ -50,6 +51,7 @@ export interface RunViewState {
 export type RunViewAction =
   | { type: "run_started" }
   | { type: "user_message"; id: string; text: string }
+  | { type: "replace_messages"; messages: ChatMessage[] }
   | { type: "event"; event: RunEvent }
   | { type: "invalid_event" };
 
@@ -77,6 +79,9 @@ export function runViewReducer(state: RunViewState, action: RunViewAction): RunV
         ...state,
         messages: [...state.messages, { id: action.id, role: "user", text: action.text }],
       };
+    case "replace_messages":
+      // 다른 대화로 바꾼다. 이전 대화의 run 상태(승인 대기, 결과, 오류)를 모두 비운다.
+      return { ...initialRunViewState, messages: action.messages };
     case "invalid_event":
       return { ...state, streamProblem: "invalid_event" };
     case "event":
@@ -110,7 +115,12 @@ function applyEvent(state: RunViewState, event: RunEvent): RunViewState {
         ...next,
         messages: [
           ...next.messages,
-          { id: `assistant-${event.seq}`, role: "assistant", text: event.payload.text },
+          // seq는 run마다 1부터 다시 시작하므로, 같은 대화의 여러 run에서 key가 겹치지 않게 순번을 붙인다.
+          {
+            id: `assistant-${next.messages.length}-${event.seq}`,
+            role: "assistant",
+            text: event.payload.text,
+          },
         ],
       };
     case "approval_requested":

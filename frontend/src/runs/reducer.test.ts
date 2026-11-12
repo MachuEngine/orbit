@@ -26,7 +26,7 @@ describe("runViewReducer", () => {
     ]);
     expect(state.status).toBe("waiting_approval");
     expect(state.messages).toEqual([
-      { id: "assistant-2", role: "assistant", text: "메일을 쓰겠습니다." },
+      { id: "assistant-0-2", role: "assistant", text: "메일을 쓰겠습니다." },
     ]);
     expect(state.pendingApproval).toEqual({
       approvalId: "ap1",
@@ -180,5 +180,31 @@ describe("connector_notice", () => {
   it("새 run을 시작하면 비운다", () => {
     const state = fold([notice(1, "mail", "quota_exceeded")]);
     expect(runViewReducer(state, { type: "run_started" }).connectorNotices).toEqual([]);
+  });
+});
+
+const assistantText = (seq: number, text: string) =>
+  ({ seq, type: "assistant_text", payload: { step: 0, text } }) satisfies RunEvent;
+
+describe("대화 바꾸기", () => {
+  it("메시지를 바꾸고 이전 run의 상태를 모두 비운다", () => {
+    const before = fold([
+      status(1, "running"),
+      approvalRequested(2),
+      status(3, "waiting_approval"),
+    ]);
+    const messages = [{ id: "m1", role: "user" as const, text: "이전 대화" }];
+    const after = runViewReducer(before, { type: "replace_messages", messages });
+    expect(after).toEqual({ ...initialRunViewState, messages });
+  });
+
+  it("같은 대화의 두 번째 run에서도 비서 메시지 key가 겹치지 않는다", () => {
+    const first = fold([assistantText(1, "첫 답")]);
+    const second = fold(
+      [assistantText(1, "둘째 답")],
+      runViewReducer(first, { type: "run_started" }),
+    );
+    const ids = second.messages.map((m) => m.id);
+    expect(new Set(ids).size).toBe(2);
   });
 });

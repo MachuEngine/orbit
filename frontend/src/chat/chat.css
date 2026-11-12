@@ -7,6 +7,7 @@
 
 .chat-header {
   display: flex;
+  flex-wrap: wrap; /* 좁은 화면(320px)에서는 버튼 줄이 아래로 내려가 가로 스크롤이 생기지 않는다 */
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -17,6 +18,7 @@
 
 .chat-header-actions {
   display: flex;
+  margin-left: auto;
   gap: var(--space-2);
 }
 
@@ -131,6 +133,20 @@
   align-self: flex-start;
   background: var(--color-surface);
   border: 1px solid var(--color-divider);
+}
+
+/* 처리하지 못한 요청 같은 상태 안내. 말풍선이 아니라 본문 옆 한 줄로 조용히 보인다. */
+.message-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.message-notice .icon {
+  margin-top: var(--space-1);
 }
 
 .message-unsent {

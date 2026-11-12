@@ -46,6 +46,7 @@ from orbit.records.runs import (
     list_messages,
     transition_run,
 )
+from orbit.runflow.context import ConversationContext, load_context
 from orbit.runflow.deps import NoConnection, RunDeps
 from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
 from orbit.runflow.prompt import build_system_prompt
@@ -204,10 +205,17 @@ class RunNodes:
             "커넥터 오류: run_id=%s service=%s kind=%s reason=%s", run_id, service, kind, reason
         )
 
-    async def _transcript(self, ws: uuid.UUID, run_id: uuid.UUID) -> Transcript:
+    async def _prior(self, ws: uuid.UUID, run_id: uuid.UUID) -> ConversationContext:
+        """같은 대화의 앞선 종료 run에서 맥락을 다시 만든다(ADR-0017)."""
+        async with self._d.db.workspace_session(ws) as s:
+            return await load_context(s, ws, run_id)
+
+    async def _transcript(
+        self, ws: uuid.UUID, run_id: uuid.UUID, prior: ConversationContext | None = None
+    ) -> Transcript:
         async with self._d.db.workspace_session(ws) as s:
             rows = await list_messages(s, workspace_id=ws, run_id=run_id)
-        return Transcript(tuple(rows))
+        return Transcript(tuple(rows), prior) if prior is not None else Transcript(tuple(rows))
 
     async def _fail(self, ws: uuid.UUID, run_id: uuid.UUID, kind: str) -> dict[str, Any]:
         async with self._d.db.workspace_session(ws) as s:
@@ -275,7 +283,8 @@ class RunNodes:
         if step >= d.max_steps:
             return await self._fail(ws, run_id, "max_steps")
 
-        transcript = await self._transcript(ws, run_id)
+        prior = await self._prior(ws, run_id)
+        transcript = await self._transcript(ws, run_id, prior)
         assistant = transcript.assistant_for_step(step)
         if assistant is None:
             request = LLMRequest(
@@ -290,7 +299,7 @@ class RunNodes:
             except LLMError as exc:
                 return await self._fail(ws, run_id, type(exc).__name__)
             assistant = await self._store_assistant(ws, run_id, step, response)
-            transcript = await self._transcript(ws, run_id)
+            transcript = await self._transcript(ws, run_id, prior)
 
         calls: list[dict[str, Any]] = list(assistant.get("tool_calls", []))
         text = assistant.get("text")
@@ -404,7 +413,7 @@ class RunNodes:
             return None
         call = calls[first_write]
         transcript = await self._transcript(
-            ws, run_id
+            ws, run_id, transcript.prior
         )  # 이번 step의 조회 결과를 출처 분류에 포함한다
         return await self._request_approval(
             ws, run_id, step, first_write, call, transcript, tools.workset, calendar, mail
