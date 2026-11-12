@@ -64,9 +64,10 @@ async def test_post_runs_creates_run_message_and_job_together(make_harness: Make
 
 
 async def test_post_runs_reuses_existing_conversation(make_harness: Make) -> None:
-    h = await make_harness(SCRIPT)
+    h = await make_harness([{"text": "하나 답"}])
     first = await h.client.post("/api/runs", json={"message": "하나"}, headers=h.headers())
     conv = first.json()["conversation_id"]
+    await h.work()  # 같은 대화에 종료되지 않은 run이 있으면 409다(ADR-0017 §3)
     second = await h.client.post(
         "/api/runs",
         json={"message": "둘", "conversation_id": conv},

@@ -71,6 +71,38 @@ export const runSchema = z.object({
 });
 export type Run = z.infer<typeof runSchema>;
 
+/** `GET /api/conversations`. 최근 활동 순이다. 제목은 첫 사용자 메시지에서 만들며 없을 수 있다. */
+export const conversationSummarySchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  created_at: z.string(),
+  last_activity_at: z.string(),
+  last_run_status: runStatusSchema.nullable(),
+});
+export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
+
+export const conversationsResponseSchema = z.object({
+  conversations: z.array(conversationSummarySchema),
+});
+export type ConversationsResponse = z.infer<typeof conversationsResponseSchema>;
+
+/** `GET /api/conversations/{id}`의 턴 하나. 오래된 순이다. */
+export const conversationTurnSchema = z.object({
+  run_id: z.string(),
+  status: runStatusSchema,
+  user_text: z.string(),
+  assistant_text: z.string().nullable(),
+  pending_approval_id: z.string().nullable(),
+  created_at: z.string(),
+});
+export type ConversationTurn = z.infer<typeof conversationTurnSchema>;
+
+export const conversationDetailSchema = z.object({
+  id: z.string(),
+  turns: z.array(conversationTurnSchema),
+});
+export type ConversationDetail = z.infer<typeof conversationDetailSchema>;
+
 /** `GET /api/approvals/{id}` */
 export const approvalSchema = z.object({
   id: z.string(),

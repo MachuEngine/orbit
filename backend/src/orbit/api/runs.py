@@ -33,6 +33,7 @@ from orbit.core.ids import Uuid7Generator
 from orbit.db.session import AsyncDatabase
 from orbit.llm.config_info import llm_config_info
 from orbit.records.approvals import decide_approval, expire_approval, get_approval
+from orbit.records.conversations import conversation_exists, list_conversations, list_turns
 from orbit.records.jobs import defer_job
 from orbit.records.runs import (
     TERMINAL_RUN_STATUSES,
@@ -182,14 +183,30 @@ async def post_run(
                 {"id": conversation_id, "ws": ws, "now": clock.now()},
             )
         else:
+            # 대화 행을 잠가 같은 대화의 동시 POST를 직렬화한다(run 삽입의 FK 검사 `FOR KEY SHARE`와
+            # 충돌하지 않는 `FOR NO KEY UPDATE`). 뒤 요청은 앞 요청이 커밋한 run을 보고 409가 된다.
             found = (
                 await s.execute(
-                    text("SELECT 1 FROM conversation WHERE id = :id AND workspace_id = :ws"),
+                    text(
+                        "SELECT 1 FROM conversation WHERE id = :id AND workspace_id = :ws"
+                        " FOR NO KEY UPDATE"
+                    ),
                     {"id": conversation_id, "ws": ws},
                 )
             ).first()
             if found is None:
                 raise _not_found("대화")
+            busy = (
+                await s.execute(
+                    text(
+                        "SELECT 1 FROM run WHERE conversation_id = :id AND workspace_id = :ws"
+                        " AND status <> ALL(CAST(:terminal AS text[])) LIMIT 1"
+                    ),
+                    {"id": conversation_id, "ws": ws, "terminal": sorted(TERMINAL_RUN_STATUSES)},
+                )
+            ).first()
+            if busy is not None:
+                raise HTTPException(status.HTTP_409_CONFLICT, "conversation_busy")
         run = await create_run(
             s,
             workspace_id=ws,
@@ -211,6 +228,52 @@ async def post_run(
         )
         await defer_job(s, _jobs(request), task_name=EXECUTE_RUN, args=_job_args(ws, run.id))
     return {"run_id": str(run.id), "conversation_id": str(conversation_id), "status": run.status}
+
+
+@router.get("/conversations")
+async def read_conversations(
+    request: Request, ws: Workspace, limit: Annotated[int, Query(ge=1, le=100)] = 50
+) -> dict[str, Any]:
+    async with _db(request).workspace_session(ws) as s:
+        items = await list_conversations(s, ws, limit=limit)
+    return {
+        "conversations": [
+            {
+                "id": str(c.id),
+                "title": c.title,
+                "created_at": c.created_at.isoformat(),
+                "last_activity_at": c.last_activity_at.isoformat(),
+                "last_run_status": c.last_run_status,
+            }
+            for c in items
+        ]
+    }
+
+
+@router.get("/conversations/{conversation_id}")
+async def read_conversation(
+    conversation_id: uuid.UUID, request: Request, ws: Workspace
+) -> dict[str, Any]:
+    async with _db(request).workspace_session(ws) as s:
+        if not await conversation_exists(s, ws, conversation_id):
+            raise _not_found("대화")
+        turns = await list_turns(s, ws, conversation_id)
+    return {
+        "id": str(conversation_id),
+        "turns": [
+            {
+                "run_id": str(t.run_id),
+                "status": t.status,
+                "user_text": t.user_text,
+                "assistant_text": t.assistant_text,
+                "pending_approval_id": (
+                    None if t.pending_approval_id is None else str(t.pending_approval_id)
+                ),
+                "created_at": t.created_at.isoformat(),
+            }
+            for t in turns
+        ],
+    }
 
 
 @router.get("/runs/{run_id}")

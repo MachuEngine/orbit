@@ -88,6 +88,7 @@ textarea {
   border-radius: var(--radius-md);
   font-weight: var(--font-weight-semibold);
   line-height: var(--leading-heading);
+  white-space: nowrap;
   cursor: pointer;
   transition: opacity var(--motion-fast) var(--ease-standard);
 }

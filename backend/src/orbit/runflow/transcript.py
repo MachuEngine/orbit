@@ -18,6 +18,7 @@ from typing import Any
 from orbit.assistant.workset import WorkSet
 from orbit.llm.types import Message, ToolCall
 from orbit.records.runs import RunMessageRecord
+from orbit.runflow.context import ConversationContext
 
 _STRUCTURED_EMAIL_KEYS = frozenset({"from", "to", "cc", "attendees", "organizer"})
 _EXTERNAL_TEXT_KEYS = frozenset({"body", "description", "subject", "title", "location", "name"})
@@ -26,6 +27,8 @@ _EXTERNAL_TEXT_KEYS = frozenset({"body", "description", "subject", "title", "loc
 @dataclass(frozen=True)
 class Transcript:
     rows: tuple[RunMessageRecord, ...]
+    # 같은 대화의 앞선 종료 run(ADR-0017). `tool_results` 같은 조회는 지금 run의 `rows`만 본다.
+    prior: ConversationContext = ConversationContext()
 
     def assistant_for_step(self, step: int) -> dict[str, Any] | None:
         for row in self.rows:
@@ -48,17 +51,24 @@ class Transcript:
         return None
 
     def user_utterances(self) -> list[str]:
-        return [str(r.content.get("text", "")) for r in self.rows if r.role == "user"]
+        return [
+            str(r.content.get("text", ""))
+            for r in (*self.prior.rows, *self.rows)
+            if r.role == "user"
+        ]
 
     def workset(self) -> WorkSet:
-        """가장 최근 읽기 도구 결과에 저장된 매핑으로 작업 집합을 복원한다."""
+        """가장 최근 읽기 도구 결과에 저장된 매핑으로 작업 집합을 복원한다.
+
+        지금 run에 기록이 없으면 같은 대화의 앞선 run의 가장 최근 기록으로 복원한다(ADR-0017 §2).
+        """
         for row in reversed(self.rows):
             if row.role == "tool" and "handles" in row.content:
                 return WorkSet.restore(row.content["handles"])
-        return WorkSet()
+        return self.prior.latest_workset() or WorkSet()
 
     def llm_messages(self, system_prompt: str) -> list[Message]:
-        messages = [Message(role="system", content=system_prompt)]
+        messages = [Message(role="system", content=system_prompt), *self.prior.messages()]
         for row in self.rows:
             content = row.content
             if row.role == "user":
@@ -85,7 +95,7 @@ class Transcript:
         """(조회 결과의 구조 필드 이메일, 외부 텍스트)를 돌려준다(인자 출처 분류 입력)."""
         emails: list[str] = []
         texts: list[str] = []
-        for row in self.rows:
+        for row in (*self.prior.rows, *self.rows):
             if row.role != "tool" or row.content.get("is_error"):
                 continue
             try:
