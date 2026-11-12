@@ -30,7 +30,8 @@ from orbit.actions.executor import ApprovalRejected, ApprovalView, execute_appro
 from orbit.actions.hashing import args_hash, canonical_args
 from orbit.actions.models import WriteAction
 from orbit.actions.provenance import classify_emails
-from orbit.assistant.tools import CALENDAR_TOOLS, ReadOnlyTools, ToolInputError
+from orbit.assistant.envelope import boundary_for
+from orbit.assistant.tools import CALENDAR_TOOLS, ReadOnlyTools, ToolInputError, ToolOutcome
 from orbit.assistant.workset import WorkSet
 from orbit.connectors.contracts import CalendarConnector, MailConnector
 from orbit.connectors.errors import CONNECTOR_NOTICE_KINDS
@@ -46,7 +47,12 @@ from orbit.records.runs import (
     list_messages,
     transition_run,
 )
-from orbit.runflow.context import ConversationContext, load_context
+from orbit.runflow.context import (
+    CONVERSATION_CONTEXT,
+    ConversationContext,
+    context_json,
+    load_context,
+)
 from orbit.runflow.deps import NoConnection, RunDeps
 from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
 from orbit.runflow.prompt import build_system_prompt
@@ -77,6 +83,13 @@ def orbit_tool_call_id(run_id: uuid.UUID, step: int, index: int) -> uuid.UUID:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _context_outcome(arguments: object, prior: ConversationContext) -> ToolOutcome:
+    """`conversation_context` 실행. 인자가 없고, 서버가 합성한 호출과 같은 데이터를 돌려준다."""
+    if arguments not in (None, {}):
+        return ToolOutcome(json.dumps({"error": "invalid_arguments"}), is_error=True)
+    return ToolOutcome(context_json(prior.payload()))
 
 
 class ExecutionNotSettled(RuntimeError):
@@ -287,8 +300,10 @@ class RunNodes:
         transcript = await self._transcript(ws, run_id, prior)
         assistant = transcript.assistant_for_step(step)
         if assistant is None:
+            boundary = boundary_for(f"run:{run_id}")
+            system = build_system_prompt(d.clock.now(), d.tz, boundary)
             request = LLMRequest(
-                messages=tuple(transcript.llm_messages(build_system_prompt(d.clock.now(), d.tz))),
+                messages=tuple(transcript.llm_messages(system, boundary)),
                 purpose="system_under_test",
                 tools=run_tool_specs(),
                 tool_choice="auto",
@@ -393,7 +408,10 @@ class RunNodes:
                     ws, run_id, step, llm_id, name, {"error": "unknown_tool"}, is_error=True
                 )
                 continue
-            outcome = await tools.execute(name, call.get("arguments"))  # type: ignore[arg-type]
+            if name == CONVERSATION_CONTEXT:
+                outcome = _context_outcome(call.get("arguments"), transcript.prior)
+            else:
+                outcome = await tools.execute(name, call.get("arguments"))  # type: ignore[arg-type]
             if outcome.connector_error is not None:
                 # 결과 저장보다 먼저 남긴다. 저장 직후 중단돼도 재실행이 알림을 다시 만들지 않으면서
                 # 빠뜨리지도 않는다.

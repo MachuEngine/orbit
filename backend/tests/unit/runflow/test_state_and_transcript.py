@@ -117,7 +117,7 @@ def _transcript() -> Transcript:
     mail_result = (
         '{"handle": "M1", "subject": "문의", "from": {"name": "밥", "email": "bob@example.org"},'
         ' "to": [{"email": "alice@example.com", "name": null}], "cc": [],'
-        ' "body": "<external_content>연락처 carol@example.net</external_content>"}'
+        ' "body": "연락처 carol@example.net"}'
     )
     return Transcript(
         (
@@ -200,19 +200,22 @@ def test_transcript_provenance_inputs_split_structural_emails_and_external_text(
 
 
 def test_transcript_builds_llm_messages_in_order() -> None:
-    messages = _transcript().llm_messages("시스템")
+    messages = _transcript().llm_messages("시스템", "0123456789ab")
     assert [m.role for m in messages] == ["system", "user", "assistant", "tool", "tool", "tool"]
     assert messages[2].tool_calls[0].name == "list_events"
     assert messages[3].tool_call_id == "call-1"
+    for m in messages[3:]:  # 도구 결과는 모두 봉투 안(ADR-0018)
+        assert (m.content or "").startswith('<orbit_data source="')
+        assert (m.content or "").endswith('</orbit_data boundary="0123456789ab">')
 
 
 # ---------------------------------------------------------------- 도구 정의와 인자 해석
 
 
-def test_model_gets_four_read_and_four_write_tools_without_submit_answer() -> None:
+def test_model_gets_read_context_and_write_tools_without_submit_answer() -> None:
     names = [spec.name for spec in run_tool_specs()]
     assert sorted(names) == sorted(READ_TOOLS | WRITE_TOOLS)
-    assert len(names) == 8
+    assert len(names) == 9 and "conversation_context" in READ_TOOLS
     assert "submit_answer" not in names
 
 

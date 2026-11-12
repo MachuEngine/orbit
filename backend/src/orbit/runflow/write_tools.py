@@ -14,13 +14,16 @@ from orbit.assistant.tools import ToolInputError, tool_specs
 from orbit.assistant.workset import UnknownHandleError, WorkSet
 from orbit.connectors.contracts import CalendarConnector, ConnectorError, MailConnector
 from orbit.llm.types import ToolSpec
+from orbit.runflow.context import CONVERSATION_CONTEXT, context_tool_spec
 
 CREATE_EVENT = "create_event"
 UPDATE_EVENT_TIME = "update_event_time"
 CANCEL_EVENT = "cancel_event"
 SEND_MAIL = "send_mail"
 WRITE_TOOLS = frozenset({CREATE_EVENT, UPDATE_EVENT_TIME, CANCEL_EVENT, SEND_MAIL})
-READ_TOOLS = frozenset({"list_events", "get_event", "search_mail", "read_mail"})
+READ_TOOLS = frozenset(
+    {"list_events", "get_event", "search_mail", "read_mail", CONVERSATION_CONTEXT}
+)
 
 MAX_TITLE = 200
 MAX_SUBJECT = 300
@@ -96,9 +99,9 @@ def write_tool_specs() -> tuple[ToolSpec, ...]:
 
 
 def run_tool_specs() -> tuple[ToolSpec, ...]:
-    """모델에 주는 도구: 읽기 4개(답 제출 제외)와 쓰기 4개."""
+    """모델에 주는 도구: 읽기 4개(답 제출 제외), 대화 맥락 조회, 쓰기 4개."""
     reads = tuple(spec for spec in tool_specs() if spec.name in READ_TOOLS)
-    return reads + write_tool_specs()
+    return reads + (context_tool_spec(),) + write_tool_specs()
 
 
 def _check_keys(args: dict[str, Any], required: set[str], optional: set[str]) -> None:

@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import tzinfo
 from typing import Any
 
+from orbit.assistant.envelope import boundary_for, safe_source, wrap_data
 from orbit.assistant.prompt import build_system_prompt
 from orbit.assistant.tools import SUBMIT_ANSWER, ReadOnlyTools, tool_specs
 from orbit.connectors.contracts import CalendarConnector, MailConnector
@@ -34,6 +35,7 @@ class ReadOnlyAssistant:
         has_step_room: Callable[[], bool] | None = None,
         max_turns: int = DEFAULT_MAX_TURNS,
         metadata: Mapping[str, str] | None = None,
+        boundary_seed: str | None = None,
     ) -> None:
         if max_turns < 1:
             raise ValueError("max_turns는 1 이상이어야 한다")
@@ -47,6 +49,10 @@ class ReadOnlyAssistant:
         self._max_turns = max_turns
         self.text_skipped = False  # 마지막 `run`에서 단계 여유가 없어 보충 호출을 건너뛰었다
         self._metadata = dict(metadata or {})  # 원문 금지. 과제 ID 같은 식별자만.
+        # 데이터 봉투 경계값의 씨앗(ADR-0018). 평가는 에피소드 ID라서 같은 에피소드면 같은 값이다.
+        self._boundary = boundary_for(
+            boundary_seed or f"episode:{self._metadata.get('task_id', '')}"
+        )
 
     def _step(self) -> None:
         if self._on_step is not None:
@@ -76,7 +82,10 @@ class ReadOnlyAssistant:
         tools = ReadOnlyTools(calendar=self._calendar, mail=self._mail, tz=self._tz)
         specs = tool_specs()
         messages: list[Message] = [
-            Message(role="system", content=build_system_prompt(self._clock.now(), self._tz)),
+            Message(
+                role="system",
+                content=build_system_prompt(self._clock.now(), self._tz, self._boundary),
+            ),
             *(Message(role="user", content=u) for u in utterances),
         ]
         for _ in range(self._max_turns):
@@ -108,7 +117,15 @@ class ReadOnlyAssistant:
                 outcome = await tools.execute(call.name, dict(call.arguments))
                 if call.name == SUBMIT_ANSWER and outcome.structured is not None:
                     structured = outcome.structured  # 같은 응답의 마지막 유효 제출이 남는다
-                messages.append(Message(role="tool", content=outcome.content, tool_call_id=call.id))
+                messages.append(
+                    Message(
+                        role="tool",
+                        content=wrap_data(
+                            outcome.content, source=safe_source(call.name), boundary=self._boundary
+                        ),
+                        tool_call_id=call.id,
+                    )
+                )
             if structured is not None:
                 text = (response.text or "").strip()
                 # 제출 응답에 문장이 없으면 도구 없이 한 번 더 받는다. 단계 여유가 없으면
