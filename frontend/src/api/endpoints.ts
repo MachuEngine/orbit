@@ -57,8 +57,13 @@ export function disconnectConnection(
 export function createRun(
   body: { message: string; conversation_id?: string },
   client: ApiClient = defaultClient,
+  idempotencyKey?: string,
 ): Promise<CreateRunResponse> {
-  return client.request("POST", "/api/runs", { body, schema: createRunResponseSchema });
+  return client.request("POST", "/api/runs", {
+    body,
+    schema: createRunResponseSchema,
+    ...(idempotencyKey === undefined ? {} : { headers: { "Idempotency-Key": idempotencyKey } }),
+  });
 }
 
 export function getRun(runId: string, client: ApiClient = defaultClient): Promise<Run> {

@@ -8,7 +8,12 @@ import { describe, expect, it } from "vitest";
 import { initialRunViewState } from "../runs/reducer";
 import { MessageList } from "./MessageList";
 import { StatusBar } from "./StatusBar";
-import { connectionStatusItem, runStatusItem } from "./status";
+import {
+  connectionStatusItem,
+  connectorNoticeItems,
+  connectorNoticeText,
+  runStatusItem,
+} from "./status";
 import { isNearBottom } from "./useStickToBottom";
 
 const run = (overrides: Partial<typeof initialRunViewState>) => ({
@@ -31,6 +36,60 @@ describe("runStatusItem", () => {
 
   it("서버 오류 이벤트는 실행 상태가 running이어도 실패로 알린다", () => {
     expect(runStatusItem(run({ status: "running", error: "x" }))?.tone).toBe("error");
+  });
+});
+
+describe("실패 원인 문구", () => {
+  const failed = (error: string | null) => runStatusItem(run({ status: "failed", error }))?.text;
+
+  it("error_kind에 따라 다른 안내를 보인다", () => {
+    expect(failed("no_connection")).toContain("계정이 연결되어 있지 않습니다");
+    expect(failed("max_steps")).toContain("요청을 나눠서");
+    for (const kind of ["LLMError", "TransientLLMError", "LLMTimeoutError", "ModelMismatchError"]) {
+      expect(failed(kind)).toContain("모델 호출에 실패했습니다");
+    }
+    expect(failed("approval_missing")).toContain("작업을 마치지 못했습니다");
+    expect(failed(null)).toContain("작업을 마치지 못했습니다");
+  });
+});
+
+describe("connectorNoticeText", () => {
+  const text = (service: "calendar" | "mail", kind: string, reason = "") =>
+    connectorNoticeText({ service, kind, reason });
+
+  it("종류마다 서비스 이름을 넣은 고정 문구를 쓴다", () => {
+    expect(text("calendar", "service_disabled")).toContain(
+      "Google 캘린더 API가 사용 설정되지 않아",
+    );
+    expect(text("mail", "quota_exceeded")).toBe(
+      "Gmail 사용 한도를 넘었습니다. 잠시 뒤 다시 시도해 주세요.",
+    );
+    expect(text("mail", "rate_limited")).toContain("Gmail 요청이 많아");
+    expect(text("mail", "permission_revoked")).toContain("다시 연결해 주세요");
+    expect(text("calendar", "transient_error")).toContain("일시적으로 연결하지 못했습니다");
+  });
+
+  it("모르는 종류는 connector_error처럼 보이고 안전한 reason만 오류 코드로 덧붙인다", () => {
+    expect(text("calendar", "weird", "backendError")).toBe(
+      "Google 캘린더에서 오류가 발생했습니다. (오류 코드: backendError)",
+    );
+    expect(text("mail", "connector_error", "")).toBe("Gmail에서 오류가 발생했습니다.");
+    const unsafe = text("mail", "connector_error", "<b>x</b> secret@example.test");
+    expect(unsafe).toBe("Gmail에서 오류가 발생했습니다.");
+    expect(text("mail", "connector_error", "a".repeat(41))).toBe("Gmail에서 오류가 발생했습니다.");
+  });
+
+  it("상태 표시줄에 서비스·종류별로 한 줄씩 보인다", () => {
+    render(
+      <StatusBar
+        items={connectorNoticeItems([
+          { service: "calendar", kind: "service_disabled", reason: "x" },
+          { service: "mail", kind: "service_disabled", reason: "x" },
+        ])}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Google 캘린더 API가");
+    expect(screen.getByRole("status")).toHaveTextContent("Gmail API가");
   });
 });
 

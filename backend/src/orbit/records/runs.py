@@ -92,15 +92,17 @@ async def create_run(
     config_fingerprint: str,
     clock: Clock,
     ids: Uuid7Generator,
+    idempotency_key: uuid.UUID | None = None,
+    request_hash: str | None = None,
 ) -> RunRecord:
-    """`queued` 상태의 run을 만든다."""
+    """`queued` 상태의 run을 만든다. 멱등 키와 요청 해시는 `POST /runs` 재전송 판별용이다."""
     now = clock.now()
     row = (
         await session.execute(
             text(
                 "INSERT INTO run (id, workspace_id, conversation_id, status, pattern,"
-                " config_fingerprint, created_at, updated_at)"
-                " VALUES (:id, :ws, :conv, 'queued', :pattern, :fp, :now, :now)"
+                " config_fingerprint, created_at, updated_at, idempotency_key, request_hash)"
+                " VALUES (:id, :ws, :conv, 'queued', :pattern, :fp, :now, :now, :ikey, :rhash)"
                 " RETURNING id, conversation_id, status, pattern, config_fingerprint,"
                 " error_kind, created_at, updated_at"
             ),
@@ -111,6 +113,8 @@ async def create_run(
                 "pattern": pattern,
                 "fp": config_fingerprint,
                 "now": now,
+                "ikey": idempotency_key,
+                "rhash": request_hash,
             },
         )
     ).one()

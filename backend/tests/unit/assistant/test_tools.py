@@ -293,3 +293,23 @@ async def test_submit_answer_errors_do_not_count_as_submission(tools: ReadOnlyTo
         outcome = await tools.execute("submit_answer", args)
         assert outcome.structured is None and outcome.is_error, args
         assert json.loads(outcome.content) == {"error": kind}, args
+
+
+async def test_connector_error_outcome_has_kind_reason_but_content_is_unchanged() -> None:
+    from datetime import UTC
+
+    from orbit.assistant.tools import LIST_EVENTS, ReadOnlyTools
+    from orbit.connectors.contracts import ConnectorError
+
+    class Boom:
+        async def list_calendars(self) -> list[object]:
+            raise ConnectorError("합성", reason="accessNotConfigured")
+
+    tools = ReadOnlyTools(calendar=Boom(), mail=Boom(), tz=UTC)  # type: ignore[arg-type]
+    outcome = await tools.execute(
+        LIST_EVENTS,
+        {"time_min": "2026-11-12T00:00:00+09:00", "time_max": "2026-11-13T00:00:00+09:00"},
+    )
+    assert outcome.is_error
+    assert outcome.content == '{"error": "service_disabled"}'
+    assert outcome.connector_error == ("service_disabled", "accessNotConfigured")

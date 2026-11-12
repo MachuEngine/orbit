@@ -22,6 +22,13 @@ export interface ExecutionOutcome {
   toolName: string | null;
 }
 
+/** 커넥터(Google 캘린더·Gmail)가 알린 문제. 같은 서비스·종류는 한 번만 담는다. */
+export interface ConnectorNotice {
+  service: "calendar" | "mail";
+  kind: string;
+  reason: string;
+}
+
 export interface RunViewState {
   /** 마지막으로 반영한 seq. 같거나 작은 seq의 이벤트는 무시한다. */
   lastSeq: number;
@@ -31,6 +38,7 @@ export interface RunViewState {
   results: ExecutionOutcome[];
   /** 승인 ID -> 동작 이름. 결과 문구에 같은 동사를 쓰려고 기억해 둔다. */
   toolByApproval: Record<string, string>;
+  connectorNotices: ConnectorNotice[];
   /** 서버가 알린 run 오류 종류 */
   error: string | null;
   /** 스트림 자체의 문제(형태가 다른 이벤트 등) */
@@ -52,6 +60,7 @@ export const initialRunViewState: RunViewState = {
   pendingApproval: null,
   results: [],
   toolByApproval: {},
+  connectorNotices: [],
   error: null,
   streamProblem: null,
   finished: false,
@@ -91,6 +100,11 @@ function applyEvent(state: RunViewState, event: RunEvent): RunViewState {
     }
     case "error":
       return { ...next, error: event.payload.error_kind };
+    case "connector_notice": {
+      const { service, kind, reason } = event.payload;
+      if (next.connectorNotices.some((n) => n.service === service && n.kind === kind)) return next;
+      return { ...next, connectorNotices: [...next.connectorNotices, { service, kind, reason }] };
+    }
     case "assistant_text":
       return {
         ...next,

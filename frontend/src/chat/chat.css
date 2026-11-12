@@ -94,6 +94,27 @@
   white-space: pre-wrap;
 }
 
+.message .md-heading {
+  margin: var(--space-2) 0 var(--space-1);
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--leading-heading);
+  overflow-wrap: anywhere;
+}
+
+.message .md-url {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.message code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
 .message .md-list {
   margin: var(--space-1) 0;
   padding-left: var(--space-5);

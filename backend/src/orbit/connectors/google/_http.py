@@ -104,26 +104,27 @@ def http_error(
     status = resp.status_code
     reason = error_reason(resp)
     key = reason.casefold()
+    safe = safe_reason(reason) if reason else ""
     note = f"{service} {op} 실패: HTTP {status}, reason={safe_reason(reason)}"
     if key == "invalid_grant" or status == 401:
-        return PermissionRevoked(note)
+        return PermissionRevoked(note, reason=safe)
     if status == 429 or (status == 403 and key in _RATE_REASONS):
-        return RateLimited(retry_after_s=_retry_after(resp), message=note)
+        return RateLimited(retry_after_s=_retry_after(resp), message=note, reason=safe)
     if status == 403 and key in _PERMISSION_REASONS:
-        return PermissionRevoked(note)
+        return PermissionRevoked(note, reason=safe)
     if status in (404, 410):
-        return NotFound(note)
+        return NotFound(note, reason=safe)
     if status == 409 and creating:
-        return AlreadyExists(note)
+        return AlreadyExists(note, reason=safe)
     if status == 412:
-        return PreconditionFailed(note)
+        return PreconditionFailed(note, reason=safe)
     if status == 400 and query:
-        return InvalidQuery(note)
+        return InvalidQuery(note, reason=safe)
     if status == 408 and write:
-        return ResultUnknown(note)
+        return ResultUnknown(note, reason=safe)
     if status >= 500:
-        return ResultUnknown(note) if write else TransientError(note)
-    return ConnectorError(note)
+        return ResultUnknown(note, reason=safe) if write else TransientError(note, reason=safe)
+    return ConnectorError(note, reason=safe)
 
 
 class GoogleHttp:

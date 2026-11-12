@@ -33,12 +33,23 @@ const executionResultEvent = z.object({
   }),
 });
 
+const connectorNoticeEvent = z.object({
+  type: z.literal("connector_notice"),
+  payload: z.object({
+    step: z.number(),
+    service: z.enum(["calendar", "mail"]),
+    kind: z.string(),
+    reason: z.string(),
+  }),
+});
+
 const eventBodySchema = z.discriminatedUnion("type", [
   statusEvent,
   errorEvent,
   assistantTextEvent,
   approvalRequestedEvent,
   executionResultEvent,
+  connectorNoticeEvent,
 ]);
 
 export type RunEventBody = z.infer<typeof eventBodySchema>;
@@ -50,6 +61,7 @@ export const RUN_EVENT_TYPES = [
   "assistant_text",
   "approval_requested",
   "execution_result",
+  "connector_notice",
 ] as const;
 
 export type ParsedEvent =

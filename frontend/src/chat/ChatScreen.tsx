@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRun } from "../api/endpoints";
+import { isApiError } from "../api/errors";
+import { PRODUCT_NAME } from "../brand";
 import { ApprovalPanel } from "../approvals/ApprovalPanel";
 import { useConnectionNotice } from "../connections/useConnections";
 import { useComposer } from "../composer/useComposer";
@@ -7,18 +9,22 @@ import { useRunStream } from "../runs/useRunStream";
 import { Icon } from "../ui/Icon";
 import { Logo } from "../ui/Logo";
 import { Composer } from "./Composer";
+import { useIdempotencyKey } from "./idempotency";
 import { MessageList } from "./MessageList";
 import { StatusBar } from "./StatusBar";
-import { connectionStatusItem, runStatusItem } from "./status";
+import { connectionStatusItem, connectorNoticeItems, runStatusItem } from "./status";
 import { useStickToBottom } from "./useStickToBottom";
 import "./chat.css";
 
 export function ChatScreen({
   onSignOut,
   onOpenConnections,
+  onStreamClosed,
 }: {
   onSignOut: () => void;
   onOpenConnections: () => void;
+  /** 실시간 연결이 끊긴 채 닫혔을 때 부른다. 세션이 끝났는지 다시 확인하는 데 쓴다. */
+  onStreamClosed?: () => void;
 }) {
   const connectionNotice = useConnectionNotice();
   const [runId, setRunId] = useState<string | null>(null);
@@ -27,25 +33,53 @@ export function ChatScreen({
   const messageCounter = useRef(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { state, connection, addUserMessage } = useRunStream(runId);
+  const idempotency = useIdempotencyKey();
+  const [sendConflict, setSendConflict] = useState(false);
+
+  // 브라우저가 재접속을 포기하면(세션 만료·폐기로 서버가 닫은 경우 401) 세션을 다시 확인한다.
+  const streamClosed = connection === "closed" && !state.finished;
+  // 콜백이 바뀌어도 닫힘 전환당 한 번만 확인하도록 최신 콜백은 ref로 읽는다.
+  const onStreamClosedRef = useRef(onStreamClosed);
+  useEffect(() => {
+    onStreamClosedRef.current = onStreamClosed;
+  });
+  useEffect(() => {
+    if (streamClosed) onStreamClosedRef.current?.();
+  }, [streamClosed]);
 
   const send = useCallback(
     async (text: string) => {
-      // 미해결: 응답이 유실돼 사용자가 다시 보내면 같은 메시지로 run이 두 번 만들어질 수 있다.
-      // 백엔드에 멱등 키가 없어 화면에서 막을 수 없다. 멱등 키 도입 후 요청에 붙인다.
       setOutgoing(text);
-      const created = await createRun({
-        message: text,
-        ...(conversationId.current === undefined
-          ? {}
-          : { conversation_id: conversationId.current }),
-      });
+      setSendConflict(false);
+      // 응답이 유실돼 같은 내용을 다시 보내도 서버가 같은 run으로 알아보게 같은 키를 쓴다.
+      const key = idempotency.keyFor(text);
+      let created;
+      try {
+        created = await createRun(
+          {
+            message: text,
+            ...(conversationId.current === undefined
+              ? {}
+              : { conversation_id: conversationId.current }),
+          },
+          undefined,
+          key,
+        );
+      } catch (error) {
+        if (isApiError(error) && error.kind === "conflict") {
+          idempotency.discard();
+          setSendConflict(true);
+        }
+        throw error;
+      }
+      idempotency.discard();
       conversationId.current = created.conversation_id;
       messageCounter.current += 1;
       addUserMessage(`user-${messageCounter.current}`, text);
       setRunId(created.run_id);
       setOutgoing(null);
     },
-    [addUserMessage],
+    [addUserMessage, idempotency],
   );
   const composer = useComposer(send);
   const busy = state.status === "queued" || state.status === "running";
@@ -68,6 +102,7 @@ export function ChatScreen({
 
   return (
     <main className="chat">
+      <h1 className="visually-hidden">{PRODUCT_NAME} 대화</h1>
       <header className="chat-header">
         <Logo className="chat-logo" />
         <div className="chat-header-actions">
@@ -128,9 +163,20 @@ export function ChatScreen({
       <footer className="chat-footer">
         <div className="chat-column">
           <StatusBar
-            items={[runStatusItem(state), connectionStatusItem(connection, state.finished)]}
+            items={[
+              runStatusItem(state),
+              ...connectorNoticeItems(state.connectorNotices),
+              connectionStatusItem(connection, state.finished),
+            ]}
           />
-          <Composer composer={composer} inputRef={inputRef} blocked={approvalWait} />
+          <Composer
+            composer={composer}
+            inputRef={inputRef}
+            blocked={approvalWait}
+            {...(sendConflict
+              ? { failureText: "같은 요청을 다시 보내지 못했습니다. 새로 보내 주세요." }
+              : {})}
+          />
         </div>
       </footer>
     </main>
