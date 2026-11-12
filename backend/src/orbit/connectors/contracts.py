@@ -72,6 +72,14 @@ class HistoryExpired(ConnectorError):
     """변경 이력 위치가 만료됐다(ADR-0019 §2). 호출자는 전체 동기화로 돌아간다."""
 
 
+class UnsupportedFile(ConnectorError):
+    """읽을 수 없는 파일이다: 지원하지 않는 형식이거나 내보내기 한도(10MB)를 넘었다(ADR-0020 §2)."""
+
+
+# 문서 권한(OAuth 범위)이 없을 때 `ConnectorError.reason`에 담는 사유 코드(ADR-0020 §2).
+SCOPE_MISSING_REASON = "scope_missing"
+
+
 # ---------------------------------------------------------------- 모델 공통
 
 
@@ -287,6 +295,104 @@ class HistoryPage(_Model):
     next_page_token: str | None = None
 
 
+# ---------------------------------------------------------------- 문서(Drive) 모델 (ADR-0020 §2)
+
+FileKind = Literal["document", "spreadsheet", "presentation", "pdf", "other"]
+FILE_KINDS: tuple[FileKind, ...] = ("document", "spreadsheet", "presentation", "pdf", "other")
+
+DOCS_MIME = "application/vnd.google-apps.document"
+SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
+SLIDES_MIME = "application/vnd.google-apps.presentation"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+PDF_MIME = "application/pdf"
+
+# 종류 -> MIME 유형. `other`는 이 목록에 없는 유형 전부다(폴더는 검색 결과에서 늘 뺀다).
+KIND_MIME_TYPES: dict[str, str] = {
+    "document": DOCS_MIME,
+    "spreadsheet": SHEETS_MIME,
+    "presentation": SLIDES_MIME,
+    "pdf": PDF_MIME,
+}
+# Google 문서류 -> 내보내기 MIME 유형. Sheets는 첫 시트만 나온다.
+EXPORT_MIME_TYPES: dict[str, str] = {
+    DOCS_MIME: "text/plain",
+    SHEETS_MIME: "text/csv",
+    SLIDES_MIME: "text/plain",
+}
+# 원문을 그대로 읽는 일반 텍스트 파일 유형
+PLAIN_TEXT_MIME_TYPES: frozenset[str] = frozenset({"text/plain", "text/markdown", "text/csv"})
+MAX_FILE_BYTES = 10 * 1024 * 1024  # 내보내기·내려받기 한도. 넘으면 `UnsupportedFile`
+MAX_FILE_QUERY_CHARS = 200
+MAX_FILE_PAGE_SIZE = 100
+
+
+def normalize_mime(mime_type: str) -> str:
+    """`text/plain; charset=utf-8` 같은 매개변수를 떼고 소문자로 맞춘다."""
+    return mime_type.split(";", 1)[0].strip().lower()
+
+
+def file_kind(mime_type: str) -> FileKind:
+    mime = normalize_mime(mime_type)
+    for kind, known in KIND_MIME_TYPES.items():
+        if mime == known:
+            return kind  # type: ignore[return-value]
+    return "other"
+
+
+def is_readable_mime(mime_type: str) -> bool:
+    mime = normalize_mime(mime_type)
+    return mime in EXPORT_MIME_TYPES or mime in PLAIN_TEXT_MIME_TYPES
+
+
+class FileQuery(_Model):
+    """파일 검색 조건(구조화). 모든 조건은 AND다. 휴지통과 폴더는 늘 뺀다.
+
+    `text`는 이름 또는 본문에 들어 있는 글(대소문자 무시). `modified_after`는 이상,
+    `modified_before`는 미만이다. 모델이 Drive 검색 문법을 직접 쓰지 않는다
+    (어댑터가 이 조건으로 `q`를 만든다).
+    """
+
+    text: str | None = Field(default=None, max_length=MAX_FILE_QUERY_CHARS)
+    kind: FileKind | None = None
+    modified_after: AwareDatetime | None = None
+    modified_before: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def _order(self) -> FileQuery:
+        _check_order(self.modified_after, self.modified_before)
+        if self.text is not None and not self.text.strip():
+            raise ValueError("text는 비어 있을 수 없다")
+        return self
+
+
+class DriveFile(_Model):
+    """파일 메타데이터. 링크(`webViewLink` 등)는 계약에 넣지 않는다(D6-1)."""
+
+    id: str
+    name: str
+    kind: FileKind
+    mime_type: str
+    modified_at: AwareDatetime
+    owners: tuple[Address, ...] = ()
+    size_bytes: int | None = Field(default=None, ge=0)
+
+
+class FilePage(_Model):
+    files: tuple[DriveFile, ...] = ()
+    next_page_token: str | None = None
+
+
+class FileText(_Model):
+    """파일 본문 텍스트. `truncated`는 `max_chars`에서 잘렸다는 뜻이다.
+
+    `file`은 읽은 파일의 메타데이터다(`get_file`을 따로 부르지 않아도 되게 함께 준다).
+    """
+
+    file: DriveFile
+    text: str
+    truncated: bool = False
+
+
 # ---------------------------------------------------------------- Protocol
 
 
@@ -377,6 +483,31 @@ class MailConnector(Protocol):
         ...
 
 
+@runtime_checkable
+class DriveConnector(Protocol):
+    """문서(Drive) 읽기 계약 (ADR-0020 §2, ADR-0008 5절). 쓰기·링크·첨부 메서드는 없다.
+
+    - 검색은 구조화된 `FileQuery`만 받는다. 모든 구현체는 휴지통과 폴더를 빼고, 텍스트 조건이
+      없으면 최근 수정순(같으면 ID순)으로 돌려준다. 텍스트 조건이 있으면 순서는 구현체가 정한다
+      (관련도순이며 Drive는 `fullText`와 정렬을 함께 쓸 수 없다). 호출자는 그 순서를 가정하지
+      않는다. `max_results`는 1~100이 아니면 `ValueError`다.
+    - `read_file_text`는 Google 문서는 `text/plain`, 스프레드시트는 첫 시트 `text/csv`,
+      프레젠테이션은 `text/plain`으로 내보내고,
+      일반 텍스트 파일(`text/plain`·`markdown`·`csv`)은 원문을 읽는다.
+      그 밖의 형식과 10MB를 넘는 파일은 `UnsupportedFile`이다. `max_chars`는 1 이상이다.
+    - 문서 권한(OAuth 범위)이 없으면 `ConnectorError`(사유 `scope_missing`)다.
+    - 휴지통에 있거나 없는 파일은 `NotFound`다.
+    """
+
+    async def search_files(
+        self, query: FileQuery, *, max_results: int = 20, page_token: str | None = None
+    ) -> FilePage: ...
+
+    async def get_file(self, file_id: str) -> DriveFile: ...
+
+    async def read_file_text(self, file_id: str, *, max_chars: int) -> FileText: ...
+
+
 # ---------------------------------------------------------------- 도구 이름
 
 
@@ -391,6 +522,9 @@ def _tool_names(protocol: type) -> frozenset[str]:
 
 CALENDAR_TOOLS: frozenset[str] = _tool_names(CalendarConnector)
 MAIL_TOOLS: frozenset[str] = _tool_names(MailConnector)
+# 문서 읽기 메서드(ADR-0020). 장애 주입(FaultPlan)에는 쓰지만 평가 모델에는 노출하지 않고 평가
+# 데이터의 금지 도구 목록(`CALENDAR_TOOLS | MAIL_TOOLS` 기준)에도 넣지 않는다.
+DRIVE_TOOLS: frozenset[str] = _tool_names(DriveConnector)
 # 색인 동기화 전용 읽기 메서드(ADR-0019 §2). 장애 주입(FaultPlan)에는 쓰지만 평가 모델에는 노출하지
 # 않고 평가 데이터의 금지 도구 목록에도 넣지 않는다(9단계 이전과 같은 평가 도구 목록을 지킨다).
 MAIL_SYNC_METHODS: frozenset[str] = frozenset(

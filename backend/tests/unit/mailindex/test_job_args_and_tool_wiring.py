@@ -93,8 +93,8 @@ def test_argument_validation_defaults() -> None:
     assert IndexedMailSearch._parse({"query": "a", "max_results": 20}) == ("a", 20)  # noqa: SLF001
 
 
-def test_prompt_v0_5_explains_both_mail_tools_and_freshness() -> None:
-    assert PROMPT_VERSION == "runflow-v0.5"
+def test_prompt_explains_both_mail_tools_and_freshness() -> None:
+    assert PROMPT_VERSION == "runflow-v0.6"  # 문서 도구 안내 추가(ADR-0020)
     prompt = build_system_prompt(datetime(2026, 11, 12, tzinfo=UTC), UTC, "0123456789ab")
     assert "search_mail" in prompt and "search_indexed_mail" in prompt
     assert "N분 전 기준" in prompt and "index_empty" in prompt

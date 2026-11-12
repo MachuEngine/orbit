@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from orbit.connectors.contracts import (
+    SCOPE_MISSING_REASON,
     AlreadyExists,
     ConnectorError,
     InvalidQuery,
@@ -37,6 +38,7 @@ from orbit.connectors.contracts import (
     RateLimited,
     ResultUnknown,
     TransientError,
+    UnsupportedFile,
 )
 from orbit.connectors.google.tokens import AccessTokenProvider
 
@@ -44,6 +46,11 @@ Sleep = Callable[[float], Awaitable[None]]
 
 _RATE_REASONS = frozenset({"ratelimitexceeded", "userratelimitexceeded"})
 _PERMISSION_REASONS = frozenset({"insufficientpermissions", "autherror"})
+# 문서(Drive) 전용: 범위 부족과 읽을 수 없는 파일의 사유 코드(ADR-0020 §2)
+_SCOPE_REASONS = frozenset({"insufficientpermissions", "access_token_scope_insufficient"})
+_UNSUPPORTED_REASONS = frozenset(
+    {"exportsizelimitexceeded", "filenotdownloadable", "cannotexportfile", "cannotdownloadfile"}
+)
 _REASON_SAFE = re.compile(r"[A-Za-z0-9_]{1,40}")
 _MAX_AUTO_RETRY_AFTER_S = 2.0
 
@@ -77,6 +84,27 @@ def error_reason(resp: httpx.Response) -> str:
     return ""
 
 
+def detail_reasons(resp: httpx.Response) -> set[str]:
+    """오류 본문의 `errors[].reason`과 `details[].reason`을 소문자 집합으로 모은다(사유 코드만)."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return set()
+    err = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(err, dict):
+        return set()
+    found: set[str] = set()
+    for key in ("errors", "details"):
+        items = err.get(key)
+        if isinstance(items, list):
+            found |= {
+                str(item["reason"]).casefold()
+                for item in items
+                if isinstance(item, dict) and isinstance(item.get("reason"), str)
+            }
+    return found
+
+
 def safe_reason(reason: str) -> str:
     """사유 코드는 영숫자·밑줄 40자까지만 오류 메시지에 싣는다."""
     return reason if _REASON_SAFE.fullmatch(reason) else "unknown"
@@ -100,12 +128,18 @@ def http_error(
     write: bool,
     creating: bool = False,
     query: bool = False,
+    drive: bool = False,
 ) -> ConnectorError:
     status = resp.status_code
     reason = error_reason(resp)
     key = reason.casefold()
     safe = safe_reason(reason) if reason else ""
     note = f"{service} {op} 실패: HTTP {status}, reason={safe_reason(reason)}"
+    if drive and status == 403 and (detail_reasons(resp) | {key}) & _SCOPE_REASONS:
+        # 문서 권한(OAuth 범위)이 없다. 연결이 철회된 것이 아니므로 재연결을 요구하지 않는다.
+        return ConnectorError(note, reason=SCOPE_MISSING_REASON)
+    if drive and status == 403 and (detail_reasons(resp) | {key}) & _UNSUPPORTED_REASONS:
+        return UnsupportedFile(note, reason=safe)
     if key == "invalid_grant" or status == 401:
         return PermissionRevoked(note, reason=safe)
     if status == 429 or (status == 403 and key in _RATE_REASONS):
@@ -196,8 +230,62 @@ class GoogleHttp:
         creating: bool = False,
         query: bool = False,
         allow_empty: bool = False,
+        drive: bool = False,
     ) -> dict[str, Any]:
         """요청을 보내고 JSON 객체를 돌려준다. `allow_empty`이면 빈 성공 응답(204)은 `{}`다."""
+        resp = await self._send(
+            method,
+            path,
+            op=op,
+            write=write,
+            params=params,
+            body=body,
+            extra_headers=extra_headers,
+            creating=creating,
+            query=query,
+            drive=drive,
+        )
+        if allow_empty and not resp.content:
+            return {}
+        try:
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError  # noqa: TRY301
+        except ValueError:
+            note = f"{self._service} {op} 응답을 읽을 수 없다"
+            raise (ResultUnknown(note) if write else TransientError(note)) from None
+        return data
+
+    async def request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        op: str,
+        params: Mapping[str, Any] | Sequence[tuple[str, str]] | None = None,
+        drive: bool = False,
+    ) -> bytes:
+        """읽기 요청의 응답 본문 바이트를 돌려준다(내보내기·파일 내려받기)."""
+        resp = await self._send(
+            method, path, op=op, write=False, params=params, body=None, drive=drive
+        )
+        return resp.content
+
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        op: str,
+        write: bool,
+        params: Mapping[str, Any] | Sequence[tuple[str, str]] | None = None,
+        body: Mapping[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        creating: bool = False,
+        query: bool = False,
+        drive: bool = False,
+    ) -> httpx.Response:
+        """요청 한 건을 보내고 성공 응답을 돌려준다. 실패는 계약 오류로 바꿔 던진다."""
         token = await self._token(refresh=False)
         refreshed = False
         attempt = 0
@@ -226,18 +314,15 @@ class GoogleHttp:
                 token = await self._token(refresh=True)
                 continue
             if resp.is_success:
-                if allow_empty and not resp.content:
-                    return {}
-                try:
-                    data = resp.json()
-                    if not isinstance(data, dict):
-                        raise ValueError  # noqa: TRY301
-                except ValueError:
-                    note = f"{self._service} {op} 응답을 읽을 수 없다"
-                    raise (ResultUnknown(note) if write else TransientError(note)) from None
-                return data
+                return resp
             err = http_error(
-                resp, service=self._service, op=op, write=write, creating=creating, query=query
+                resp,
+                service=self._service,
+                op=op,
+                write=write,
+                creating=creating,
+                query=query,
+                drive=drive,
             )
             if not write and attempt < self._read_retries:
                 delay = self._auto_retry_delay(err, attempt)

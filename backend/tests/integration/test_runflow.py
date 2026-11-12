@@ -646,6 +646,9 @@ class _NoConnectionResolver:
     async def connectors_for(self, workspace_id: uuid.UUID) -> Any:
         raise NoConnection(f"workspace_id={workspace_id}")
 
+    async def drive_for(self, workspace_id: uuid.UUID) -> Any:
+        raise NoConnection(f"workspace_id={workspace_id}")
+
 
 async def test_run_fails_with_no_connection_when_workspace_has_no_active_connection(
     make_harness: Make,

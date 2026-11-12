@@ -109,6 +109,11 @@ class _NoConnection:
 
         raise NoConnection(f"workspace_id={workspace_id}")
 
+    async def drive_for(self, workspace_id: uuid.UUID) -> Any:
+        from orbit.runflow.deps import NoConnection
+
+        raise NoConnection(f"workspace_id={workspace_id}")
+
 
 async def test_failed_run_logs_run_id_and_error_kind_only(
     make_harness: Make, caplog: pytest.LogCaptureFixture

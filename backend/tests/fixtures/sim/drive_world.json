@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "seed": 3,
+  "accounts": {
+    "acct-alice": {
+      "email": "alice@example.com",
+      "files": [
+        {
+          "id": "f-doc-1", "name": "분기 회의록", "mime_type": "application/vnd.google-apps.document",
+          "modified_at": "2026-11-10T09:00:00+00:00",
+          "owners": [{"email": "alice@example.com", "name": "앨리스"}],
+          "text": "분기 회의록 본문입니다. 예산 논의와 일정 합의가 있었습니다."
+        },
+        {
+          "id": "f-sheet-1", "name": "예산표", "mime_type": "application/vnd.google-apps.spreadsheet",
+          "modified_at": "2026-11-09T09:00:00+00:00",
+          "owners": [{"email": "bob@example.org", "name": "밥"}],
+          "text": "항목,금액\n장비,100\n"
+        },
+        {
+          "id": "f-doc-2", "name": "O'Brien 계획 \\ 초안", "mime_type": "application/vnd.google-apps.document",
+          "modified_at": "2026-11-08T09:00:00+00:00",
+          "owners": [{"email": "alice@example.com"}],
+          "text": "escape sample"
+        },
+        {
+          "id": "f-slides-1", "name": "발표 자료", "mime_type": "application/vnd.google-apps.presentation",
+          "modified_at": "2026-11-07T09:00:00+00:00",
+          "owners": [{"email": "alice@example.com", "name": "앨리스"}],
+          "text": "슬라이드 하나\n슬라이드 둘"
+        },
+        {
+          "id": "f-pdf-1", "name": "계약서", "mime_type": "application/pdf",
+          "modified_at": "2026-11-06T09:00:00+00:00",
+          "owners": [{"email": "alice@example.com"}],
+          "text": "", "size_bytes": 2048
+        },
+        {
+          "id": "f-txt-1", "name": "메모.txt", "mime_type": "text/plain",
+          "modified_at": "2026-11-05T09:00:00+00:00",
+          "owners": [{"email": "alice@example.com"}],
+          "text": "plain memo content"
+        },
+        {
+          "id": "f-big-1", "name": "대용량 문서", "mime_type": "application/vnd.google-apps.document",
+          "modified_at": "2026-11-04T09:00:00+00:00",
+          "owners": [{"email": "alice@example.com"}],
+          "text": "x", "size_bytes": 11534336
+        },
+        {
+          "id": "f-long-1", "name": "긴 문서", "mime_type": "application/vnd.google-apps.document",
+          "modified_at": "2026-11-03T09:00:00+00:00",
+          "owners": [{"email": "alice@example.com"}],
+          "text": "0123456789ABCDEFGHIJ0123456789ABCDEFGHIJ"
+        },
+        {
+          "id": "f-trash-1", "name": "휴지통 문서", "mime_type": "application/vnd.google-apps.document",
+          "modified_at": "2026-11-11T09:00:00+00:00",
+          "owners": [{"email": "alice@example.com"}],
+          "text": "삭제됨", "trashed": true
+        },
+        {
+          "id": "f-folder-1", "name": "회의 폴더", "mime_type": "application/vnd.google-apps.folder",
+          "modified_at": "2026-11-11T08:00:00+00:00",
+          "owners": [{"email": "alice@example.com"}]
+        }
+      ]
+    },
+    "acct-bob": {
+      "email": "bob@example.org",
+      "files": [
+        {
+          "id": "f-bob-1", "name": "밥의 문서", "mime_type": "application/vnd.google-apps.document",
+          "modified_at": "2026-11-10T09:00:00+00:00",
+          "owners": [{"email": "bob@example.org", "name": "밥"}],
+          "text": "밥만 보는 내용"
+        }
+      ]
+    }
+  }
+}

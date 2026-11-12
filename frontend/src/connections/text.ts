@@ -7,6 +7,7 @@ const SCOPE_LABELS: [string, string][] = [
   ["calendar.calendarlist.readonly", "캘린더 목록 보기"],
   ["gmail.readonly", "메일 읽기·검색"],
   ["gmail.compose", "메일 초안 작성·보내기"],
+  ["drive.readonly", "Drive 파일 읽기"],
 ];
 
 /** 허용된 범위 중 사람이 읽는 말이 있는 것만 돌려준다. 모르는 값은 보이지 않는다. */
@@ -30,6 +31,12 @@ const RESULT_MESSAGES: Record<string, string> = {
     "Google이 계속 사용할 수 있는 권한을 주지 않았습니다. 다시 연결하면서 모든 항목을 허용해 주세요.",
   already_connected: "이미 연결된 계정이 있습니다. 먼저 연결을 해제해 주세요.",
   unauthenticated: "로그인이 필요합니다. 로그인한 뒤 다시 연결해 주세요.",
+  docs_scope_missing:
+    "문서 권한이 허용되지 않아 추가하지 못했습니다. 다시 시도하면서 Drive 파일 읽기를 허용해 주세요.",
+  account_mismatch:
+    "연결한 계정과 다른 Google 계정을 골랐습니다. 연결된 계정과 같은 계정으로 문서 권한을 추가해 주세요.",
+  connection_inactive:
+    "문서 권한을 추가할 연결이 없습니다. 계정을 다시 연결한 뒤 문서 권한을 추가해 주세요.",
   unavailable: "Google 또는 서버에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.",
 };
 
@@ -43,6 +50,21 @@ export function connectionErrorMessage(kind: string): string {
 }
 
 export const CONNECTED_MESSAGE = "Google 계정을 연결했습니다.";
+export const DOCS_ADDED_MESSAGE =
+  "문서 권한을 추가했습니다. 이제 Drive 문서를 찾고 읽을 수 있습니다.";
+
+export const DOCS_TEXT = {
+  heading: "문서(Drive)",
+  granted: "문서 권한: 허용됨",
+  missing: "문서 권한: 없음",
+  intro:
+    "Drive 문서를 이름과 내용으로 찾아 읽을 수 있게 합니다. 문서는 읽기만 하며 바꾸거나 지우지 않습니다.",
+  add: "문서 권한 추가",
+  startFailed: "문서 권한 추가를 시작하지 못했습니다. 잠시 뒤 다시 눌러 주세요.",
+  alreadyGranted: "문서 권한이 이미 허용되어 있습니다. 목록을 새로 불러왔습니다.",
+  inactive:
+    "이 연결로는 문서 권한을 추가할 수 없습니다. 연결 상태를 새로 불러왔으니 계정을 다시 연결해 주세요.",
+} as const;
 
 export const REVOKE_MESSAGES = {
   revoked: "연결을 해제했습니다. Google에서도 권한을 거두었습니다.",
@@ -50,14 +72,17 @@ export const REVOKE_MESSAGES = {
   failed: `${PRODUCT_NAME}에서는 연결을 해제했지만 Google에서 권한을 거두었는지 확인하지 못했습니다. Google 계정 권한 페이지(myaccount.google.com/permissions)에서 ${PRODUCT_NAME}의 접근 권한을 직접 삭제해 주세요.`,
 } as const;
 
-export type ConnectionResult = { kind: "connected" } | { kind: "error"; error: string };
+export type ConnectionResult =
+  { kind: "connected" } | { kind: "docs_added" } | { kind: "error"; error: string };
 
 /** 현재 주소의 연결 결과(`?connection=connected` 또는 `?connection_error=<종류>`). 없으면 null. */
 export function readConnectionResult(search: string): ConnectionResult | null {
   const params = new URLSearchParams(search);
   const error = params.get("connection_error");
   if (error !== null) return { kind: "error", error };
-  if (params.get("connection") === "connected") return { kind: "connected" };
+  const done = params.get("connection");
+  if (done === "connected") return { kind: "connected" };
+  if (done === "docs_added") return { kind: "docs_added" };
   return null;
 }
 

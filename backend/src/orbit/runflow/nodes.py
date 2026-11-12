@@ -54,6 +54,7 @@ from orbit.runflow.context import (
     load_context,
 )
 from orbit.runflow.deps import NoConnection, RunDeps
+from orbit.runflow.docs_tool import DOC_TOOLS, DocTools
 from orbit.runflow.index_tool import SEARCH_INDEXED_MAIL, IndexedMailSearch
 from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
 from orbit.runflow.prompt import build_system_prompt
@@ -194,7 +195,13 @@ class RunNodes:
         """커넥터 오류 원인을 알리는 이벤트를 남긴다. 같은 (step, service, kind)는 한 번만."""
         if kind not in CONNECTOR_NOTICE_KINDS:
             return
-        service = "calendar" if tool_name in CALENDAR_TOOLS else "mail"
+        service = (
+            "calendar"
+            if tool_name in CALENDAR_TOOLS
+            else "drive"
+            if tool_name in DOC_TOOLS
+            else "mail"
+        )
         async with self._d.db.workspace_session(ws) as s:
             if await lock_run(s, ws, run_id) is None:
                 return
@@ -413,6 +420,8 @@ class RunNodes:
                 outcome = _context_outcome(call.get("arguments"), transcript.prior)
             elif name == SEARCH_INDEXED_MAIL:
                 outcome = await self._search_indexed(ws, call.get("arguments"), tools.workset, mail)
+            elif name in DOC_TOOLS:
+                outcome = await self._run_doc_tool(ws, name, call.get("arguments"), tools.workset)
             else:
                 outcome = await tools.execute(name, call.get("arguments"))  # type: ignore[arg-type]
             if outcome.connector_error is not None:
@@ -439,6 +448,16 @@ class RunNodes:
         return await self._request_approval(
             ws, run_id, step, first_write, call, transcript, tools.workset, calendar, mail
         )
+
+    async def _run_doc_tool(
+        self, ws: uuid.UUID, name: str, arguments: Any, workset: WorkSet
+    ) -> ToolOutcome:
+        """문서 도구(ADR-0020 §3). 문서 커넥터는 쓰는 순간에만 꺼낸다."""
+        try:
+            drive = await self._d.resolver.drive_for(ws)
+        except NoConnection:
+            return ToolOutcome(json.dumps({"error": "no_connection"}), is_error=True)
+        return await DocTools(drive, workset, self._d.tz).execute(name, arguments)
 
     async def _search_indexed(
         self, ws: uuid.UUID, arguments: Any, workset: WorkSet, mail: MailConnector

@@ -12,7 +12,8 @@
           "events":    [CalendarEvent, ...],      # calendar_id는 calendars에 있어야 함
           "messages":  [MailMessage, ...],        # contracts.MailMessage (JSON 키는 "from")
           "threads":   [{"thread_id": "...", "message_ids": ["..."]}, ...],
-          "drafts":    [Draft, ...]               # contracts.Draft, "spec"(DraftSpec) 필수
+          "drafts":    [Draft, ...],              # contracts.Draft, "spec"(DraftSpec) 필수
+          "files":     [SimFile, ...]             # 선택. 문서(Drive) 파일(ADR-0020), 없으면 빈 목록
         }
       }
     }
@@ -35,9 +36,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
 from orbit.connectors.contracts import (
+    Address,
     Calendar,
     CalendarEvent,
     Draft,
@@ -101,6 +103,25 @@ class DraftLogEntry(BaseModel):
     sent_message_id: str | None = None
 
 
+class SimFile(BaseModel):
+    """Sim 문서 파일(ADR-0020). `text`는 내보내기·읽기 결과다. Sheets는 첫 시트 CSV다.
+
+    합성 데이터만 쓴다. `size_bytes`가 없으면 `text`의 UTF-8 길이다.
+    한도 초과 같은 시나리오는 이 값을 직접 지정한다.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    name: str
+    mime_type: str
+    modified_at: AwareDatetime
+    owners: tuple[Address, ...] = ()
+    text: str = ""
+    size_bytes: int | None = Field(default=None, ge=0)
+    trashed: bool = False
+
+
 class _AccountSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -111,6 +132,7 @@ class _AccountSnapshot(BaseModel):
     threads: list[_ThreadSnapshot] = []
     drafts: list[Draft] = []
     draft_log: list[DraftLogEntry] = []  # 스냅샷 v1에 없으면 빈 기록
+    files: list[SimFile] = []  # 스냅샷 v1에 없으면 빈 목록(기존 평가 스냅샷은 바뀌지 않는다)
 
 
 class _WorldSnapshot(BaseModel):
@@ -149,6 +171,7 @@ class AccountState:
     threads: dict[str, list[str]] = field(default_factory=dict)  # thread_id -> message_ids
     drafts: dict[str, Draft] = field(default_factory=dict)
     draft_log: list[DraftLogEntry] = field(default_factory=list)
+    files: dict[str, SimFile] = field(default_factory=dict)
     history: list[HistoryEntry] = field(default_factory=list)
     history_id: int = 0  # 지금 이력 위치
     history_floor: int = 0  # 이 위치보다 앞선 이력 위치로는 이어 읽을 수 없다(만료)
@@ -262,6 +285,10 @@ class AccountState:
                     f"{label}: draft_log {entry.seq}의 sent_message_id가 messages에 없다"
                 )
         state.draft_log = list(snap.draft_log)
+        for file in snap.files:
+            if file.id in state.files:
+                raise SnapshotError(f"{label}: 파일 ID 중복 {file.id}")
+            state.files[file.id] = file
         return state
 
     def to_snapshot(self) -> dict[str, Any]:
@@ -280,6 +307,8 @@ class AccountState:
         }
         if self.draft_log:  # 기록이 없으면 v1 스냅샷과 같은 모양을 유지한다
             snapshot["draft_log"] = [dump(e) for e in self.draft_log]
+        if self.files:  # 파일이 없으면 기존 스냅샷과 같은 모양(해시 불변)을 유지한다
+            snapshot["files"] = [dump(f) for f in self.files.values()]
         return snapshot
 
 

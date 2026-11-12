@@ -57,6 +57,17 @@ export async function startGoogleConnection(client: ApiClient = defaultClient): 
   return response.authorization_url;
 }
 
+/** 문서(Drive) 읽기 권한을 추가하는 Google 동의 화면 주소를 받는다. */
+export async function startDocsScope(
+  id: string,
+  client: ApiClient = defaultClient,
+): Promise<string> {
+  const response = await client.request("POST", `/api/connections/${seg(id)}/scopes/docs/start`, {
+    schema: startConnectionResponseSchema,
+  });
+  return response.authorization_url;
+}
+
 export function disconnectConnection(
   id: string,
   client: ApiClient = defaultClient,

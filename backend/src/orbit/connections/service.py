@@ -12,6 +12,7 @@ from orbit.connections.oauth import (
     ConnectGrant,
     GoogleConnectOAuth,
     RevokeOutcome,
+    has_docs_scope,
     missing_scopes,
 )
 from orbit.core.clock import Clock
@@ -86,6 +87,64 @@ async def save_grant(
                 await oauth.revoke(refresh.get_secret_value())
         raise problem
     return connection_id
+
+
+async def save_scope_grant(
+    db: AsyncDatabase,
+    oauth: GoogleConnectOAuth,
+    cipher: EnvelopeCipher,
+    *,
+    workspace_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    grant: ConnectGrant,
+    clock: Clock,
+) -> None:
+    """문서 권한 추가 결과를 저장한다(ADR-0020 §1).
+
+    같은 워크스페이스의 그 활성 연결이고 `sub`가 같을 때만 그 행의 `scopes`와 토큰 암호문을 바꾼다.
+    새 행을 만들지 않으므로 메일 색인이 유지되고, 이전 refresh token은 철회하지 않는다. 실패하면
+    기존 연결은 그대로 두고 `ConnectError`를 던진다. 새 토큰은 같은 계정의 활성 연결이 있으면
+    철회하지 않고 버린다(같은 클라이언트의 권한 전체가 철회될 수 있다). 없을 때만 철회한다.
+    """
+    refresh = grant.refresh_token
+    problem: ConnectError | None = None
+    sealed = None
+    if refresh is not None:
+        sealed = cipher.seal(
+            refresh.get_secret_value(), connection_id=connection_id, workspace_id=workspace_id
+        )
+    try:
+        async with db.workspace_session(workspace_id) as s:
+            row = await store.lock_account(s, workspace_id, connection_id)
+            if row is None or row.status != "active":
+                problem = ConnectError("connection_inactive")
+            elif row.account_sub != grant.sub:
+                problem = ConnectError("account_mismatch")
+            elif missing_scopes(grant.scopes):
+                problem = ConnectError("scope_missing")
+            elif not has_docs_scope(grant.scopes):
+                problem = ConnectError("docs_scope_missing")
+            elif sealed is None:
+                problem = ConnectError("no_refresh_token")
+            else:
+                await store.update_grant(
+                    s,
+                    workspace_id,
+                    connection_id,
+                    scopes=list(grant.scopes),
+                    sealed=sealed,
+                    now=clock.now(),
+                )
+    except ConnectError as exc:
+        problem = exc
+    if problem is None:
+        return
+    if refresh is not None:
+        async with db.workspace_session(workspace_id) as s:
+            keep = await store.has_active_with_sub(s, workspace_id, grant.sub)
+        if not keep:
+            await oauth.revoke(refresh.get_secret_value())
+    raise problem
 
 
 @dataclass(frozen=True)

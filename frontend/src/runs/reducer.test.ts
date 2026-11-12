@@ -145,7 +145,12 @@ describe("parseRunEvent", () => {
 });
 
 describe("connector_notice", () => {
-  const notice = (seq: number, service: "calendar" | "mail", kind: string, reason = "r") =>
+  const notice = (
+    seq: number,
+    service: "calendar" | "mail" | "drive",
+    kind: string,
+    reason = "r",
+  ) =>
     ({
       seq,
       type: "connector_notice",
@@ -160,7 +165,14 @@ describe("connector_notice", () => {
     );
     expect(parsed.kind).toBe("event");
     expect(
-      parseRunEvent("1", "connector_notice", '{"step":1,"service":"drive","kind":"x","reason":""}')
+      parseRunEvent(
+        "1",
+        "connector_notice",
+        '{"step":1,"service":"drive","kind":"scope_missing","reason":"scope_missing"}',
+      ).kind,
+    ).toBe("event");
+    expect(
+      parseRunEvent("1", "connector_notice", '{"step":1,"service":"slack","kind":"x","reason":""}')
         .kind,
     ).toBe("invalid");
 
@@ -169,11 +181,14 @@ describe("connector_notice", () => {
       notice(2, "calendar", "service_disabled"),
       notice(3, "mail", "service_disabled"),
       notice(4, "calendar", "rate_limited"),
+      notice(5, "drive", "scope_missing"),
+      notice(6, "drive", "scope_missing"),
     ]);
     expect(state.connectorNotices.map((n) => `${n.service}:${n.kind}`)).toEqual([
       "calendar:service_disabled",
       "mail:service_disabled",
       "calendar:rate_limited",
+      "drive:scope_missing",
     ]);
   });
 

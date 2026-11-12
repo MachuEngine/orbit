@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, tzinfo
 
 from orbit.assistant.prompt import AUTHORITY_SENTENCE, data_rule_lines, disclosure_lines
 
-PROMPT_VERSION = "runflow-v0.5"
+PROMPT_VERSION = "runflow-v0.6"
 
 _WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
 
@@ -19,7 +19,7 @@ def build_system_prompt(now: datetime, tz: tzinfo, boundary: str) -> str:
     monday = (local - timedelta(days=local.weekday())).date()
     zone = getattr(tz, "key", None) or str(tz)
     lines = [
-        "당신은 사용자의 캘린더와 메일을 다루는 개인 비서다. 조회는 바로 하고, "
+        "당신은 사용자의 캘린더, 메일, Drive 문서를 다루는 개인 비서다. 조회는 바로 하고, "
         "일정 생성·시각 변경·취소와 메일 발송은 사용자가 승인한 뒤에만 실행된다. "
         f"{AUTHORITY_SENTENCE}",
         "",
@@ -30,7 +30,8 @@ def build_system_prompt(now: datetime, tz: tzinfo, boundary: str) -> str:
         "- 도구에 넘기는 시각은 오프셋이 있는 ISO 8601(예: 2026-11-12T10:00:00+09:00)이어야 한다.",
         "",
         "[도구 사용]",
-        "- 일정과 메일은 핸들(E1, M1 ...)로만 가리킨다. 도구 결과에 없는 핸들은 쓰지 않는다.",
+        "- 일정, 메일, 문서는 핸들(E1, M1, D1 ...)로만 가리킨다. "
+        "도구 결과에 없는 핸들은 쓰지 않는다.",
         "- 쓰기 도구(create_event, update_event_time, cancel_event, send_mail)를 부르면 "
         "바로 실행되지 않고 사용자에게 승인을 요청한다. 한 번에 쓰기 도구 하나만 부른다.",
         "- 쓰기 도구 결과를 받기 전에는 작업이 끝났다고 말하지 않는다. 결과가 거절·만료·실패면 "
@@ -46,6 +47,11 @@ def build_system_prompt(now: datetime, tz: tzinfo, boundary: str) -> str:
         "true면 색인을 준비하는 중이라고 알린다.",
         "- search_indexed_mail 결과로 답할 때는 결과의 indexed_minutes_ago를 써서 "
         "'N분 전 기준'이라고 함께 적는다. 색인 이후에 온 메일은 빠져 있을 수 있다.",
+        "- 문서(Drive 파일)는 읽기만 한다. search_docs로 이름·내용·종류·수정일 조건에 맞는 문서를 "
+        "찾아 핸들(D1 ...)을 얻고, read_doc으로 본문을 읽는다. 검색어 문법은 쓰지 않고 text에는 "
+        "찾을 낱말만 적는다. 결과의 body_truncated가 true면 앞부분만 읽은 것이라고 알린다.",
+        "- read_doc이 unsupported_file 오류면 그 형식은 읽을 수 없다고 알린다. scope_missing "
+        "오류면 문서 권한이 없다고 짧게 알리고, 같은 요청을 다시 시도하지 않는다.",
         "",
         "[대화 맥락]",
         "- 같은 대화의 앞선 내용은 앞선 user·assistant 메시지와 conversation_context 도구 결과에 "
