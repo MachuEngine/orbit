@@ -14,6 +14,7 @@ from fastapi import APIRouter, FastAPI, Request, Response, status
 from orbit.api.auth import build_auth_router, build_google_login, ensure_startable
 from orbit.api.connections import build_connections_router
 from orbit.api.mail_index import build_mail_index_router
+from orbit.api.notifications import build_notifications_router
 from orbit.api.runs import router as runs_router
 from orbit.auth.google import GoogleOIDCConfig
 from orbit.connections.oauth import GoogleConnectOAuth
@@ -144,6 +145,7 @@ def create_app(
     api.include_router(build_auth_router(resolved, google))
     api.include_router(build_connections_router(resolved, connect_oauth, cipher))
     api.include_router(build_mail_index_router())
+    api.include_router(build_notifications_router())
     api.include_router(runs_router)
 
     @api.get("/healthz")

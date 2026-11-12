@@ -17,12 +17,18 @@ from orbit.llm.types import ToolSpec
 from orbit.runflow.context import CONVERSATION_CONTEXT, context_tool_spec
 from orbit.runflow.docs_tool import DOC_TOOLS, doc_tool_specs
 from orbit.runflow.index_tool import SEARCH_INDEXED_MAIL, index_tool_spec
+from orbit.runflow.reminder_tool import CREATE_REMINDER, reminder_tool_spec
 
 CREATE_EVENT = "create_event"
 UPDATE_EVENT_TIME = "update_event_time"
 CANCEL_EVENT = "cancel_event"
 SEND_MAIL = "send_mail"
 WRITE_TOOLS = frozenset({CREATE_EVENT, UPDATE_EVENT_TIME, CANCEL_EVENT, SEND_MAIL})
+# 승인 없이 실행하는 도구(ADR-0021 §5). `create_reminder`는 Orbit 화면 안 알림만 만들고 외부로
+# 아무것도 보내지 않으므로 `WRITE_TOOLS`(승인·출처 분류 대상)에 넣지 않는다. 메일·문서 같은 데이터
+# 속 지시로 만들어졌더라도 외부 영향이 없고 사용자는 알림 목록에서 취소할 수 있다. 남발은
+# 프롬프트(사용자가 직접 요청할 때만)와 서버 상한(`MAX_PENDING_REMINDERS`)으로 막는다.
+LOCAL_TOOLS = frozenset({CREATE_REMINDER})
 READ_TOOLS = frozenset(
     {
         "list_events",
@@ -109,13 +115,18 @@ def write_tool_specs() -> tuple[ToolSpec, ...]:
 
 
 def run_tool_specs() -> tuple[ToolSpec, ...]:
-    """모델에 주는 도구: 읽기 4개(답 제출 제외), 대화 맥락 조회, 색인 메일 검색, 문서 2개, 쓰기 4개.
+    """모델에 주는 도구: 읽기 4개(답 제출 제외), 대화 맥락 조회, 색인 메일 검색, 문서 2개,
+    리마인더 1개, 쓰기 4개.
 
     평가 경로(`orbit.assistant.tools.tool_specs`)에는 색인 메일 검색과 문서 도구가 없다
-    (ADR-0019 §8, ADR-0020 §3).
+    (ADR-0019 §8, ADR-0020 §3). 리마인더 도구도 평가 경로에 없다(ADR-0021 §5).
     """
     reads = tuple(spec for spec in tool_specs() if spec.name in READ_TOOLS)
-    return reads + (context_tool_spec(), index_tool_spec(), *doc_tool_specs()) + write_tool_specs()
+    return (
+        reads
+        + (context_tool_spec(), index_tool_spec(), *doc_tool_specs(), reminder_tool_spec())
+        + write_tool_specs()
+    )
 
 
 def _check_keys(args: dict[str, Any], required: set[str], optional: set[str]) -> None:

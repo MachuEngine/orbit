@@ -161,6 +161,43 @@ describe("로그인 화면", () => {
   });
 });
 
+describe("알림", () => {
+  const arrived = {
+    notifications: [
+      {
+        id: "n1",
+        kind: "reminder",
+        title: "합성 보고서 제출",
+        due_at: "2026-11-12T01:00:00Z",
+        event_start: null,
+        read: false,
+        created_at: "2026-11-12T00:00:00Z",
+      },
+    ],
+    unread_count: 1,
+  };
+
+  it("채팅 헤더에 읽지 않은 수가 이름에 들어간 알림 버튼을 보인다", async () => {
+    stubApi((url) => (url === "/api/notifications" ? json(arrived) : json(signedIn)));
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "알림 1개" })).toBeInTheDocument();
+  });
+
+  it("알림을 읽다가 로그인이 끝났으면(401) 세션을 다시 확인해 로그인 화면으로 돌아간다", async () => {
+    let sessionCalls = 0;
+    stubApi((url) => {
+      if (url === "/api/notifications") return json({ detail: "unauthorized" }, 401);
+      if (url === "/api/session") {
+        sessionCalls += 1;
+        return json(sessionCalls === 1 ? signedIn : signedOut);
+      }
+      return json({}, 500);
+    });
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "개발용 로그인" })).toBeInTheDocument();
+  });
+});
+
 describe("채팅 화면", () => {
   it("빈 대화는 처음 할 일을 안내하고 입력창에는 이름표가 있다", async () => {
     stubApi(() => json(signedIn));

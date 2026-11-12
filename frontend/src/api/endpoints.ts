@@ -11,10 +11,15 @@ import {
   indexScopeSchema,
   indexStatusSchema,
   labelsResponseSchema,
+  notificationIdResponseSchema,
+  notificationSettingsSchema,
+  notificationsResponseSchema,
+  readAllResponseSchema,
   runSchema,
   sessionSchema,
   startConnectionResponseSchema,
   syncResponseSchema,
+  upcomingResponseSchema,
   type Approval,
   type ConnectionsResponse,
   type ConversationDetail,
@@ -26,6 +31,9 @@ import {
   type IndexScope,
   type IndexStatus,
   type MailLabel,
+  type NotificationItem,
+  type NotificationSettings,
+  type NotificationsResponse,
   type Run,
   type Session,
 } from "./schemas";
@@ -182,4 +190,64 @@ export async function syncIndexNow(
     schema: syncResponseSchema,
   });
   return response.queued;
+}
+
+// ---------------------------------------------------------------- 알림 (ADR-0021)
+
+/** 도착한 알림(최근순, 최대 50개)과 읽지 않은 전체 수. */
+export function getNotifications(
+  client: ApiClient = defaultClient,
+): Promise<NotificationsResponse> {
+  return client.request("GET", "/api/notifications", { schema: notificationsResponseSchema });
+}
+
+/** 예정된 알림(시각순). */
+export async function getUpcomingNotifications(
+  client: ApiClient = defaultClient,
+): Promise<NotificationItem[]> {
+  const response = await client.request("GET", "/api/notifications/upcoming", {
+    schema: upcomingResponseSchema,
+  });
+  return response.notifications;
+}
+
+export async function markNotificationRead(
+  id: string,
+  client: ApiClient = defaultClient,
+): Promise<void> {
+  await client.request("POST", `/api/notifications/${seg(id)}/read`, {
+    schema: notificationIdResponseSchema,
+  });
+}
+
+export async function markAllNotificationsRead(client: ApiClient = defaultClient): Promise<void> {
+  await client.request("POST", "/api/notifications/read-all", { schema: readAllResponseSchema });
+}
+
+/** 예정된 알림을 취소한다. 이미 도착했거나 취소됐으면 409(`conflict`)다. */
+export async function cancelNotification(
+  id: string,
+  client: ApiClient = defaultClient,
+): Promise<void> {
+  await client.request("DELETE", `/api/notifications/${seg(id)}`, {
+    schema: notificationIdResponseSchema,
+  });
+}
+
+export function getNotificationSettings(
+  client: ApiClient = defaultClient,
+): Promise<NotificationSettings> {
+  return client.request("GET", "/api/notification-settings", {
+    schema: notificationSettingsSchema,
+  });
+}
+
+export function putNotificationSettings(
+  body: NotificationSettings,
+  client: ApiClient = defaultClient,
+): Promise<NotificationSettings> {
+  return client.request("PUT", "/api/notification-settings", {
+    body,
+    schema: notificationSettingsSchema,
+  });
 }

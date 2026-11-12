@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-export type IconName = "info" | "warning" | "ban" | "success" | "error" | "clock";
+export type IconName = "info" | "warning" | "ban" | "success" | "error" | "clock" | "bell";
 
 const SHAPES: Record<IconName, ReactNode> = {
   info: (
@@ -31,6 +31,16 @@ const SHAPES: Record<IconName, ReactNode> = {
     <>
       <circle cx="10" cy="10" r="7.5" />
       <path d="m7.5 7.5 5 5M12.5 7.5l-5 5" strokeLinecap="round" />
+    </>
+  ),
+  bell: (
+    <>
+      <path
+        d="M5 14.5h10l-1.2-1.7V9a3.8 3.8 0 0 0-7.6 0v3.8z"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <path d="M8.4 16.8a1.8 1.8 0 0 0 3.2 0" strokeLinecap="round" />
     </>
   ),
   clock: (

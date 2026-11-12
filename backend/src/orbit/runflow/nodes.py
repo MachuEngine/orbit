@@ -58,6 +58,7 @@ from orbit.runflow.docs_tool import DOC_TOOLS, DocTools
 from orbit.runflow.index_tool import SEARCH_INDEXED_MAIL, IndexedMailSearch
 from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
 from orbit.runflow.prompt import build_system_prompt
+from orbit.runflow.reminder_tool import CREATE_REMINDER, ReminderTool
 from orbit.runflow.repo import get_approval_by_tool_call, get_tool_call, lock_run
 from orbit.runflow.state import RunState, validate_state
 from orbit.runflow.store import ActionsStoreAdapter
@@ -65,6 +66,7 @@ from orbit.runflow.summary import approval_summary
 from orbit.runflow.target import build_target
 from orbit.runflow.transcript import Transcript
 from orbit.runflow.write_tools import (
+    LOCAL_TOOLS,
     READ_TOOLS,
     WRITE_TOOLS,
     build_action,
@@ -411,13 +413,21 @@ class RunNodes:
                 continue
             if llm_id in done:
                 continue
-            if name not in READ_TOOLS:
+            if name not in READ_TOOLS and name not in LOCAL_TOOLS:
                 await self._store_tool_result(
                     ws, run_id, step, llm_id, name, {"error": "unknown_tool"}, is_error=True
                 )
                 continue
             if name == CONVERSATION_CONTEXT:
                 outcome = _context_outcome(call.get("arguments"), transcript.prior)
+            elif name == CREATE_REMINDER:
+                outcome = await ReminderTool(self._d.db, self._d.clock, self._d.tz).execute(
+                    call.get("arguments"),
+                    workspace_id=ws,
+                    run_id=run_id,
+                    step=step,
+                    llm_call_id=llm_id,
+                )
             elif name == SEARCH_INDEXED_MAIL:
                 outcome = await self._search_indexed(ws, call.get("arguments"), tools.workset, mail)
             elif name in DOC_TOOLS:

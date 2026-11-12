@@ -20,6 +20,7 @@ from orbit.core.ids import Uuid7Generator
 from orbit.crypto.envelope import EnvelopeCipher, EnvelopeError
 from orbit.db.session import AsyncDatabase
 from orbit.mailindex.store import purge_connection
+from orbit.notify.store import purge_connection_reminders
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ async def save_grant(
                 # 실패했거나 끝나지 않은 이전 연결은 새 연결로 바꾼다.
                 await store.mark_dead(s, workspace_id, existing.id, status="revoked", now=now)
                 await purge_connection(s, workspace_id, existing.id)  # 색인 데이터도 함께 지운다
+                await purge_connection_reminders(s, workspace_id, existing.id)  # 일정 알림도
             await store.insert_connection(
                 s,
                 connection_id=connection_id,
@@ -166,7 +168,8 @@ async def disconnect(
     """Google 철회를 시도한 뒤 결과와 상관없이 로컬을 `revoked`로 바꾸고 토큰을 지운다.
 
     연결 데이터 삭제 전파(D7-4, ADR-0019 §7): `revoked`로 바꾸는 같은 트랜잭션에서 그 연결의
-    `index_scope`·`sync_state`·`source_item`·`chunk`를 지운다.
+    `index_scope`·`sync_state`·`source_item`·`chunk`와 일정 알림(`event_reminder`, ADR-0021 §7)을
+    지운다. 대화 리마인더는 연결과 무관해 남는다.
     """
     async with db.workspace_session(workspace_id) as s:
         row = await store.get_connection(s, workspace_id, connection_id)
@@ -197,4 +200,5 @@ async def disconnect(
     async with db.workspace_session(workspace_id) as s:
         await store.mark_dead(s, workspace_id, connection_id, status="revoked", now=clock.now())
         await purge_connection(s, workspace_id, connection_id)
+        await purge_connection_reminders(s, workspace_id, connection_id)
     return DisconnectResult(True, "revoked", outcome)

@@ -19,7 +19,8 @@ def _tables(owner_url: str) -> set[str]:
                     " 'approval', 'execution', 'checkpoints', 'checkpoint_blobs',"
                     " 'checkpoint_writes', 'checkpoint_migrations', 'auth_session',"
                     " 'app_user', 'membership', 'connection', 'index_scope',"
-                    " 'sync_state', 'source_item', 'chunk'))"
+                    " 'sync_state', 'source_item', 'chunk', 'notification',"
+                    " 'notification_setting'))"
                 )
             )
             return {r[0] for r in rows}
@@ -49,12 +50,14 @@ def _due_function_exists(owner_url: str) -> bool:
     engine = create_engine(owner_url)
     try:
         with engine.connect() as conn:
-            return (
-                conn.execute(
-                    text("SELECT 1 FROM pg_proc WHERE proname = 'mail_index_due_connections'")
-                ).first()
-                is not None
-            )
+            found = conn.execute(
+                text(
+                    "SELECT count(*) FROM pg_proc WHERE proname IN"
+                    " ('mail_index_due_connections', 'event_reminder_due_connections',"
+                    " 'notification_expired_workspaces')"
+                )
+            ).scalar_one()
+            return int(found) == 3
     finally:
         engine.dispose()
 
@@ -84,6 +87,8 @@ def test_upgrade_downgrade_upgrade(owner_url: str) -> None:
         "sync_state",
         "source_item",
         "chunk",
+        "notification",
+        "notification_setting",
         "procrastinate_jobs",
         "procrastinate_events",
         "procrastinate_workers",
