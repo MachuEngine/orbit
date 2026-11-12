@@ -143,3 +143,42 @@ describe("parseRunEvent", () => {
     expect(parseRunEvent("", "status", '{"status":"running"}')).toEqual({ kind: "invalid" });
   });
 });
+
+describe("connector_notice", () => {
+  const notice = (seq: number, service: "calendar" | "mail", kind: string, reason = "r") =>
+    ({
+      seq,
+      type: "connector_notice",
+      payload: { step: 1, service, kind, reason },
+    }) satisfies RunEvent;
+
+  it("이벤트 형태를 검증하고 같은 service+kind는 한 번만 담는다", () => {
+    const parsed = parseRunEvent(
+      "1",
+      "connector_notice",
+      '{"step":1,"service":"calendar","kind":"service_disabled","reason":"accessNotConfigured"}',
+    );
+    expect(parsed.kind).toBe("event");
+    expect(
+      parseRunEvent("1", "connector_notice", '{"step":1,"service":"drive","kind":"x","reason":""}')
+        .kind,
+    ).toBe("invalid");
+
+    const state = fold([
+      notice(1, "calendar", "service_disabled"),
+      notice(2, "calendar", "service_disabled"),
+      notice(3, "mail", "service_disabled"),
+      notice(4, "calendar", "rate_limited"),
+    ]);
+    expect(state.connectorNotices.map((n) => `${n.service}:${n.kind}`)).toEqual([
+      "calendar:service_disabled",
+      "mail:service_disabled",
+      "calendar:rate_limited",
+    ]);
+  });
+
+  it("새 run을 시작하면 비운다", () => {
+    const state = fold([notice(1, "mail", "quota_exceeded")]);
+    expect(runViewReducer(state, { type: "run_started" }).connectorNotices).toEqual([]);
+  });
+});

@@ -17,6 +17,8 @@ export interface RequestOptions<S extends z.ZodType | undefined> {
   body?: unknown;
   /** 응답 본문 검증 스키마. 없으면 본문을 읽지 않는다. */
   schema?: S;
+  /** 요청에 더할 헤더(예: `Idempotency-Key`). CSRF·Accept·Content-Type은 덮어쓰지 못한다. */
+  headers?: Record<string, string>;
 }
 
 export function readCookie(name: string): string | undefined {
@@ -59,7 +61,7 @@ export class ApiClient {
     path: string,
     options: RequestOptions<S> = {},
   ): Promise<S extends z.ZodType ? z.output<S> : undefined> {
-    const headers: Record<string, string> = { Accept: "application/json" };
+    const headers: Record<string, string> = { ...options.headers, Accept: "application/json" };
     if (!SAFE_METHODS.has(method)) {
       const token = this.getCookie(CSRF_COOKIE);
       if (token !== undefined) headers[CSRF_HEADER] = token;

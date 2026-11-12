@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ChatScreen } from "./chat/ChatScreen";
 import { ConnectionsScreen } from "./connections/ConnectionsScreen";
 import {
@@ -12,7 +12,7 @@ import { useSession } from "./session/useSession";
 type View = "chat" | "connections";
 
 export function App() {
-  const { state, methods, signIn, signOut, loginError } = useSession();
+  const { state, methods, signIn, signOut, recheck, loginError } = useSession();
   // Google 연결을 마치고 돌아오면 주소에 결과가 있다. 처음 한 번만 읽고 주소에서 지운다.
   const [connectionResult] = useState<ConnectionResult | null>(() =>
     readConnectionResult(window.location.search),
@@ -21,6 +21,8 @@ export function App() {
   useEffect(() => {
     clearConnectionResultFromUrl();
   }, []);
+
+  const onStreamClosed = useCallback(() => void recheck(), [recheck]);
 
   switch (state.phase) {
     case "loading":
@@ -47,6 +49,7 @@ export function App() {
       ) : (
         <ChatScreen
           onSignOut={() => void signOut()}
+          onStreamClosed={onStreamClosed}
           onOpenConnections={() => {
             setView("connections");
           }}

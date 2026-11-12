@@ -18,6 +18,7 @@ step 멱등(장애 후 노드 재실행)
 """
 
 import json
+import logging
 import uuid
 from typing import Annotated, Any
 
@@ -29,9 +30,10 @@ from orbit.actions.executor import ApprovalRejected, ApprovalView, execute_appro
 from orbit.actions.hashing import args_hash, canonical_args
 from orbit.actions.models import WriteAction
 from orbit.actions.provenance import classify_emails
-from orbit.assistant.tools import ReadOnlyTools, ToolInputError
+from orbit.assistant.tools import CALENDAR_TOOLS, ReadOnlyTools, ToolInputError
 from orbit.assistant.workset import WorkSet
 from orbit.connectors.contracts import CalendarConnector, MailConnector
+from orbit.connectors.errors import CONNECTOR_NOTICE_KINDS
 from orbit.llm.interface import LLMError
 from orbit.llm.types import LLMRequest, LLMResponse
 from orbit.records.approvals import create_tool_call_with_approval
@@ -71,6 +73,9 @@ _ACTION_ADAPTER: TypeAdapter[WriteAction] = TypeAdapter(
 def orbit_tool_call_id(run_id: uuid.UUID, step: int, index: int) -> uuid.UUID:
     """(run, step, 호출 순번)에서 결정적으로 만든 `tool_call` id. 노드를 재실행해도 같은 값이다."""
     return uuid.uuid5(TOOL_CALL_NAMESPACE, f"{run_id}:{step}:{index}")
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionNotSettled(RuntimeError):
@@ -162,6 +167,43 @@ class RunNodes:
             clock=self._d.clock,
         )
 
+    async def _notice_connector_error(
+        self,
+        ws: uuid.UUID,
+        run_id: uuid.UUID,
+        step: int,
+        tool_name: str,
+        kind: str,
+        reason: str,
+    ) -> None:
+        """커넥터 오류 원인을 알리는 이벤트를 남긴다. 같은 (step, service, kind)는 한 번만."""
+        if kind not in CONNECTOR_NOTICE_KINDS:
+            return
+        service = "calendar" if tool_name in CALENDAR_TOOLS else "mail"
+        async with self._d.db.workspace_session(ws) as s:
+            if await lock_run(s, ws, run_id) is None:
+                return
+            existing = await list_events(s, workspace_id=ws, run_id=run_id)
+            if any(
+                e.type == "connector_notice"
+                and e.payload.get("step") == step
+                and e.payload.get("service") == service
+                and e.payload.get("kind") == kind
+                for e in existing
+            ):
+                return
+            await append_event(
+                s,
+                workspace_id=ws,
+                run_id=run_id,
+                type="connector_notice",
+                payload={"step": step, "service": service, "kind": kind, "reason": reason},
+                clock=self._d.clock,
+            )
+        logger.warning(
+            "커넥터 오류: run_id=%s service=%s kind=%s reason=%s", run_id, service, kind, reason
+        )
+
     async def _transcript(self, ws: uuid.UUID, run_id: uuid.UUID) -> Transcript:
         async with self._d.db.workspace_session(ws) as s:
             rows = await list_messages(s, workspace_id=ws, run_id=run_id)
@@ -172,6 +214,7 @@ class RunNodes:
             status = await lock_run(s, ws, run_id)
             if status is not None and status not in TERMINAL_RUN_STATUSES:
                 await self._transition(s, ws, run_id, "failed", kind)
+                logger.warning("run 실패: run_id=%s error_kind=%s", run_id, kind)
         return self._out({"next_node": "done"})
 
     async def _store_tool_result(
@@ -342,6 +385,11 @@ class RunNodes:
                 )
                 continue
             outcome = await tools.execute(name, call.get("arguments"))  # type: ignore[arg-type]
+            if outcome.connector_error is not None:
+                # 결과 저장보다 먼저 남긴다. 저장 직후 중단돼도 재실행이 알림을 다시 만들지 않으면서
+                # 빠뜨리지도 않는다.
+                kind, reason = outcome.connector_error
+                await self._notice_connector_error(ws, run_id, step, name, kind, reason)
             await self._store_tool_result(
                 ws,
                 run_id,

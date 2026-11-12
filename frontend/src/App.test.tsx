@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -39,7 +39,26 @@ const signedIn = {
   ...methods,
 };
 
+/** 테스트용 EventSource. `fail()`은 브라우저가 재접속을 포기한 상태(CLOSED)를 만든다. */
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+  readyState = 1;
+  onerror: (() => void) | null = null;
+  addEventListener = vi.fn();
+  close = vi.fn(() => {
+    this.readyState = 2;
+  });
+  constructor() {
+    FakeEventSource.instances.push(this);
+  }
+  fail() {
+    this.readyState = 2;
+    this.onerror?.();
+  }
+}
+
 afterEach(() => {
+  FakeEventSource.instances = [];
   vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
 });
@@ -190,5 +209,157 @@ describe("채팅 화면", () => {
     expect(runAttempts).toBe(2);
     // 접수된 메시지는 일반 사용자 메시지로 남는다.
     expect(screen.getByText("내일 일정 알려 줘")).toBeInTheDocument();
+  });
+
+  it("재시도는 같은 Idempotency-Key를 쓰고, 성공한 뒤 새 메시지는 새 키를 쓴다", async () => {
+    const keys: (string | undefined)[] = [];
+    stubApi((url, init) => {
+      if (url === "/api/session") return json(signedIn);
+      if (url === "/api/runs") {
+        keys.push(new Headers(init?.headers).get("Idempotency-Key") ?? undefined);
+        return keys.length === 1
+          ? json({}, 500)
+          : json({ run_id: `r${keys.length}`, conversation_id: "c1", status: "queued" }, 202);
+      }
+      return json({}, 404);
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    render(<App />);
+    const input = await screen.findByLabelText("메시지");
+    await userEvent.type(input, "첫 메시지{Enter}");
+    await userEvent.click(await screen.findByRole("button", { name: "다시 전송" }));
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+    });
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(keys[1]).toBe(keys[0]);
+
+    await userEvent.type(input, "둘째 메시지{Enter}");
+    await waitFor(() => {
+      expect(keys).toHaveLength(3);
+    });
+    expect(keys[2]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("같은 키로 다른 본문이라는 409는 새로 보내라고 안내하고 키를 버린다", async () => {
+    const keys: (string | null)[] = [];
+    stubApi((url, init) => {
+      if (url === "/api/session") return json(signedIn);
+      if (url === "/api/runs") {
+        keys.push(new Headers(init?.headers).get("Idempotency-Key"));
+        return keys.length === 1
+          ? json({ detail: "idempotency_conflict" }, 409)
+          : json({ run_id: "r2", conversation_id: "c1", status: "queued" }, 202);
+      }
+      return json({}, 404);
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    render(<App />);
+    const input = await screen.findByLabelText("메시지");
+    await userEvent.type(input, "안녕{Enter}");
+    expect(await screen.findByText(/같은 요청을 다시 보내지 못했습니다/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "다시 전송" }));
+    await waitFor(() => {
+      expect(keys).toHaveLength(2);
+    });
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
+  it("실시간 연결이 닫히면 세션을 다시 확인해 만료됐으면 로그인 화면으로 돌아간다", async () => {
+    let expired = false;
+    stubApi((url) => {
+      if (url === "/api/session") return json(expired ? signedOut : signedIn);
+      if (url === "/api/runs") {
+        return json({ run_id: "r1", conversation_id: "c1", status: "queued" }, 202);
+      }
+      return json({}, 404);
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    render(<App />);
+    await userEvent.type(await screen.findByLabelText("메시지"), "안녕{Enter}");
+    await waitFor(() => {
+      expect(FakeEventSource.instances).toHaveLength(1);
+    });
+    expired = true;
+    act(() => {
+      FakeEventSource.instances[0]?.fail(); // 서버가 닫았고 재접속은 401이라 브라우저가 포기한 상태
+    });
+    expect(await screen.findByRole("button", { name: "개발용 로그인" })).toBeInTheDocument();
+    expect(FakeEventSource.instances[0]?.readyState).toBe(2);
+  });
+
+  it("연결이 닫힌 뒤 다시 렌더링해도 세션 확인은 한 번만 한다", async () => {
+    let sessionCalls = 0;
+    stubApi((url) => {
+      if (url === "/api/session") {
+        sessionCalls += 1;
+        return json(signedIn);
+      }
+      if (url === "/api/runs") {
+        return json({ run_id: "r1", conversation_id: "c1", status: "succeeded" }, 200);
+      }
+      return json({}, 404);
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    render(<App />);
+    const input = await screen.findByLabelText("메시지");
+    expect(screen.getByRole("heading", { level: 1, name: `${PRODUCT_NAME} 대화` })).toBeVisible();
+    await userEvent.type(input, "안녕{Enter}");
+    await waitFor(() => {
+      expect(FakeEventSource.instances).toHaveLength(1);
+    });
+    const before = sessionCalls;
+    act(() => {
+      FakeEventSource.instances[0]?.fail();
+    });
+    await screen.findByText(/연결이 끊겼습니다/);
+    await userEvent.type(input, "다음 입력"); // 입력할 때마다 다시 렌더링된다
+    await waitFor(() => {
+      expect(sessionCalls).toBe(before + 1);
+    });
+    expect(sessionCalls).toBe(before + 1);
+  });
+
+  it("실시간 연결이 닫혀도 세션이 살아 있으면 채팅 화면에 머문다", async () => {
+    stubApi((url) => {
+      if (url === "/api/session") return json(signedIn);
+      if (url === "/api/runs") {
+        return json({ run_id: "r1", conversation_id: "c1", status: "queued" }, 202);
+      }
+      return json({}, 404);
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    render(<App />);
+    await userEvent.type(await screen.findByLabelText("메시지"), "안녕{Enter}");
+    await waitFor(() => {
+      expect(FakeEventSource.instances).toHaveLength(1);
+    });
+    act(() => {
+      FakeEventSource.instances[0]?.fail();
+    });
+    expect(await screen.findByText(/연결이 끊겼습니다/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
+  });
+
+  it("로그아웃하면 열려 있던 실시간 연결을 닫는다", async () => {
+    stubApi((url) => {
+      if (url === "/api/session") return json(signedIn);
+      if (url === "/api/runs") {
+        return json({ run_id: "r1", conversation_id: "c1", status: "queued" }, 202);
+      }
+      if (url === "/api/logout") return new Response(null, { status: 204 });
+      return json({}, 404);
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    render(<App />);
+    await userEvent.type(await screen.findByLabelText("메시지"), "안녕{Enter}");
+    await waitFor(() => {
+      expect(FakeEventSource.instances).toHaveLength(1);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "로그아웃" }));
+    expect(await screen.findByRole("button", { name: "개발용 로그인" })).toBeInTheDocument();
+    expect(FakeEventSource.instances[0]?.close).toHaveBeenCalled();
   });
 });

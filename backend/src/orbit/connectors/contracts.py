@@ -24,9 +24,10 @@ ORBIT_EXECUTION_HEADER = "X-Orbit-Execution-Id"
 class ConnectorError(Exception):
     """계약이 던지는 모든 오류의 기반."""
 
-    def __init__(self, message: str = "") -> None:
+    def __init__(self, message: str = "", *, reason: str = "") -> None:
         super().__init__(message)
         self.message = message
+        self.reason = reason  # 이미 정제된 안전한 사유 코드만 담는다(없으면 "")
 
 
 class NotFound(ConnectorError):
@@ -44,8 +45,10 @@ class PreconditionFailed(ConnectorError):
 class RateLimited(ConnectorError):
     """호출 한도 초과."""
 
-    def __init__(self, *, retry_after_s: float | None = None, message: str = "") -> None:
-        super().__init__(message)
+    def __init__(
+        self, *, retry_after_s: float | None = None, message: str = "", reason: str = ""
+    ) -> None:
+        super().__init__(message, reason=reason)
         self.retry_after_s = retry_after_s
 
 

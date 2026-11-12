@@ -119,6 +119,18 @@ def build_worker_app(
     return app
 
 
+QUIET_LOGGERS = ("httpx", "httpcore")
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def configure_logging(level: str) -> None:
+    """워커 로그 수준과 형식을 정한다. 로그에는 ID와 종류만 남긴다(본문·주소·토큰 금지)."""
+    logging.basicConfig(level=level.upper(), format=LOG_FORMAT)
+    # 이 로거들은 요청 URL 전체(검색어 `q=` 포함)를 INFO/DEBUG로 남긴다. 수준과 무관하게 고정한다.
+    for name in QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def main() -> None:
     """개발용 워커 진입점: `python -m orbit.runflow.worker`.
 
@@ -140,6 +152,7 @@ def main() -> None:
     from orbit.runflow.deps import ConnectorResolver, GoogleConnectorResolver, SimConnectorResolver
 
     settings = get_settings()
+    configure_logging(settings.log_level)
     if settings.env != "dev":
         raise SystemExit("개발용 워커는 ORBIT_ENV=dev가 필요하다")
     if settings.connector_mode == "sim" and settings.sim_snapshot_path is None:

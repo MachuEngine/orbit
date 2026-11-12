@@ -19,13 +19,9 @@ from orbit.connectors.contracts import (
     CalendarConnector,
     CalendarEvent,
     ConnectorError,
-    InvalidQuery,
     MailConnector,
-    NotFound,
-    PermissionRevoked,
-    RateLimited,
-    TransientError,
 )
+from orbit.connectors.errors import connector_error_kind
 from orbit.llm.types import ToolSpec
 
 LIST_EVENTS = "list_events"
@@ -33,6 +29,9 @@ GET_EVENT = "get_event"
 SEARCH_MAIL = "search_mail"
 READ_MAIL = "read_mail"
 SUBMIT_ANSWER = "submit_answer"
+
+CALENDAR_TOOLS = frozenset({LIST_EVENTS, GET_EVENT})
+MAIL_TOOLS = frozenset({SEARCH_MAIL, READ_MAIL})
 
 EXTERNAL_OPEN = "<external_content>"
 EXTERNAL_CLOSE = "</external_content>"
@@ -141,6 +140,8 @@ class ToolOutcome:
     content: str  # 모델에 돌려줄 JSON 문자열
     structured: dict[str, Any] | None = None  # 유효한 `submit_answer`일 때만
     is_error: bool = False
+    # 커넥터가 낸 오류일 때만 (종류, 안전한 사유 코드). 모델에 가는 `content`에는 넣지 않는다.
+    connector_error: tuple[str, str] | None = None
 
 
 def _dump(value: Any) -> str:
@@ -184,18 +185,8 @@ def _error_kind(exc: Exception) -> str:
         return exc.kind
     if isinstance(exc, UnknownHandleError):
         return "unknown_handle"
-    if isinstance(exc, InvalidQuery):
-        return "invalid_query"
-    if isinstance(exc, NotFound):
-        return "not_found"
-    if isinstance(exc, RateLimited):
-        return "rate_limited"
-    if isinstance(exc, PermissionRevoked):
-        return "permission_revoked"
-    if isinstance(exc, TransientError):
-        return "transient_error"
     if isinstance(exc, ConnectorError):
-        return "connector_error"
+        return connector_error_kind(exc)
     return "invalid_arguments"
 
 
@@ -233,7 +224,9 @@ class ReadOnlyTools:
                 raise ToolInputError("invalid_arguments")
             return ToolOutcome(_dump(await handler(arguments)))
         except (ToolInputError, UnknownHandleError, ConnectorError) as exc:
-            return ToolOutcome(_dump({"error": _error_kind(exc)}), is_error=True)
+            kind = _error_kind(exc)
+            info = (kind, exc.reason) if isinstance(exc, ConnectorError) else None
+            return ToolOutcome(_dump({"error": kind}), is_error=True, connector_error=info)
 
     # ------------------------------------------------------------ 캘린더
 

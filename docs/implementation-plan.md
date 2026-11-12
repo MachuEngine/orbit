@@ -119,6 +119,14 @@
 4. 로그아웃·세션 만료 시 열린 SSE 연결 종료
 5. 개발 환경 정리: 실행 스크립트(`scripts/dev-run.sh`), 워커 로그 설정(현재 출력 없음)
 
+진행 기록 (2026-11-12, 완료)
+- 오류 원인: `ConnectorError.reason`(안전한 사유 코드) → `connector_error_kind`(`service_disabled`, `quota_exceeded` 등) → 읽기 도구 오류 시 run_event `connector_notice {step, service, kind, reason}` → 화면 고정 문구. 모델에는 종류만 가고, 프롬프트(`runflow-v0.2`)는 원인을 추측하지 말라고 한다. run 실패 문구도 `error_kind`별로 나눴다. 쓰기 경로의 `error_kind`는 바꾸지 않았다.
+- 응답 표시: 제목(`#`→h2, 화면 h1은 시각적으로 숨김), 인라인 코드, 링크는 `텍스트 (주소)` 글자로만(a·href 없음), 이미지 문법은 원문 그대로. 굵게 안의 링크도 해석한다.
+- 멱등 키: `Idempotency-Key`(UUID), 마이그레이션 0007(`run.idempotency_key`, `request_hash`, 워크스페이스별 부분 유일 인덱스), advisory lock으로 직렬화. 같은 키·같은 본문은 200과 기존 run(현재 상태), 다른 본문은 409. 화면은 재시도에 같은 키를 쓴다.
+- SSE: 첫 회차와 이후 `sse_session_recheck_seconds`(기본 2초)마다 세션을 다시 확인해 폐기·만료면 닫는다. 화면은 스트림이 닫히면 세션을 한 번 확인해 없으면 로그인 화면으로.
+- 워커 로그: `ORBIT_LOG_LEVEL`(기본 INFO). run 실패·커넥터 오류는 ID·종류·사유 코드만 남긴다. `httpx`·`httpcore`는 요청 URL(메시지 ID·검색어)을 남기므로 WARNING으로 고정.
+- 확인: DB 포함 `scripts/check.sh`(pytest 1429·vitest 180), v0 dev 회귀 luna(low) 1회 72.2%(CI 50.0–94.3, 6클러스터; 파일럿 B 3회 반복 75.9%와 같은 범위, 평가 경로 프롬프트는 바꾸지 않음), 실제 Google 계정으로 뉴스레터 요약 화면 확인(링크 a 요소 0개). `accessNotConfigured` 실응답 경로는 재현하지 않았다(모의 테스트로만 확인).
+
 #### 8단계. 대화 맥락 이어가기 (중간)
 1. 같은 대화(`conversation_id`)의 이전 run 메시지를 다음 run의 입력으로: 최근 N턴 원문 + 작업 집합 핸들 유지 + 오래된 턴 요약(D8-2). N·K는 `실험 중` 기본값으로 시작
 2. 핸들(E1, M3)이 대화 범위에서 유지되어 "그거 3시로 바꿔줘"가 동작

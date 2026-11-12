@@ -12,18 +12,21 @@
 """
 
 import asyncio
+import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
 import procrastinate
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import text
 
-from orbit.api.auth import current_workspace
+from orbit.api.auth import SESSION_COOKIE, current_workspace
+from orbit.auth.sessions import lookup_session
 from orbit.core.clock import Clock
 from orbit.core.config import Settings, get_llm_settings
 from orbit.core.ids import Uuid7Generator
@@ -103,13 +106,71 @@ def _job_args(ws: uuid.UUID, run_id: uuid.UUID) -> dict[str, str]:
 # ------------------------------------------------------------------ 런
 
 
+def _request_hash(body: CreateRunBody) -> str:
+    """같은 멱등 키의 재전송인지 가리는 해시. 메시지와 대화 ID만 본다."""
+    raw = json.dumps(
+        {
+            "message": body.message,
+            "conversation_id": None if body.conversation_id is None else str(body.conversation_id),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _parse_idempotency_key(raw: str | None) -> uuid.UUID | None:
+    if raw is None:
+        return None
+    try:
+        return uuid.UUID(raw.strip())
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Idempotency-Key는 UUID 형식이어야 한다"
+        ) from None
+
+
 @router.post("/runs", status_code=status.HTTP_201_CREATED)
-async def post_run(body: CreateRunBody, request: Request, ws: Workspace) -> dict[str, str]:
+async def post_run(
+    body: CreateRunBody,
+    request: Request,
+    response: Response,
+    ws: Workspace,
+    idempotency_key: Annotated[str | None, Header()] = None,
+) -> dict[str, str]:
     db, clock, ids = _db(request), _clock(request), _ids(request)
     settings: Settings = request.app.state.settings
+    ikey = _parse_idempotency_key(idempotency_key)
+    rhash = _request_hash(body) if ikey is not None else None
     async with db.workspace_session(ws) as s:
         if not await workspace_exists(s, ws):
             raise _not_found("워크스페이스")
+        if ikey is not None:
+            # 같은 (워크스페이스, 키)의 동시 요청을 트랜잭션 끝까지 직렬화한다. 뒤 요청은 앞 요청이
+            # 커밋한 뒤 run을 찾는다.
+            await s.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+                {"k": f"run-idem:{ws}:{ikey}"},
+            )
+            prior = (
+                await s.execute(
+                    text(
+                        "SELECT id, conversation_id, status, request_hash FROM run"
+                        " WHERE workspace_id = :ws AND idempotency_key = :k"
+                    ),
+                    {"ws": ws, "k": ikey},
+                )
+            ).first()
+            if prior is not None:
+                if prior[3] != rhash:
+                    raise HTTPException(status.HTTP_409_CONFLICT, "idempotency_key_reused")
+                # 재전송 응답의 status는 처음 응답 때 값이 아니라 지금 run의 상태다.
+                response.status_code = status.HTTP_200_OK
+                return {
+                    "run_id": str(prior[0]),
+                    "conversation_id": str(prior[1]),
+                    "status": str(prior[2]),
+                }
         conversation_id = body.conversation_id
         if conversation_id is None:
             conversation_id = ids.next()
@@ -137,6 +198,8 @@ async def post_run(body: CreateRunBody, request: Request, ws: Workspace) -> dict
             config_fingerprint=config_fingerprint(settings.llm_model_id, _llm_info()),
             clock=clock,
             ids=ids,
+            idempotency_key=ikey,
+            request_hash=rhash,
         )
         await append_message(
             s,
@@ -203,9 +266,22 @@ async def stream_events(
         if await get_run(s, workspace_id=ws, run_id=run_id) is None:
             raise _not_found("run")
 
+    session_token = request.cookies.get(SESSION_COOKIE) or ""
+    clock = _clock(request)
+
+    recheck = timedelta(seconds=settings.sse_session_recheck_seconds)
+
     async def generate() -> AsyncIterator[bytes]:
         position = cursor
+        last_checked: datetime | None = None
         while True:
+            # 첫 회차와, 주입된 시계 기준 마지막 확인 뒤 재확인 주기가 지났을 때 세션을 다시
+            # 확인한다. 로그아웃·만료 뒤에는 스트림을 닫는다.
+            now = clock.now()
+            if last_checked is None or now - last_checked >= recheck:
+                if await lookup_session(db, session_token, clock=clock) is None:
+                    return
+                last_checked = now
             # 상태를 먼저 읽고 이벤트를 읽는다. 종료 상태를 본 뒤 남은 이벤트를 모두 보내야 한다.
             async with db.workspace_session(ws) as s:
                 run = await get_run(s, workspace_id=ws, run_id=run_id)

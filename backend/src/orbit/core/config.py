@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     user_timezone: str = "Asia/Seoul"
     approval_ttl_seconds: float = Field(default=900.0, gt=0)  # D5-5 후보값 15분
     sse_poll_interval_seconds: float = Field(default=0.25, gt=0)
+    sse_session_recheck_seconds: float = Field(default=2.0, ge=0)
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"  # ORBIT_LOG_LEVEL
 
     # Google 로그인 (ADR-0016 §1)
     google_client_id: str | None = None
@@ -60,6 +62,11 @@ class Settings(BaseSettings):
     google_connect_redirect_uri: str | None = None
     data_key_file: str | None = None
     connector_mode: Literal["sim", "google"] = "sim"
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _upper_log_level(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
 
     @field_validator(
         "google_client_id",

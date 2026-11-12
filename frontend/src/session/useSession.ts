@@ -73,5 +73,18 @@ export function useSession() {
     }
   }, []);
 
-  return { state, methods, signIn, signOut, loginError };
+  /**
+   * 로그인 중에 세션이 아직 유효한지 다시 확인한다(SSE가 닫혔을 때 등).
+   * 세션이 없다고 확인된 경우에만 로그인 화면으로 돌리고, 서버에 닿지 못한 경우는 상태를 바꾸지 않는다.
+   */
+  const recheck = useCallback(async () => {
+    try {
+      const session = await getSession();
+      if (!session.authenticated) setState({ phase: "signed_out" });
+    } catch (error: unknown) {
+      if (isApiError(error) && error.kind === "unauthorized") setState({ phase: "signed_out" });
+    }
+  }, []);
+
+  return { state, methods, signIn, signOut, recheck, loginError };
 }
