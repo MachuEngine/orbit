@@ -1,0 +1,50 @@
+# 이미지 빌드 컨텍스트에서 제외한다. 비밀·비공개 문서·실험 결과가 이미지에 들어가지 않게 한다 (ADR-0022).
+.git
+.gitignore
+.github
+.claude
+.venv
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+
+# 비밀·환경 값
+secrets
+**/secrets
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+**/*.pem
+**/*.key
+**/*.p12
+**/credentials*.json
+**/token*.json
+
+# 비공개 문서, 실험 결과, 평가 데이터
+private-docs
+runs
+eval
+spikes
+data
+**/*.jsonl
+**/*.jsonl.gz
+**/*.mbox
+**/*.eml
+
+# 문서: 프론트 빌드가 쓰는 브랜드 토큰·로고(docs/brand)만 넣는다
+docs/*
+!docs/brand
+docs/brand/preview
+
+# 프론트엔드 설치·빌드 산출물(이미지 안에서 다시 만든다)
+frontend/node_modules
+frontend/dist
+
+# 백엔드 개발용 파일(테스트, 로컬 개발 환경 값)
+backend/tests
+backend/dev.env
+backend/compose.yml

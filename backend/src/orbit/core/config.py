@@ -25,6 +25,8 @@
   `ORBIT_MAIL_INDEX_QUERY_STALE_SECONDS`(질의 직전 동기화 기준, 기본 5분),
   `ORBIT_MAIL_INDEX_QUERY_SYNC_TIMEOUT_SECONDS`(질의 직전 동기화 시간 상한, 기본 10초).
   OpenAI 임베더의 키와 주소는 `LLMSettings`의 `ORBIT_OPENAI_API_KEY`·`ORBIT_OPENAI_BASE_URL`을 쓴다.
+- 데모 배포(ADR-0022): `ORBIT_EMBEDDED_WORKER`(기본 false, true면 API 프로세스 안에서 작업 워커를
+  함께 돌린다), `ORBIT_STATIC_DIR`(빌드한 프론트 디렉터리. 있으면 `/api` 밖의 경로를 서빙한다).
 """
 
 import uuid
@@ -76,6 +78,10 @@ class Settings(BaseSettings):
     mail_index_query_stale_seconds: float = Field(default=300.0, ge=0)
     mail_index_query_sync_timeout_seconds: float = Field(default=10.0, gt=0)
 
+    # 데모 배포 (ADR-0022)
+    embedded_worker: bool = False  # true면 API 프로세스가 작업 워커를 같은 이벤트 루프에서 돌린다
+    static_dir: str | None = None  # 있으면 /api 밖의 경로에 이 디렉터리(빌드한 프론트)를 서빙한다
+
     @field_validator("log_level", mode="before")
     @classmethod
     def _upper_log_level(cls, value: object) -> object:
@@ -89,6 +95,7 @@ class Settings(BaseSettings):
         "session_signing_key_file",
         "google_connect_redirect_uri",
         "data_key_file",
+        "static_dir",
         mode="before",
     )
     @classmethod

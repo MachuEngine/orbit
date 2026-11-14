@@ -2,6 +2,10 @@
 
 `ORBIT_ENV=dev`이거나 Google 로그인 설정이 모두 있을 때만 시작한다(`orbit.api.auth`, ADR-0016).
 시계·ID 생성기와 Google HTTP 전송은 주입할 수 있고(테스트), 기본은 시스템 시계다.
+
+데모 배포(ADR-0022): `ORBIT_EMBEDDED_WORKER`이면 lifespan이 작업 워커를 같은 이벤트 루프에서 띄우고,
+`ORBIT_STATIC_DIR`이면 `/api` 밖의 경로에 빌드한 프론트를 서빙한다. prod는 시작할 때 환경·DB 역할·
+마이그레이션 리비전을 점검하고(`orbit.api.startup`), 접근 로그에서 쿼리 문자열을 지운다.
 """
 
 import logging
@@ -16,8 +20,11 @@ from orbit.api.connections import build_connections_router
 from orbit.api.mail_index import build_mail_index_router
 from orbit.api.notifications import build_notifications_router
 from orbit.api.runs import router as runs_router
+from orbit.api.startup import ensure_database_ready, ensure_deploy_environment
+from orbit.api.static import install_static
 from orbit.auth.google import GoogleOIDCConfig
 from orbit.connections.oauth import GoogleConnectOAuth
+from orbit.core.accesslog import install_access_log_filter
 from orbit.core.clock import Clock, SystemClock
 from orbit.core.config import Settings, get_settings
 from orbit.core.ids import Uuid7Generator
@@ -27,6 +34,8 @@ from orbit.mailindex.deps import MailIndexDeps
 from orbit.mailindex.embedding import NullEmbedder
 from orbit.records.jobs import make_procrastinate_app
 from orbit.runflow.deps import ConnectorResolver, GoogleConnectorResolver, SimConnectorResolver
+from orbit.runflow.embedded import EmbeddedWorker
+from orbit.runflow.worker import WorkerSetupError
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +117,9 @@ def create_app(
     resolver: ConnectorResolver | None = None,
 ) -> FastAPI:
     resolved = settings if settings is not None else get_settings()
+    install_access_log_filter()
     ensure_startable(resolved)  # dev가 아니고 Google 로그인 설정이 빠졌으면 시작하지 않는다
+    ensure_deploy_environment(resolved)
     resolved_clock: Clock = clock if clock is not None else SystemClock()
     resolved_ids = ids if ids is not None else Uuid7Generator(resolved_clock)
     connect_oauth, cipher = build_connections(resolved, resolved_clock, google_transport)
@@ -117,21 +128,32 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         url = resolved.database_url.get_secret_value()
         db = AsyncDatabase.from_url(url)
-        app.state.db = db
-        app.state.jobs = make_procrastinate_app(url)
-        # 색인 범위 관리용 의존성. API 프로세스는 임베딩을 하지 않는다(워커가 동기화한다).
-        app.state.mail_index = MailIndexDeps(
-            db=db,
-            clock=resolved_clock,
-            ids=resolved_ids,
-            embedder=NullEmbedder(),
-            jobs=app.state.jobs,
-        )
-        app.state.resolver = resolver or _default_resolver(resolved, db, resolved_clock, cipher)
+        worker: EmbeddedWorker | None = None
         try:
+            await ensure_database_ready(db, resolved)  # prod에서만 점검한다
+            app.state.db = db
+            app.state.jobs = make_procrastinate_app(url)
+            # 색인 범위 관리용 의존성. API 프로세스는 임베딩을 하지 않는다(워커가 동기화한다).
+            app.state.mail_index = MailIndexDeps(
+                db=db,
+                clock=resolved_clock,
+                ids=resolved_ids,
+                embedder=NullEmbedder(),
+                jobs=app.state.jobs,
+            )
+            app.state.resolver = resolver or _default_resolver(resolved, db, resolved_clock, cipher)
+            if resolved.embedded_worker:
+                try:
+                    worker = await EmbeddedWorker.start(
+                        resolved, db=db, clock=resolved_clock, ids=resolved_ids
+                    )
+                except WorkerSetupError as exc:
+                    raise RuntimeError(str(exc)) from None
             yield
         finally:
-            closer = getattr(app.state.resolver, "aclose", None)
+            if worker is not None:  # 워커를 먼저 멈춘다
+                await worker.aclose()
+            closer = getattr(getattr(app.state, "resolver", None), "aclose", None)
             if closer is not None:
                 await closer()
             await db.dispose()
@@ -161,4 +183,6 @@ def create_app(
         return {"status": "ok"}
 
     app.include_router(api)
+    if resolved.static_dir:
+        install_static(app, resolved.static_dir)  # catch-all이므로 라우트 등록 뒤에 둔다
     return app

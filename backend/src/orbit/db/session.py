@@ -15,8 +15,11 @@
 - 워크스페이스 없이 DB에 닿는 경로는 `ping()`, `unscoped_auth_session_lookup()`,
   `unscoped_auth_session_profile()`, `unscoped_login_upsert_user()`,
   `unscoped_mail_index_due_connections()`, `unscoped_event_reminder_due_connections()`,
-  `unscoped_notification_expired_workspaces()`뿐이다.
-  `ping()` 말고는 모두 `SECURITY DEFINER` 함수 호출만 한다(마이그레이션 0004·0005·0008·0010).
+  `unscoped_notification_expired_workspaces()`뿐이다. 시작 점검 두 가지
+  (`unscoped_startup_role_report()`, `unscoped_alembic_version()`)는 사용자 데이터가 아니라
+  DB 카탈로그와 `alembic_version`만 읽는다(ADR-0022 §3).
+  `ping()`과 시작 점검 말고는 모두 `SECURITY DEFINER` 함수 호출만 한다
+  (마이그레이션 0004·0005·0008·0010).
   새 경로가 필요하면 이름에 `unscoped`를 넣는다.
 """
 
@@ -24,11 +27,34 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import Session
+
+_ROLE_REPORT = text(
+    """
+    SELECT r.rolsuper,
+           r.rolbypassrls,
+           EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = r.oid),
+           EXISTS (SELECT 1 FROM pg_class c
+                    WHERE c.relowner = r.oid AND c.relkind IN ('r', 'p') AND c.relrowsecurity)
+      FROM pg_roles r
+     WHERE r.rolname = current_user
+    """
+)
+
+
+class RoleFlags(NamedTuple):
+    """접속 역할의 격리 속성(`orbit.api.startup.RoleReport`의 원본 값)."""
+
+    is_superuser: bool
+    bypasses_rls: bool
+    is_member_of_other_role: bool
+    owns_rls_table: bool
+
 
 _SET_WORKSPACE = text("SELECT set_config('app.workspace_id', :workspace_id, true)")
 
@@ -90,6 +116,23 @@ class AsyncDatabase:
         """워크스페이스 없이 DB 연결만 확인한다(헬스체크용). 사용자 데이터를 읽지 않는다."""
         async with self._engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+
+    async def unscoped_startup_role_report(self) -> RoleFlags:
+        """접속 역할(`current_user`)의 격리 속성을 카탈로그에서 읽는다(시작 점검용, ADR-0022 §3)."""
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(_ROLE_REPORT)).one()
+            await conn.rollback()
+        return RoleFlags(bool(row[0]), bool(row[1]), bool(row[2]), bool(row[3]))
+
+    async def unscoped_alembic_version(self) -> str | None:
+        """DB의 Alembic 리비전. 테이블이 없거나 읽을 권한이 없거나 행이 하나가 아니면 None이다."""
+        try:
+            async with self._engine.connect() as conn:
+                rows = (await conn.execute(text("SELECT version_num FROM alembic_version"))).all()
+                await conn.rollback()
+        except DBAPIError:
+            return None
+        return str(rows[0][0]) if len(rows) == 1 else None
 
     async def unscoped_auth_session_lookup(self, token_hash: str) -> tuple[Any, ...] | None:
         """토큰 해시로 세션을 찾는다. 워크스페이스를 모르는 상태에서 쓰는 유일한 조회 경로다.

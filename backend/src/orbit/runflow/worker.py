@@ -25,6 +25,10 @@ from typing import Any
 import procrastinate
 from procrastinate.retry import BaseRetryStrategy, RetryDecision
 
+from orbit.core.clock import Clock
+from orbit.core.config import Settings
+from orbit.core.ids import Uuid7Generator
+from orbit.db.session import AsyncDatabase
 from orbit.mailindex.jobs import (
     MAIL_INDEX_QUEUE,
     MAIL_INDEX_TICK,
@@ -68,7 +72,9 @@ __all__ = [
     "SYNC_EVENT_REMINDERS",
     "SYNC_MAIL_INDEX",
     "WorkerPool",
+    "WorkerSetupError",
     "build_worker_app",
+    "build_worker_deps",
 ]
 
 RUN_QUEUE = "default"  # run 실행·재개, 승인 만료, 멈춘 작업 복구
@@ -337,57 +343,61 @@ def configure_logging(level: str) -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def main() -> None:
-    """개발용 워커 진입점: `python -m orbit.runflow.worker`.
+class WorkerSetupError(RuntimeError):
+    """워커 의존성을 만들 설정이 모자라거나 잘못됐다. 메시지에는 환경 변수 이름만 담는다."""
 
-    LLM은 `ORBIT_LLM_*`·`ORBIT_OPENROUTER_API_KEY` 설정으로, 커넥터는 개발용 Sim 스냅샷
-    (`ORBIT_SIM_SNAPSHOT_PATH`)으로, `ORBIT_CONNECTOR_MODE=google`이면 워크스페이스의 활성 Google
-    연결(`GoogleConnectorResolver`, KEK는 `ORBIT_DATA_KEY_FILE`)로 만든다.
+
+def build_worker_deps(
+    settings: Settings,
+    *,
+    db: AsyncDatabase,
+    clock: Clock,
+    ids: Uuid7Generator | None = None,
+) -> RunDeps:
+    """워커가 쓰는 `RunDeps`를 설정에서 조립한다. 별도 프로세스 워커와 내장 워커가 같이 쓴다.
+
+    LLM은 `ORBIT_LLM_*`·`ORBIT_OPENROUTER_API_KEY` 설정으로, 커넥터는 Sim 스냅샷
+    (`ORBIT_SIM_SNAPSHOT_PATH`) 또는 `ORBIT_CONNECTOR_MODE=google`이면 워크스페이스의 활성 Google
+    연결(`GoogleConnectorResolver`, KEK는 `ORBIT_DATA_KEY_FILE`)로 만든다. 설정이 모자라면
+    `WorkerSetupError`다. `db`는 호출자가 소유한다(닫는 일도 호출자가 한다).
     """
     from zoneinfo import ZoneInfo
 
     from pydantic import ValidationError
     from sqlalchemy.engine import make_url
 
-    from orbit.core.clock import SystemClock
-    from orbit.core.config import get_llm_settings, get_settings
-    from orbit.core.ids import Uuid7Generator
+    from orbit.core.config import get_llm_settings
     from orbit.crypto.envelope import EnvelopeCipher, EnvelopeError, load_kek_from_file
-    from orbit.db.session import AsyncDatabase
     from orbit.llm.factory import build_llm
     from orbit.mailindex.deps import MailIndexDeps
     from orbit.mailindex.embedding import build_embedder
     from orbit.runflow.deps import ConnectorResolver, GoogleConnectorResolver, SimConnectorResolver
 
-    settings = get_settings()
-    configure_logging(settings.log_level)
-    if settings.env != "dev":
-        raise SystemExit("개발용 워커는 ORBIT_ENV=dev가 필요하다")
     if settings.connector_mode == "sim" and settings.sim_snapshot_path is None:
-        raise SystemExit("sim 모드 워커는 ORBIT_SIM_SNAPSHOT_PATH가 필요하다")
+        raise WorkerSetupError("sim 모드 워커는 ORBIT_SIM_SNAPSHOT_PATH가 필요하다")
     try:
         llm_settings = get_llm_settings()
     except ValidationError:
-        raise SystemExit(
+        raise WorkerSetupError(
             "LLM 설정이 없어 워커를 시작하지 않는다. 필요한 환경 변수: ORBIT_LLM_MODEL_ID, "
             "ORBIT_LLM_PROVIDER_ORDER, ORBIT_OPENROUTER_API_KEY. provider가 openai이면 "
             "ORBIT_LLM_PROVIDER=openai와 ORBIT_OPENAI_API_KEY (backend/dev.env 참고)"
         ) from None
     url = settings.database_url.get_secret_value()
-    clock = SystemClock()
-    db = AsyncDatabase.from_url(url)
     resolver: ConnectorResolver
     if settings.connector_mode == "google":
         missing = settings.missing_connection_settings()
         if missing:
-            raise SystemExit("google 모드 워커에 필요한 설정이 없다: " + ", ".join(missing))
+            raise WorkerSetupError("google 모드 워커에 필요한 설정이 없다: " + ", ".join(missing))
         assert settings.data_key_file is not None  # noqa: S101 (missing 검사로 보장)
         assert settings.google_client_id is not None  # noqa: S101
         assert settings.google_client_secret is not None  # noqa: S101
         try:
-            cipher = EnvelopeCipher(load_kek_from_file(settings.data_key_file))
+            cipher = EnvelopeCipher(
+                load_kek_from_file(settings.data_key_file, strict_permissions=settings.env != "dev")
+            )
         except EnvelopeError as exc:
-            raise SystemExit(str(exc)) from None
+            raise WorkerSetupError(str(exc)) from None
         resolver = GoogleConnectorResolver(
             db=db,
             cipher=cipher,
@@ -402,12 +412,12 @@ def main() -> None:
     try:
         embedder = build_embedder(settings, llm_settings)
     except ValueError as exc:
-        raise SystemExit(f"{exc} (테스트·Sim이면 ORBIT_EMBEDDING_PROVIDER=fake)") from None
-    ids = Uuid7Generator(clock)
-    deps = RunDeps(
+        raise WorkerSetupError(f"{exc} (테스트·Sim이면 ORBIT_EMBEDDING_PROVIDER=fake)") from None
+    resolved_ids = ids if ids is not None else Uuid7Generator(clock)
+    return RunDeps(
         db=db,
         clock=clock,
-        ids=ids,
+        ids=resolved_ids,
         llm=build_llm(llm_settings),
         resolver=resolver,
         tz=ZoneInfo(settings.user_timezone),
@@ -416,13 +426,35 @@ def main() -> None:
         mail_index=MailIndexDeps(
             db=db,
             clock=clock,
-            ids=ids,
+            ids=resolved_ids,
             embedder=embedder,
             sync_interval=timedelta(seconds=settings.mail_index_sync_interval_seconds),
             query_stale=timedelta(seconds=settings.mail_index_query_stale_seconds),
             query_sync_timeout_s=settings.mail_index_query_sync_timeout_seconds,
         ),
     )
+
+
+def main() -> None:
+    """개발용 워커 진입점: `python -m orbit.runflow.worker`.
+
+    별도 프로세스 워커는 개발용이므로 `ORBIT_ENV=dev`가 필요하다. 데모 배포는 API 프로세스 안의
+    내장 워커(`ORBIT_EMBEDDED_WORKER`, `orbit.runflow.embedded`)를 쓴다(ADR-0022).
+    """
+    from orbit.core.clock import SystemClock
+    from orbit.core.config import get_settings
+
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    if settings.env != "dev":
+        raise SystemExit("개발용 워커는 ORBIT_ENV=dev가 필요하다")
+    url = settings.database_url.get_secret_value()
+    clock = SystemClock()
+    db = AsyncDatabase.from_url(url)
+    try:
+        deps = build_worker_deps(settings, db=db, clock=clock)
+    except WorkerSetupError as exc:
+        raise SystemExit(str(exc)) from None
     app = build_worker_app(url, deps)
 
     async def serve() -> None:
