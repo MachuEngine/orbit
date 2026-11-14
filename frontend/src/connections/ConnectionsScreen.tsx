@@ -4,6 +4,7 @@ import type { Connection } from "../api/schemas";
 import { PRODUCT_NAME } from "../brand";
 import { Icon } from "../ui/Icon";
 import { Logo } from "../ui/Logo";
+import { Envelope } from "../ui/illustrations/Envelope";
 import {
   CONNECTED_MESSAGE,
   DOCS_ADDED_MESSAGE,
@@ -126,7 +127,7 @@ export function ConnectionsScreen({
   };
 
   return (
-    <main className="conn">
+    <main className="conn paper-texture">
       <header className="conn-header">
         <Logo className="conn-logo" />
         <button type="button" className="btn btn-secondary" onClick={onBack}>
@@ -163,7 +164,11 @@ export function ConnectionsScreen({
               </p>
             )}
             {state.data.connections.length === 0 ? (
-              <section className="conn-card" aria-labelledby="conn-none">
+              <section
+                className="conn-card conn-empty crop paper-texture"
+                aria-labelledby="conn-none"
+              >
+                <Envelope className="conn-empty-art" />
                 <h2 id="conn-none">Google 계정</h2>
                 <p>
                   연결된 계정이 없습니다. 연결하면 {PRODUCT_NAME}이 메일과 일정을 대신 살펴볼 수
@@ -262,19 +267,19 @@ function ConnectionCard({
     wasConfirming.current = confirming;
   }, [confirming]);
   return (
-    <section className="conn-card" aria-labelledby={`conn-${item.id}`}>
+    <section className="conn-card crop paper-texture" aria-labelledby={`conn-${item.id}`}>
       <h2 id={`conn-${item.id}`}>Google 계정</h2>
       <p className={`note ${active ? "tone-success" : "tone-error"}`}>
         <Icon name={active ? "success" : "error"} />
         <span>{active ? "연결됨" : "연결에 문제가 있습니다. 다시 연결해 주세요."}</span>
       </p>
-      <p>
-        <span className="conn-label">계정</span> {item.account_email}
+      <p className="conn-account num">
+        <span className="label">계정</span> {item.account_email}
       </p>
       {active && labels.length > 0 && (
-        <div>
-          <p className="conn-label">허용한 권한</p>
-          <ul className="conn-scopes">
+        <div className="conn-scope-block">
+          <p className="label">허용한 권한</p>
+          <ul className="conn-scopes table-rows">
             {labels.map((label) => (
               <li key={label}>{label}</li>
             ))}
@@ -306,7 +311,7 @@ function ConnectionCard({
       {active && <MailIndexSection connectionId={item.id} pollMs={pollMs} />}
       {confirming ? (
         <div
-          className="conn-confirm"
+          className="conn-confirm retro retro-hard"
           role="group"
           aria-label="연결 해제 확인"
           ref={confirmRef}

@@ -114,16 +114,21 @@ function ApprovalDetail({ approval, clock }: { approval: Approval; clock: Clock 
   }, []);
 
   return (
-    <section className="approval" aria-labelledby="approval-title" ref={root} tabIndex={-1}>
+    <section
+      className="approval retro retro-hard"
+      aria-labelledby="approval-title"
+      ref={root}
+      tabIndex={-1}
+    >
       <header className="approval-header">
         <h2 id="approval-title">{label?.name ?? "실행 전 확인"}</h2>
-        {isIrreversible(approval.tool_name) && (
-          <p className="approval-irreversible">
-            <Icon name="ban" />
-            <span>되돌릴 수 없음</span>
-          </p>
-        )}
       </header>
+      {isIrreversible(approval.tool_name) && (
+        <p className="approval-irreversible">
+          <Icon name="ban" />
+          <span>되돌릴 수 없음</span>
+        </p>
+      )}
       <p className="approval-lead">
         {isIrreversible(approval.tool_name)
           ? "내용을 확인해 주세요. 보낸 메일은 회수할 수 없습니다."

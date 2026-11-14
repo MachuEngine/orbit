@@ -123,8 +123,11 @@ export function MailIndexSection({
         <>
           <form className="idx-form" onSubmit={submit}>
             <div className="idx-field">
-              <label htmlFor={`${uid}-label`}>{T.labelField}</label>
+              <label className="label" htmlFor={`${uid}-label`}>
+                {T.labelField}
+              </label>
               <select
+                className="input"
                 id={`${uid}-label`}
                 value={labelId}
                 disabled={busy || labels.phase !== "ready"}
@@ -142,8 +145,11 @@ export function MailIndexSection({
               </select>
             </div>
             <div className="idx-field">
-              <label htmlFor={`${uid}-days`}>{T.periodField}</label>
+              <label className="label" htmlFor={`${uid}-days`}>
+                {T.periodField}
+              </label>
               <select
+                className="input"
                 id={`${uid}-days`}
                 value={String(days)}
                 disabled={busy}
@@ -182,7 +188,7 @@ export function MailIndexSection({
           {index.status.scopes.length === 0 ? (
             <p className="conn-hint">{T.noScopes}</p>
           ) : (
-            <ul className="idx-scopes" aria-label={T.scopeListLabel}>
+            <ul className="idx-scopes table-rows" aria-label={T.scopeListLabel}>
               {index.status.scopes.map((scope) => (
                 <ScopeItem
                   key={scope.id}
@@ -260,7 +266,7 @@ function ScopeItem({
     <li className="idx-scope">
       <div className="idx-scope-row">
         <span className="idx-scope-name">{name}</span>
-        <span className="conn-label">{windowLabel(scope.window_days)}</span>
+        <span className="label">{windowLabel(scope.window_days)}</span>
         <span className={`idx-state ${scope.synced ? "tone-success" : "tone-warning"}`}>
           <Icon name={scope.synced ? "success" : "clock"} />
           {scope.synced ? T.scopeDone : T.scopeWaiting}
@@ -280,7 +286,7 @@ function ScopeItem({
       </div>
       {confirming && (
         <div
-          className="conn-confirm"
+          className="conn-confirm retro retro-hard"
           role="group"
           aria-label={T.deleteConfirmLabel}
           ref={confirmRef}
@@ -318,11 +324,11 @@ function StatusBlock({
     <div className="idx-status">
       <dl className="idx-facts">
         <div>
-          <dt className="conn-label">{T.countLabel}</dt>
+          <dt className="label">{T.countLabel}</dt>
           <dd className="num">{status.indexed_mail_count.toLocaleString("ko-KR")}통</dd>
         </div>
         <div>
-          <dt className="conn-label">{T.lastSyncLabel}</dt>
+          <dt className="label">{T.lastSyncLabel}</dt>
           <dd>
             {last === null ? (
               T.neverSynced
@@ -336,10 +342,13 @@ function StatusBlock({
       </dl>
       <div role="status">
         {status.sync_queued ? (
-          <p className="note tone-info">
-            <Icon name="clock" />
-            <span>{T.syncing}</span>
-          </p>
+          <div className="idx-progress retro retro-hard">
+            <p className="note tone-info">
+              <Icon name="clock" />
+              <span>{T.syncing}</span>
+            </p>
+            <div className="progress progress-indeterminate" aria-hidden="true" />
+          </div>
         ) : status.status === "pending" && hasScopes ? (
           <p className="note tone-info">
             <Icon name="clock" />

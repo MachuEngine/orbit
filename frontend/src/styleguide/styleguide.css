@@ -1,0 +1,404 @@
+/* 스타일가이드 페이지 전용 레이아웃. 공용 컴포넌트는 styles/components.css에 있다. */
+
+.sg {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-7);
+}
+
+.sg-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+}
+
+.sg-h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+}
+
+.sg-section {
+  margin-bottom: var(--space-7);
+}
+
+.sg-h2 {
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-divider);
+  font-family: var(--font-body);
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+.sg-h3 {
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.sg-card .sg-h3,
+.sg-card-plain .sg-h3 {
+  margin-top: 0;
+}
+
+.sg-muted {
+  color: var(--color-text-muted);
+}
+
+.sg-measure {
+  max-width: var(--measure-body);
+}
+
+.sg-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.sg-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+
+.sg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sg-grid-windows {
+  /* 창이 행 높이만큼 늘어나 아래가 비어 보이지 않게 내용 높이만 차지한다. */
+  align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  margin-bottom: var(--space-5);
+}
+
+.sg-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.sg-pixel {
+  font-family: var(--font-pixel);
+  font-weight: var(--font-weight-regular);
+}
+
+/* 색 견본 */
+.sg-swatches {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 10rem), 1fr));
+  gap: var(--space-4);
+}
+
+.sg-swatch-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.sg-swatch {
+  display: block;
+  height: var(--space-6);
+  border: 1px solid var(--color-border);
+}
+
+.sg-surface {
+  padding: var(--space-4);
+}
+
+.sg-surface p {
+  margin: 0 0 var(--space-2);
+}
+
+/* 활성 항목 견본: 왼쪽 막대와 글자 색이 바탕별 링크 색(--link-color)을 따른다. */
+.sg-active {
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--link-color);
+  color: var(--link-color);
+}
+
+.sg-surface-dark {
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+}
+
+.sg-window-on-sheet {
+  padding: var(--space-5);
+}
+
+/* 버튼 메뉴 */
+.sg-menu-wrap {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sg-menu {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 12rem);
+}
+
+.sg-menu .btn {
+  justify-content: flex-start;
+}
+
+/* 카드 */
+.sg-card {
+  padding: var(--space-5);
+  background: var(--color-surface);
+}
+
+.sg-card.section-sheet {
+  background: var(--color-sheet);
+}
+
+.sg-card-plain {
+  padding-block: var(--space-2);
+}
+
+/* 입력창 */
+.sg-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  max-width: var(--measure-body);
+  margin-bottom: var(--space-3);
+}
+
+.sg-composer .input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+}
+
+/* 채팅 시안: 시트 판 위에 내 메시지는 박스 없이 오른쪽 점선 세로선, 비서 답변은 왼쪽 점선 세로선.
+ * 실제 화면은 chat/chat.css가 같은 모양을 그린다. */
+.sg-chat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: var(--measure-body);
+  padding: var(--space-4);
+}
+
+.sg-user {
+  align-self: flex-end;
+  max-width: 85%;
+  padding-right: var(--space-4);
+  border-right: 1px dashed var(--color-ink);
+  color: var(--color-on-paper);
+  font-size: var(--text-md);
+  line-height: var(--leading-body);
+}
+
+.sg-user p {
+  margin: 0;
+}
+
+.sg-chat .sg-tag-user,
+.sg-chat .sg-tag-assistant {
+  display: block;
+  width: fit-content;
+  margin-bottom: var(--space-1);
+}
+
+.sg-chat .sg-tag-user {
+  margin-left: auto;
+  background: var(--color-paper);
+  border-color: var(--color-ink);
+  color: var(--color-on-paper);
+}
+
+.sg-chat .sg-tag-assistant {
+  border-color: var(--color-ink);
+}
+
+.sg-assistant {
+  padding-left: var(--space-4);
+  border-left: 1px dashed var(--color-ink);
+  font-size: var(--text-md);
+  line-height: var(--leading-body);
+}
+
+.sg-assistant p {
+  margin: 0;
+}
+
+.sg-assistant ul {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.sg-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 텍스처·일러스트 */
+.sg-texture {
+  height: 8rem;
+  border: 1px solid var(--color-divider);
+}
+
+.sg-illust-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.sg-illust {
+  width: 100%;
+  max-width: 9rem;
+  height: auto;
+}
+
+.sg-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.sg-empty .sg-illust {
+  color: var(--color-on-paper);
+}
+
+/* 색 견본 배경: 토큰마다 한 줄이다. */
+.sg-swatch[data-token="bg"] {
+  background: var(--color-bg);
+}
+
+.sg-swatch[data-token="surface"] {
+  background: var(--color-surface);
+}
+
+.sg-swatch[data-token="surface-sunken"] {
+  background: var(--color-surface-sunken);
+}
+
+.sg-swatch[data-token="text"] {
+  background: var(--color-text);
+}
+
+.sg-swatch[data-token="text-muted"] {
+  background: var(--color-text-muted);
+}
+
+.sg-swatch[data-token="border"] {
+  background: var(--color-border);
+}
+
+.sg-swatch[data-token="divider"] {
+  background: var(--color-divider);
+}
+
+.sg-swatch[data-token="cell"] {
+  background: var(--color-cell);
+}
+
+.sg-swatch[data-token="accent"] {
+  background: var(--color-accent);
+}
+
+.sg-swatch[data-token="accent-on-paper"] {
+  background: var(--color-accent-on-paper);
+}
+
+.sg-swatch[data-token="focus"] {
+  background: var(--color-focus);
+}
+
+.sg-swatch[data-token="ink"] {
+  background: var(--color-ink);
+}
+
+.sg-swatch[data-token="paper"] {
+  background: var(--color-paper);
+}
+
+.sg-swatch[data-token="sheet"] {
+  background: var(--color-sheet);
+}
+
+.sg-swatch[data-token="sheet-deep"] {
+  background: var(--color-sheet-deep);
+}
+
+.sg-swatch[data-token="on-paper"] {
+  background: var(--color-on-paper);
+}
+
+.sg-swatch[data-token="on-paper-muted"] {
+  background: var(--color-on-paper-muted);
+}
+
+.sg-swatch[data-token="section-sand"] {
+  background: var(--color-section-sand);
+}
+
+.sg-swatch[data-token="section-tint"] {
+  background: var(--color-section-tint);
+}
+
+.sg-swatch[data-token="info"] {
+  background: var(--color-info);
+}
+
+.sg-swatch[data-token="warning"] {
+  background: var(--color-warning);
+}
+
+.sg-swatch[data-token="danger"] {
+  background: var(--color-danger);
+}
+
+.sg-swatch[data-token="success"] {
+  background: var(--color-success);
+}
+
+.sg-swatch[data-token="error"] {
+  background: var(--color-error);
+}
+
+.sg-swatch[data-token="paper-info"] {
+  background: var(--color-paper-info);
+}
+
+.sg-swatch[data-token="paper-warning"] {
+  background: var(--color-paper-warning);
+}
+
+.sg-swatch[data-token="paper-danger"] {
+  background: var(--color-paper-danger);
+}
+
+.sg-swatch[data-token="paper-success"] {
+  background: var(--color-paper-success);
+}
+
+.sg-swatch[data-token="paper-error"] {
+  background: var(--color-paper-error);
+}
+
+/* 종이 질감 견본: 질감은 .paper-texture(styles/components.css)가 그린다. */
+.sg-paper-sample {
+  min-height: calc(var(--space-6) * 3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-ink);
+  color: var(--color-on-paper);
+}

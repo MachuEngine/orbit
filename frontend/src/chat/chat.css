@@ -1,6 +1,10 @@
+/* 채팅 영역은 시트(웜 그레이) 바탕의 밝은 서피스다(base.css의 밝은 서피스 목록). 사이드바는 어두운 바탕 그대로다.
+ * 영역 안에 남는 어두운 요소(알림 패널)는 .surface-dark를 붙여 어두운 바탕용 값으로 되돌린다. */
 .chat {
   display: flex;
   flex-direction: column;
+  background: var(--color-sheet);
+  color: var(--color-on-paper);
   /* 모바일 주소창·가상 키보드로 높이가 바뀌어도 입력창이 가려지지 않게 동적 뷰포트를 쓴다. */
   height: 100dvh;
 }
@@ -12,31 +16,44 @@
   justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-divider);
+  border-bottom: 1px solid var(--color-ink);
 }
 
+.chat-header-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* 박스 버튼을 간격 없이 붙인다. 이웃한 테두리 1px이 겹치도록 -1px만큼 당긴다.
+ * 알림 버튼 뒤에 화면낭독기용 span이 끼어 있어 인접 형제(+)가 아니라 일반 형제(~)로 고른다. */
 .chat-header-actions {
   display: flex;
   margin-left: auto;
-  gap: var(--space-2);
 }
 
+.chat-header-actions > .btn ~ .btn {
+  margin-left: -1px;
+}
+
+/* 연결 필요 안내: 크롭마크 박스. 크롭마크는 .crop이 그린다. */
 .connection-banner {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  margin: var(--space-3) var(--space-4) 0;
   padding: var(--space-3) var(--space-4);
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-divider);
+  border: 1px solid var(--color-ink);
+  --crop-color: var(--color-ink);
 }
 
 .chat-logo {
   width: 6.25rem;
   height: 2.5rem;
-  color: var(--color-text);
+  color: var(--color-ink);
 }
 
 .chat-body {
@@ -64,11 +81,12 @@
   margin: 0 auto;
 }
 
+/* 시트 위에서는 ink 각진 그림자가 보인다. */
 .jump {
   position: absolute;
+  box-shadow: var(--shadow-hard);
   right: var(--space-4);
   bottom: var(--space-3);
-  box-shadow: var(--shadow-md);
 }
 
 /* 메시지 */
@@ -81,15 +99,35 @@
   list-style: none;
 }
 
+/* 빈 화면: 큰 제목과 그 아래 안내 문구(왼쪽 점선 세로선 안)만 둔다.
+ * 제목은 시각 전용 장식이라 aria-hidden이다. 화면낭독기에는 안내 문구만 읽힌다. */
 .messages-empty {
-  padding: var(--space-5) 0;
-  color: var(--color-text-muted);
+  width: 100%;
+  margin: var(--space-5) 0;
+}
+
+/* 빈 화면 제목: display(약 57px)는 크다는 피드백으로 3xl(2.5rem) 이하로 줄인다. 좁은 화면에서는 더 줄어든다.
+ * .display-ko와 같은 명시도라 .messages-empty를 붙여 순서와 관계없이 이긴다. */
+.messages-empty .messages-empty-title {
+  color: var(--color-on-paper);
+  font-size: var(--text-3xl);
+}
+
+@media (max-width: 40rem) {
+  .messages-empty .messages-empty-title {
+    font-size: var(--text-2xl);
+  }
+}
+
+.messages-empty-note {
+  margin-top: var(--space-4);
+  padding-left: var(--space-4);
+  border-left: 1px dashed var(--color-ink);
 }
 
 .message {
   max-width: 100%;
   padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-lg);
 }
 
 .message p {
@@ -104,14 +142,31 @@
   overflow-wrap: anywhere;
 }
 
-.message .md-url {
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
-  overflow-wrap: anywhere;
-  word-break: break-all;
+/* 링크: 코발트 밑줄. 실제 <a>가 아니라 글자 뒤에 주소를 보여 주는 표시다(D6-1).
+ * 주소는 inline-block이라 밑줄이 따라가지 않고, 길어도 칸 안에서 줄을 바꾼다. */
+.message .md-link {
+  text-decoration: underline;
+  text-decoration-color: var(--color-accent-on-paper);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.2em;
 }
 
+.message .md-url {
+  display: inline-block;
+  max-width: 100%;
+  font-size: var(--text-xs);
+  color: var(--color-on-paper-muted);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  vertical-align: bottom;
+}
+
+/* 인라인 코드: 1px ink 테두리의 작은 박스 */
 .message code {
+  padding: 0 var(--space-1);
+  background: var(--color-paper);
+  border: 1px solid var(--color-ink);
+  color: var(--color-on-paper);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   overflow-wrap: anywhere;
@@ -122,17 +177,52 @@
   padding-left: var(--space-5);
 }
 
+/* 보이는 태그: 화면낭독기가 읽는 이름("나", 제품 이름)을 그대로 보이게 한 것이다. */
+.message .message-tag {
+  display: block;
+  width: fit-content;
+  margin-bottom: var(--space-1);
+}
+
+/* 내 메시지: 시트 위에 박스 없이 오른쪽 정렬하고, 오른쪽 점선 세로선만 둔다(비서 답변 왼쪽 선과 대칭).
+ * 태그는 흰 박스에 ink 테두리, 글자는 한글이라 본문 글꼴이다. */
 .message-user {
   align-self: flex-end;
   max-width: 85%;
-  background: var(--color-accent);
-  color: var(--color-on-accent);
+  padding-block: var(--space-1);
+  padding-right: var(--space-4);
+  border-right: 1px dashed var(--color-ink);
+  color: var(--color-on-paper);
+  font-size: var(--text-md);
+  line-height: var(--leading-body);
 }
 
+.message-user > .message-tag {
+  margin-left: auto;
+}
+
+.message-user .message-tag {
+  background: var(--color-paper);
+  border-color: var(--color-ink);
+  color: var(--color-on-paper);
+}
+
+/* 비서 답변: 박스 없이 왼쪽 점선 세로선만 둔다. 태그는 검정 박스에 흰 모노 글자(.tag-mono)다. */
 .message-assistant {
   align-self: flex-start;
-  background: var(--color-surface);
-  border: 1px solid var(--color-divider);
+  padding-block: var(--space-1);
+  border-left: 1px dashed var(--color-ink);
+  font-size: var(--text-md);
+  line-height: var(--leading-body);
+}
+
+.message-assistant .message-tag {
+  border-color: var(--color-ink);
+}
+
+/* 처리 결과 노트: 박스 없이 아이콘과 글자 한 줄 */
+.messages > .note {
+  padding: 0 var(--space-4);
 }
 
 /* 처리하지 못한 요청 같은 상태 안내. 말풍선이 아니라 본문 옆 한 줄로 조용히 보인다. */
@@ -142,29 +232,33 @@
   gap: var(--space-2);
   padding: 0 var(--space-4);
   font-size: var(--text-sm);
-  color: var(--color-text-muted);
+  color: var(--color-on-paper-muted);
 }
 
 .message-notice .icon {
   margin-top: var(--space-1);
 }
 
-.message-unsent {
-  position: relative;
-  margin-bottom: var(--space-4);
-}
-
-.message-meta {
-  position: absolute;
-  right: 0;
-  top: 100%;
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
+/* 전송 중·실패 메타: 아래쪽 작은 글자. 글자 모양은 .label이 맡는다. 시트 위라 색은 on-paper-muted, 실패는 paper-error다. */
+.message .message-meta {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  margin-left: auto;
+  color: var(--color-on-paper-muted);
   white-space: nowrap;
 }
 
+.message .message-meta .icon {
+  width: var(--text-sm);
+  height: var(--text-sm);
+}
+
 .message-unsent[data-send-status="failed"] .message-meta {
-  color: var(--color-error);
+  border-left-color: var(--tone-error);
+  color: var(--tone-error);
 }
 
 /* 응답을 기다리는 동안 자리를 먼저 잡아 두어, 응답이 들어와도 아래 요소가 튀지 않는다. */
@@ -174,41 +268,15 @@
   align-items: center;
 }
 
-.dots {
-  display: inline-flex;
-  gap: var(--space-1);
-}
-
-.dots span {
-  width: var(--space-2);
-  height: var(--space-2);
-  border-radius: var(--radius-full);
-  background: var(--color-text-muted);
-  animation: dot var(--motion-base) var(--ease-standard) infinite alternate;
-}
-
-.dots span:nth-child(2) {
-  animation-delay: var(--motion-fast);
-}
-
-.dots span:nth-child(3) {
-  animation-delay: calc(var(--motion-fast) * 2);
-}
-
-@keyframes dot {
-  from {
-    opacity: 0.3;
-  }
-  to {
-    opacity: 1;
-  }
+/* 응답 작성 중 점: ink 네모 3개. 어두운 바탕용 accent는 시트 위에서 대비 1.6이라 쓰지 않는다. 움직임은 모션 줄이기 설정에서 멈춘다. */
+.message-working .loading-dots span {
+  background: var(--color-ink);
 }
 
 /* 아래쪽: 상태 + 입력창 */
 .chat-footer {
   padding: var(--space-2) var(--space-4) var(--space-3);
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-divider);
+  border-top: 1px solid var(--color-ink);
 }
 
 .status-bar {
@@ -233,35 +301,43 @@
   gap: var(--space-2);
 }
 
+/* 입력창: 종이 바탕 + ink 테두리 + 어두운 글자. 시트 위에서 border 색 테두리는 대비 2.95라 쓰지 않는다.
+ * 포커스 링은 ink이고(밝은 서피스 목록), 포커스·오류 상태의 테두리 색은 공용 .input보다 명시도를 높여 덮는다. */
+.chat .composer-input,
+.chat .composer-input:focus-visible {
+  background: var(--color-paper);
+  border-color: var(--color-ink);
+  color: var(--color-on-paper);
+}
+
+.chat .composer-input[aria-invalid="true"] {
+  border-color: var(--color-paper-error);
+}
+
+.chat .composer-input::placeholder {
+  color: var(--color-on-paper-muted);
+}
+
 .composer-input {
   flex: 1;
+  width: auto;
   min-width: 0;
-  min-height: var(--control-height);
   max-height: 40dvh;
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  line-height: var(--leading-heading);
   resize: none;
   /* 지원하는 브라우저에서는 입력 길이에 맞춰 높이가 늘어난다. */
   field-sizing: content;
 }
 
-.composer-input[aria-invalid="true"] {
-  border-color: var(--color-error);
-}
-
 .composer-hint {
   margin-top: var(--space-1);
   font-size: var(--text-xs);
-  color: var(--color-text-muted);
+  color: var(--color-on-paper-muted);
 }
 
 .composer-error {
   margin-top: var(--space-2);
   font-size: var(--text-sm);
-  color: var(--color-error);
+  color: var(--tone-error);
 }
 
 .composer-error .btn {

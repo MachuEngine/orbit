@@ -1,8 +1,12 @@
+/* 로그인·로딩·서버 연결 오류 화면은 시트 바탕의 밝은 서피스다(base.css의 밝은 서피스 목록).
+ * 카드는 종이 바탕 + ink 테두리 + 검정 단색 그림자다. */
 .login {
   display: grid;
   place-items: center;
   min-height: 100dvh;
   padding: var(--space-5);
+  background: var(--color-sheet);
+  color: var(--color-on-paper);
 }
 
 .login-card {
@@ -12,16 +16,16 @@
   width: 100%;
   max-width: 24rem;
   padding: var(--space-6);
-  background: var(--color-surface);
-  border: 1px solid var(--color-divider);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  background: var(--color-paper);
+  border: 1px solid var(--color-ink);
+  box-shadow: var(--shadow-hard);
+  color: var(--color-on-paper);
 }
 
 .login-logo {
   width: 10rem;
   height: 4rem;
-  color: var(--color-text);
+  color: var(--color-ink);
 }
 
 .login-card .btn {
@@ -33,9 +37,17 @@
   text-decoration: none;
 }
 
+/* 오류: 아이콘과 문구를 함께 둔다. 색은 종이 위 의미 색(paper-error)이다. */
 .login-error {
-  color: var(--color-error);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--tone-error);
   font-size: var(--text-sm);
+}
+
+.login-error .icon {
+  margin-top: var(--space-1);
 }
 
 /* 알림 영역은 비어 있어도 화면에 남겨 두어야 내용이 생길 때 화면낭독기가 읽는다. 비어 있을 때 생기는 간격만 뺀다. */

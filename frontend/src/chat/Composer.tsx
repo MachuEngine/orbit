@@ -36,7 +36,7 @@ export function Composer({
         <textarea
           id="composer-input"
           ref={inputRef}
-          className="composer-input"
+          className="input composer-input"
           rows={1}
           aria-describedby={describedBy}
           aria-invalid={failed}

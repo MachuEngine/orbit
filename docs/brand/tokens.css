@@ -1,30 +1,46 @@
-/* 확정 (2026-11-11, 개발자 선택): 흑연 팔레트 + IBM Plex Sans KR.
+/* 레트로 다크 + 코발트·웜 그레이 팔레트 (2026-11-14 색상 전면 리뉴얼, brand-guide 8절). 다크 전용이다.
  * tokens.json과 같은 값을 유지한다. 값을 바꾸면 두 파일을 같은 커밋에서 바꾸고 대비표를 다시 계산한다.
  * UI 코드는 색·글꼴 값을 여기 정의한 토큰으로만 쓴다.
  */
 :root {
-  color-scheme: light dark;
-  --color-bg: #F4F5F6;
-  --color-surface: #FFFFFF;
-  --color-text: #17191C;
-  --color-text-muted: #51565D;
-  --color-border: #7E848C;
-  --color-divider: #DEE0E3;
-  --color-accent: #2E3640;
-  --color-on-accent: #FFFFFF;
-  --color-focus: #0B63CE;
-  --color-info: #1F5F99;
-  --color-warning: #8A5100;
-  --color-danger: #B3261E;
-  --color-success: #1E7A3C;
-  --color-error: #B3261E;
+  color-scheme: dark;
+  --color-bg: #0F131B;
+  --color-surface: #1B2230;
+  --color-surface-sunken: #141A24;
+  --color-text: #F4F2EC;
+  --color-text-muted: #A4ABB8;
+  --color-border: #7C8596;
+  --color-divider: rgba(164, 171, 184, 0.26);
+  --color-cell: rgba(164, 171, 184, 0.1);
+  --color-accent: #9DB4FF;
+  --color-accent-on-paper: #2244BC;
+  --color-focus: #F4F2EC;
+  --color-ink: #4A5568;
+  --color-paper: #FFFFFF;
+  --color-sheet: #E8E5DE;
+  --color-sheet-deep: #DAD6CC;
+  --color-on-paper: #1B2230;
+  --color-on-paper-muted: #3E4757;
+  --color-section-sand: #D9CFB4;
+  --color-section-tint: #C9D4F5;
+  --color-info: #7FD0E0;
+  --color-warning: #F0B44D;
+  --color-danger: #FF5C5C;
+  --color-success: #3DBE7C;
+  --color-error: #FF5C5C;
+  --color-paper-info: #0A4A5A;
+  --color-paper-warning: #5C3500;
+  --color-paper-danger: #7F1610;
+  --color-paper-success: #0F4D26;
+  --color-paper-error: #7F1610;
 
-  --font-body: "IBM Plex Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-body: "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --font-display: "Inter Tight", "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --font-mono: "JetBrains Mono", "Pretendard", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-pixel: "Galmuri11", "JetBrains Mono", monospace;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
-  --font-weight-bold: 700;
 
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
@@ -32,8 +48,12 @@
   --text-lg: 1.125rem;
   --text-xl: 1.375rem;
   --text-2xl: 1.75rem;
+  --text-3xl: 2.5rem;
+  --text-display: clamp(3rem, 8vw, 6rem);
   --leading-body: 1.7;
   --leading-heading: 1.35;
+  --leading-display: 0.8;
+  --leading-display-ko: 1.05;
   --tracking-body: 0;
   --tracking-heading: 0;
   --measure-body: 44em;
@@ -46,64 +66,11 @@
   --space-6: 2rem;
   --space-7: 3rem;
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-full: 9999px;
-
-  --shadow-sm: 0 1px 2px rgba(23, 25, 28, 0.08);
-  --shadow-md: 0 4px 12px rgba(23, 25, 28, 0.12);
+  --shadow-hard: 3px 3px 0 0 #4A5568;
 
   --motion-fast: 120ms;
   --motion-base: 200ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --color-bg: #16181B;
-    --color-surface: #1E2125;
-    --color-text: #ECEEF0;
-    --color-text-muted: #A9AEB5;
-    --color-border: #747A83;
-    --color-divider: #2E3237;
-    --color-accent: #D4D9DF;
-    --color-on-accent: #14171A;
-    --color-focus: #6AA8FF;
-    --color-info: #8DB8F0;
-    --color-warning: #F0B44D;
-    --color-danger: #FF8F85;
-    --color-success: #62CF8C;
-    --color-error: #FF8F85;
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
-  }
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --color-bg: #16181B;
-  --color-surface: #1E2125;
-  --color-text: #ECEEF0;
-  --color-text-muted: #A9AEB5;
-  --color-border: #747A83;
-  --color-divider: #2E3237;
-  --color-accent: #D4D9DF;
-  --color-on-accent: #14171A;
-  --color-focus: #6AA8FF;
-  --color-info: #8DB8F0;
-  --color-warning: #F0B44D;
-  --color-danger: #FF8F85;
-  --color-success: #62CF8C;
-  --color-error: #FF8F85;
-
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConversationListState } from "./useConversationList";
 import { conversationTitle, formatLastActivity } from "./format";
+import { Icon } from "../ui/Icon";
 import "./conversations.css";
 
 export const CONVERSATION_PANEL_ID = "conversation-panel";
@@ -91,12 +92,12 @@ export function ConversationPanel({
       <div className="conversation-head">
         <h2 className="conversation-heading">대화</h2>
         {drawer && (
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
+          <button type="button" className="btn btn-ink" onClick={onClose}>
             닫기
           </button>
         )}
       </div>
-      <button type="button" className="btn btn-primary" disabled={busy} onClick={onNew}>
+      <button type="button" className="btn btn-ink" disabled={busy} onClick={onNew}>
         새 대화
       </button>
       {loadError !== null && (
@@ -104,17 +105,29 @@ export function ConversationPanel({
           {loadError}
         </p>
       )}
-      {list.status === "loading" && <p className="conversation-note">불러오는 중입니다.</p>}
+      {list.status === "loading" && (
+        <p className="conversation-note conversation-loading">
+          불러오는 중입니다.
+          <span className="loading-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+        </p>
+      )}
       {list.status === "error" && (
         <div className="conversation-note">
-          <p className="tone-error">대화 목록을 불러오지 못했습니다.</p>
+          <p className="note tone-error">
+            <Icon name="error" />
+            대화 목록을 불러오지 못했습니다.
+          </p>
           <button type="button" className="btn btn-secondary" onClick={onRetry}>
             다시 불러오기
           </button>
         </div>
       )}
       {list.status === "ready" && list.items.length === 0 && (
-        <p className="conversation-note">아직 대화가 없습니다. 첫 요청을 보내 보세요.</p>
+        <p className="conversation-note rule-left">아직 대화가 없습니다. 첫 요청을 보내 보세요.</p>
       )}
       {list.items.length > 0 && (
         <ul className="conversation-list">
@@ -159,16 +172,18 @@ export function ConversationPanel({
         aria-hidden="true"
         onClick={onClose}
       />
-      <div
-        id={CONVERSATION_PANEL_ID}
-        ref={panelRef}
-        className="conversation-panel conversation-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-label="대화 목록"
-        tabIndex={-1}
-      >
-        {content}
+      <div className="conversation-drawer-frame">
+        <div
+          id={CONVERSATION_PANEL_ID}
+          ref={panelRef}
+          className="conversation-panel conversation-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-label="대화 목록"
+          tabIndex={-1}
+        >
+          {content}
+        </div>
       </div>
     </>
   );

@@ -45,14 +45,81 @@ p {
 }
 
 button,
+input,
 textarea {
   font: inherit;
   color: inherit;
 }
 
+/* 바탕에 따라 달라지는 값(포커스 링·링크·의미 색·주요 버튼)은 변수로 둔다. 변수는 가장 가까운 조상 값을 상속하므로
+ * 밝은 서피스 안의 어두운 섬, 어두운 섬 안의 밝은 창처럼 겹쳐도 명시도 싸움 없이 안쪽 바탕을 따른다.
+ * 기본(:root)과 어두운 섬(.surface-dark)은 어두운 바탕용 값이다. */
+:root,
+.surface-dark {
+  --focus-ring: var(--color-focus);
+  --link-color: var(--color-accent);
+  --link-underline: currentcolor;
+  --link-thickness: auto;
+  --primary-bg: var(--color-paper);
+  --primary-fg: var(--color-ink);
+  --primary-shadow: none;
+  --tone-info: var(--color-info);
+  --tone-success: var(--color-success);
+  --tone-warning: var(--color-warning);
+  --tone-danger: var(--color-danger);
+  --tone-error: var(--color-error);
+}
+
+/* 밝은 서피스 목록(한 곳). 종이·시트·모래·코발트 틴트·승인 카드·채팅 영역처럼 밝은 바탕에서는
+ *  - 밝은 포커스 링이 보이지 않으므로 ink 링(12 이상)을 쓴다.
+ *  - 어두운 바탕용 accent(#9DB4FF)는 밝은 바탕에서 대비가 1.3~2.0이라 글자·아이콘·밑줄에 쓰지 않는다.
+ *    링크 글자와 밑줄은 밝은 바탕용 accent-on-paper(4.5 이상)를 쓴다.
+ *  - 의미 색은 밝은 바탕 위에서 통과하는 paper-* 색으로 바꾼다.
+ *  - 주요 버튼은 ink 바탕 + paper 글자 + 검정 각진 그림자다(어두운 바탕에서는 paper 바탕 + ink 글자, 그림자 없음).
+ * 새 밝은 바탕을 만들면 이 목록에 더한다(brand.test.ts가 각 css의 밝은 바탕 클래스가 빠졌는지 확인한다).
+ * 목록 안에 어두운 요소가 남으면 그 요소에 .surface-dark를 붙여 위 값으로 되돌린다.
+ * 이 목록의 클래스는 components.css의 --row-line 목록(sheet·ink 두 규칙)과 합쳐서 같아야 한다. */
+:is(
+  .paper,
+  .retro-body,
+  .section-sheet,
+  .section-sand,
+  .section-tint,
+  .conn-confirm,
+  .idx-progress,
+  .approval,
+  .chat,
+  .conversation-panel,
+  .conn,
+  .conn-card,
+  .login,
+  .login-card
+) {
+  --focus-ring: var(--color-ink);
+  --link-color: var(--color-accent-on-paper);
+  --link-underline: var(--color-accent-on-paper);
+  --link-thickness: 2px;
+  --primary-bg: var(--color-ink);
+  --primary-fg: var(--color-paper);
+  --primary-shadow: var(--shadow-hard);
+  --tone-info: var(--color-paper-info);
+  --tone-success: var(--color-paper-success);
+  --tone-warning: var(--color-paper-warning);
+  --tone-danger: var(--color-paper-danger);
+  --tone-error: var(--color-paper-error);
+}
+
 :focus-visible {
-  outline: 3px solid var(--color-focus);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+a {
+  color: var(--link-color);
+  text-decoration: underline;
+  text-decoration-color: var(--link-underline);
+  text-decoration-thickness: var(--link-thickness);
+  text-underline-offset: 0.2em;
 }
 
 .visually-hidden {
@@ -77,15 +144,18 @@ textarea {
   flex: none;
 }
 
-/* 버튼: 확인(주)과 거절(보조)은 크기와 굵기를 같게 둔다. */
+/* 버튼: 기본(secondary)은 종이 박스, 주요(primary)는 검정 박스 + 각진 그림자(어두운 바탕에서는 흰 박스), ink는 메뉴·닫기용 그림자 없는 검정 박스다.
+ * 주요와 기본은 크기와 굵기를 같게 둔다. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: var(--space-2);
   min-height: var(--control-height);
   padding: var(--space-1) var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  background: var(--color-paper);
+  border: 1px solid var(--color-ink);
+  color: var(--color-on-paper);
   font-weight: var(--font-weight-semibold);
   line-height: var(--leading-heading);
   white-space: nowrap;
@@ -93,15 +163,23 @@ textarea {
   transition: opacity var(--motion-fast) var(--ease-standard);
 }
 
-.btn-primary {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: var(--color-on-accent);
+.btn-secondary {
+  background: var(--color-paper);
+  border-color: var(--color-ink);
+  color: var(--color-on-paper);
 }
 
-.btn-secondary {
-  background: var(--color-surface);
-  color: var(--color-text);
+.btn-primary {
+  background: var(--primary-bg);
+  border-color: var(--primary-bg);
+  box-shadow: var(--primary-shadow);
+  color: var(--primary-fg);
+}
+
+.btn-ink {
+  background: var(--color-ink);
+  border-color: var(--color-border);
+  color: var(--color-paper);
 }
 
 .btn:disabled {
@@ -109,21 +187,26 @@ textarea {
   cursor: not-allowed;
 }
 
-/* 의미 색은 아이콘과 글자에 함께 쓴다. 색만으로 상태를 구분하지 않는다. */
+/* 의미 색은 아이콘과 글자에 함께 쓴다. 색만으로 상태를 구분하지 않는다.
+ * 어떤 값을 쓰는지는 위의 --tone-* 변수(바탕별)가 정한다. */
 .tone-info {
-  color: var(--color-info);
+  color: var(--tone-info);
 }
 
 .tone-success {
-  color: var(--color-success);
+  color: var(--tone-success);
 }
 
 .tone-warning {
-  color: var(--color-warning);
+  color: var(--tone-warning);
+}
+
+.tone-danger {
+  color: var(--tone-danger);
 }
 
 .tone-error {
-  color: var(--color-error);
+  color: var(--tone-error);
 }
 
 .note {

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "../../docs/brand/tokens.css";
 import "./styles/fonts.css";
 import "./styles/base.css";
+import "./styles/components.css";
 import { App } from "./App";
 import { PRODUCT_NAME } from "./brand";
 

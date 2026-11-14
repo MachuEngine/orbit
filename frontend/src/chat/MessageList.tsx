@@ -39,7 +39,12 @@ export function MessageList({
     <ol className="messages" role="log" aria-label="대화">
       {empty && (
         <li className="messages-empty">
-          메일, 일정, 문서에 대해 물어보세요. 예: “내일 일정 알려 줘”
+          <p className="display-ko messages-empty-title" aria-hidden="true">
+            새 대화
+          </p>
+          <p className="messages-empty-note">
+            메일, 일정, 문서에 대해 물어보세요. 예: “내일 일정 알려 줘”
+          </p>
         </li>
       )}
       {messages.map((message) =>
@@ -50,7 +55,11 @@ export function MessageList({
           </li>
         ) : (
           <li key={message.id} className={`message message-${message.role}`}>
-            <span className="visually-hidden">{message.role === "user" ? "나" : PRODUCT_NAME}</span>
+            {message.role === "user" ? (
+              <span className="message-tag tag">나</span>
+            ) : (
+              <span className="message-tag tag tag-mono">{PRODUCT_NAME}</span>
+            )}
             {message.role === "assistant" ? (
               <Markdown text={message.text} />
             ) : (
@@ -61,11 +70,16 @@ export function MessageList({
       )}
       {outgoing !== null && (
         <li className="message message-user message-unsent" data-send-status={sendStatus}>
-          <span className="visually-hidden">나</span>
+          <span className="message-tag tag">나</span>
           <p>{outgoing}</p>
-          <span className="message-meta">
-            {sendStatus === "failed" ? "전송하지 못했습니다" : "전송 중"}
-          </span>
+          {sendStatus === "failed" ? (
+            <span className="message-meta label">
+              <Icon name="error" />
+              <span>전송하지 못했습니다</span>
+            </span>
+          ) : (
+            <span className="message-meta label">전송 중</span>
+          )}
         </li>
       )}
       {results.map((result) => {
@@ -79,7 +93,7 @@ export function MessageList({
       })}
       {working && (
         <li className="message message-assistant message-working" aria-hidden="true">
-          <span className="dots">
+          <span className="loading-dots">
             <span />
             <span />
             <span />

@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import { useComposer } from "../composer/useComposer";
 import { Composer } from "./Composer";
 import { describe, expect, it } from "vitest";
+import { PRODUCT_NAME } from "../brand";
 import { initialRunViewState } from "../runs/reducer";
 import { MessageList } from "./MessageList";
 import { StatusBar } from "./StatusBar";
@@ -147,6 +148,34 @@ describe("MessageList", () => {
       <MessageList messages={[]} outgoing={null} sendStatus="idle" results={[]} working={false} />,
     );
     expect(screen.getByText(/물어보세요/)).toBeInTheDocument();
+  });
+
+  it("빈 대화의 큰 제목은 시각 전용이다: heading·랜드마크를 만들지 않고 화면낭독기에 숨긴다", () => {
+    render(
+      <MessageList messages={[]} outgoing={null} sendStatus="idle" results={[]} working={false} />,
+    );
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region")).not.toBeInTheDocument();
+    expect(screen.getByText("새 대화")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("보내는 사람 태그는 보이는 글자이고 낭독되는 이름은 한 번뿐이다", () => {
+    render(
+      <MessageList
+        messages={[
+          { id: "u1", role: "user", text: "안녕" },
+          { id: "a1", role: "assistant", text: "네" },
+        ]}
+        outgoing={null}
+        sendStatus="idle"
+        results={[]}
+        working={false}
+      />,
+    );
+    expect(screen.getAllByText("나")).toHaveLength(1);
+    expect(screen.getAllByText("나")[0]).toBeVisible();
+    expect(screen.getAllByText(PRODUCT_NAME)).toHaveLength(1);
+    expect(screen.getByText(PRODUCT_NAME)).not.toHaveClass("visually-hidden");
   });
 
   it("사용자·비서 메시지와 실행 결과를 같은 동사로 보여 준다", () => {

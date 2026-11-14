@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { PRODUCT_NAME } from "../brand";
+import { Icon } from "../ui/Icon";
 import { Logo } from "../ui/Logo";
 import { loginErrorMessage } from "./loginError";
 import type { LoginMethods } from "./useSession";
@@ -38,8 +39,8 @@ export function LoginScreen({
       ? loginErrorMessage(loginError)
       : "";
   return (
-    <main className="login">
-      <div className="login-card">
+    <main className="login paper-texture">
+      <div className="login-card paper-texture">
         <Logo className="login-logo" />
         <h1 className="visually-hidden">{PRODUCT_NAME} 로그인</h1>
         <p>메일·일정·문서를 대화로 다루려면 로그인해 주세요.</p>
@@ -67,7 +68,12 @@ export function LoginScreen({
           <p>사용할 수 있는 로그인 방법이 없습니다. 서버 설정을 확인해 주세요.</p>
         )}
         <p id="login-error" className="login-error" role="alert">
-          {message}
+          {message !== "" && (
+            <>
+              <Icon name="error" />
+              <span>{message}</span>
+            </>
+          )}
         </p>
       </div>
     </main>
@@ -77,11 +83,12 @@ export function LoginScreen({
 /** 세션 확인에 실패했을 때(서버에 닿지 못함) 보여 주는 화면. */
 export function ConnectionErrorScreen() {
   return (
-    <main className="login">
-      <div className="login-card">
+    <main className="login paper-texture">
+      <div className="login-card paper-texture">
         <Logo className="login-logo" />
         <p role="alert" className="login-error">
-          서버에 연결하지 못했습니다. 연결을 확인한 뒤 다시 시도해 주세요.
+          <Icon name="error" />
+          <span>서버에 연결하지 못했습니다. 연결을 확인한 뒤 다시 시도해 주세요.</span>
         </p>
         <button
           type="button"
@@ -99,8 +106,10 @@ export function ConnectionErrorScreen() {
 
 export function LoadingScreen() {
   return (
-    <main className="login">
-      <p role="status">불러오는 중입니다.</p>
+    <main className="login paper-texture">
+      <p role="status" className="login-card paper-texture">
+        불러오는 중입니다.
+      </p>
     </main>
   );
 }

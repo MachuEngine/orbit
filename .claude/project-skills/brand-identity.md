@@ -3,7 +3,7 @@
 > `.claude/skills/brand-identity/SKILL.md`(하네스 스킬 팩 `ui-design`)에 Orbit에만 해당하는 내용을 더한다. 둘이 충돌하면 이 문서가 우선한다.
 
 ## 1. 현재 상태: 브랜드는 확정됐다
-- Orbit 브랜드는 2026-11-11에 개발자가 채택했다. 팔레트 C 흑연, 글꼴 IBM Plex Sans KR, 로고마크 A 게이트, 워드마크·조합형이다. 기준 문서는 `docs/brand/brand-guide.md`이고, 결정 이유와 기각안은 그 문서 끝의 결정 기록에 있다.
+- Orbit 브랜드는 2026-11-11에 개발자가 처음 채택했고(팔레트 C 흑연, 글꼴 IBM Plex Sans KR, 로고마크 A 게이트, 워드마크·조합형), 2026-11-13에 개발자 지시로 팔레트와 글꼴을 개정했다(마젠타 다크·다크 전용, 글꼴 Pretendard·Inter Tight·JetBrains Mono·Galmuri11, 로고 유지). 2026-11-14에는 개발자 지시로 색만 전면 리뉴얼했다(코발트 블루 + 웜 그레이 시트 + 잉크 네이비, 모양 규칙·글꼴·로고 모양은 유지). 기준 문서는 `docs/brand/brand-guide.md` 8절이고, 결정 이유와 대체된 안은 그 문서 끝의 결정 기록에 있다.
 - 따라서 이 스킬을 쓰는 경우는 보통 **기존 결정을 바꾸거나 토큰을 추가할 때**다. 처음부터 후보를 다시 만들지 않는다. 바꾸기 전에 결정 기록을 읽고, 바꾼 이유를 같은 형식으로 추가한다.
 - 브랜드 가이드의 "남은 일"(상표·유사 로고 확인, 숫자 모양·`tnum` 확인, 워드마크 커닝, 포커스 링 대비, OFL Reserved Font Name 확인)을 처리하면 그 항목을 갱신한다.
 
@@ -24,7 +24,8 @@
 | `success` | 실행 완료 | |
 | `error` | 실패·오류 | |
 
-- 공통 토큰: `bg`, `surface`, `text`, `text-muted`, `border`, `divider`, `accent`, `on-accent`, `focus`.
+- 공통 토큰: `bg`, `surface`, `text`, `text-muted`, `border`, `divider`, `accent`(어두운 바탕 위 글자·링크), `accent-on-paper`(밝은 바탕 위 글자·링크), `accent-fill`(버튼 바탕), `on-accent`(버튼 글자), `focus`.
+- 어두운 바탕용 `accent`는 밝은 바탕(paper·sheet·section-*)에서 대비가 미달이라 글자·아이콘·밑줄에 쓰지 않는다. 밝은 바탕에서는 `accent-on-paper`를 쓴다.
 - `warning`, `danger`, `error`는 색만으로 구분하지 않는다. 아이콘과 문구를 함께 쓴다.
 
 ## 5. 로고

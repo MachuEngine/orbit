@@ -12,6 +12,10 @@ body.conversation-scroll-lock {
   overflow: hidden;
 }
 
+/* 사이드바: 채팅 바탕(sheet)보다 한 단계 어두운 웜 그레이(sheet-deep) 밝은 서피스. 오른쪽 1px ink 선으로 채팅 영역과 나눈다.
+ * 포커스 링·링크·의미 색·행 선은 base.css 밝은 서피스 목록을 따른다.
+ * 대비(sheet-deep 위): on-paper 10.97, on-paper-muted 6.44, paper-error 7.14, ink(링·점·선) 13.21, accent-on-paper 5.52.
+ * 현재 항목 띠(paper)는 sheet-deep과 1.45라 색만으로 구분하지 않고 왼쪽 2px 코발트 선(paper 위 8.01, sheet-deep 위 5.52)을 함께 둔다. */
 .conversation-panel {
   display: flex;
   flex: none;
@@ -21,8 +25,9 @@ body.conversation-scroll-lock {
   padding: var(--space-4);
   overflow-y: auto;
   overscroll-behavior: contain;
-  background: var(--color-surface);
-  border-right: 1px solid var(--color-divider);
+  background: var(--color-sheet-deep);
+  color: var(--color-on-paper);
+  border-right: 1px solid var(--color-ink);
 }
 
 .conversation-head {
@@ -32,28 +37,55 @@ body.conversation-scroll-lock {
   gap: var(--space-2);
 }
 
+/* 작은 라벨 크기의 머리. 큰 제목이 아니다. */
 .conversation-heading {
-  font-size: var(--text-lg);
+  color: var(--color-on-paper-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.conversation-panel > .btn-ink {
+  width: 100%;
 }
 
 .conversation-note {
   font-size: var(--text-sm);
-  color: var(--color-text-muted);
+  color: var(--color-on-paper-muted);
+}
+
+/* 빈 목록 세로선은 ink(밝은 서피스에서 divider는 보이지 않는다) */
+.conversation-note.rule-left {
+  border-left-color: var(--color-ink);
 }
 
 .conversation-note .btn {
   margin-top: var(--space-2);
 }
 
+/* 불러오는 중: 픽셀 글꼴 작은 글자와 로딩 점(움직임은 모션 줄이기 설정에서 멈춘다) */
+.conversation-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-pixel);
+  font-size: var(--text-xs);
+}
+
+/* 로딩 점: 어두운 바탕용 accent는 밝은 바탕에서 보이지 않아 ink로 바꾼다(13.21) */
+.conversation-loading .loading-dots span {
+  background: var(--color-ink);
+}
+
 .conversation-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 0;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* 항목: 박스·테두리 없는 텍스트 행.  */
 .conversation-item {
   display: flex;
   flex-direction: column;
@@ -63,20 +95,34 @@ body.conversation-scroll-lock {
   min-height: var(--control-height);
   padding: var(--space-2) var(--space-3);
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  border: 0;
+  color: var(--color-on-paper);
+  font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
 }
 
-.conversation-item:hover:not(:disabled) {
-  background: var(--color-bg);
+.conversation-item:hover:not(:disabled):not([aria-current="true"]) {
+  background: color-mix(in srgb, var(--color-ink) 6%, transparent);
 }
 
+/* 현재 항목: paper 띠 + 왼쪽 2px 코발트 선. 띠와 바탕의 대비가 낮아 선과 글자 굵기 대신 선으로 구분한다.
+ * 포커스 링은 밝은 서피스 목록의 ink다. */
 .conversation-item[aria-current="true"] {
-  background: var(--color-bg);
-  border-color: var(--color-border);
-  font-weight: var(--font-weight-semibold);
+  --focus-ring: var(--color-ink);
+  background: var(--color-paper);
+  border-left: 2px solid var(--color-accent-on-paper);
+  padding-left: calc(var(--space-3) - 2px);
+  color: var(--color-on-paper);
+}
+
+/* 링을 띠 안쪽에 그리는 기존 규칙을 유지한다(음수 offset). 패딩(space-2/space-3)이 2px보다 커 글자와 겹치지 않는다. */
+.conversation-item[aria-current="true"]:focus-visible {
+  outline-offset: -2px;
+}
+
+.conversation-item[aria-current="true"] .conversation-item-time {
+  color: var(--color-on-paper-muted);
 }
 
 .conversation-item:disabled {
@@ -94,18 +140,28 @@ body.conversation-scroll-lock {
 }
 
 .conversation-item-time {
+  color: var(--color-on-paper-muted);
   font-size: var(--text-xs);
   font-weight: var(--font-weight-regular);
-  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
-/* 좁은 화면: 열었을 때만 왼쪽에서 겹쳐 보이는 패널 */
-.conversation-drawer {
+/* 좁은 화면: 열었을 때만 왼쪽에서 겹쳐 보이는 패널. 밝은 바탕이라 검정 각진 그림자(--shadow-hard)를 쓴다.
+ * 패널 자신이 스크롤하므로 그림자는 패널을 감싸는 .conversation-drawer-frame에 그린다(안 그러면 잘린다). */
+.conversation-drawer-frame {
   position: fixed;
   inset: 0 auto 0 0;
   z-index: 20;
+  display: flex;
   width: min(20rem, 85vw);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-hard);
+}
+
+.conversation-drawer {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  border-right: 1px solid var(--color-ink);
 }
 
 .conversation-backdrop {

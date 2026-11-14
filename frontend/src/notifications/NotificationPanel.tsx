@@ -141,219 +141,226 @@ export function NotificationPanel({
         aria-hidden="true"
         onClick={onClose}
       />
-      <div
-        id={NOTIFICATION_PANEL_ID}
-        ref={panelRef}
-        className="notify-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={`${uid}-title`}
-        tabIndex={-1}
-      >
-        <div className="notify-head">
-          <h2 id={`${uid}-title`} className="notify-title">
-            {T.panelTitle}
-          </h2>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            {T.close}
-          </button>
-        </div>
-
-        <div role="status" className="notify-notice">
-          {notice !== null && notice.tone === "success" && (
-            <p className="note tone-success">{notice.text}</p>
-          )}
-        </div>
-        <div role="alert" className="notify-notice">
-          {notice !== null && notice.tone === "error" && (
-            <p className="note tone-error">{notice.text}</p>
-          )}
-        </div>
-
-        <section className="notify-section" aria-labelledby={`${uid}-arrived`}>
-          <div className="notify-section-head">
-            <h3 id={`${uid}-arrived`}>{T.arrivedHeading}</h3>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy || arrived.phase !== "ready" || arrived.unread === 0}
-              onClick={() => {
-                guard(notifications.markAllRead, T.markFailed);
-              }}
-            >
-              {T.markAllRead}
+      <div className="notify-frame surface-dark">
+        <div
+          id={NOTIFICATION_PANEL_ID}
+          ref={panelRef}
+          className="notify-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={`${uid}-title`}
+          tabIndex={-1}
+        >
+          <div className="notify-head">
+            <h2 id={`${uid}-title`} className="notify-title">
+              {T.panelTitle}
+            </h2>
+            <button type="button" className="btn btn-ink" onClick={onClose}>
+              {T.close}
             </button>
           </div>
-          {arrived.phase === "loading" && <p className="notify-note">{T.arrivedLoading}</p>}
-          {arrived.phase === "error" && (
-            <div className="notify-note">
-              <p className="tone-error">{T.arrivedError}</p>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => void notifications.refresh()}
-              >
-                {T.retry}
-              </button>
-            </div>
-          )}
-          {arrived.phase === "ready" && arrived.items.length === 0 && (
-            <p className="notify-note">{T.arrivedEmpty}</p>
-          )}
-          {arrived.phase === "ready" && arrived.items.length > 0 && (
-            <ul className="notify-list">
-              {arrived.items.map((item) => (
-                <li key={item.id} className="notify-item" data-read={item.read}>
-                  <div className="notify-item-body">
-                    <p className="notify-item-title">{item.title}</p>
-                    <p className="notify-item-meta">
-                      <span>{kindText(item.kind)}</span>
-                      <span>{formatLastActivity(item.due_at, current)}</span>
-                      {item.event_start !== null && (
-                        <span>{T.eventStarts(clockText(item.event_start))}</span>
-                      )}
-                      {!item.read && <strong className="notify-unread">{T.unreadMark}</strong>}
-                    </p>
-                  </div>
-                  {!item.read && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      disabled={busy}
-                      aria-label={T.markReadLabel(item.title)}
-                      onClick={() => {
-                        guard(() => notifications.markRead(item.id), T.markFailed);
-                      }}
-                    >
-                      {T.markRead}
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
 
-        <section className="notify-section" aria-labelledby={`${uid}-upcoming`}>
-          <h3 id={`${uid}-upcoming`} ref={upcomingHeadingRef} tabIndex={-1}>
-            {T.upcomingHeading}
-          </h3>
-          {upcoming.phase === "loading" && <p className="notify-note">{T.upcomingLoading}</p>}
-          {upcoming.phase === "error" && (
-            <div className="notify-note">
-              <p className="tone-error">{T.upcomingError}</p>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => void reloadUpcoming()}
-              >
-                {T.retry}
-              </button>
+          <div className="notify-body">
+            <div role="status" className="notify-notice">
+              {notice !== null && notice.tone === "success" && (
+                <p className="note tone-success">{notice.text}</p>
+              )}
             </div>
-          )}
-          {upcoming.phase === "ready" && upcoming.items.length === 0 && (
-            <p className="notify-note">{T.upcomingEmpty}</p>
-          )}
-          {upcoming.phase === "ready" && upcoming.items.length > 0 && (
-            <ul className="notify-list">
-              {upcoming.items.map((item) => (
-                <UpcomingRow
-                  key={item.id}
-                  item={item}
-                  now={current}
-                  busy={busy}
-                  confirming={confirming === item.id}
-                  onAsk={() => {
-                    setConfirming(item.id);
-                  }}
-                  onKeep={() => {
-                    setConfirming(null);
-                  }}
-                  onConfirm={() => {
-                    confirmCancel(item.id);
-                  }}
-                />
-              ))}
-            </ul>
-          )}
-        </section>
+            <div role="alert" className="notify-notice">
+              {notice !== null && notice.tone === "error" && (
+                <p className="note tone-error">{notice.text}</p>
+              )}
+            </div>
 
-        <section className="notify-section" aria-labelledby={`${uid}-settings`}>
-          <h3 id={`${uid}-settings`}>{T.settingsHeading}</h3>
-          {settings.phase === "loading" && <p className="notify-note">{T.settingsLoading}</p>}
-          {settings.phase === "error" && (
-            <div className="notify-note">
-              <p className="tone-error">{T.settingsError}</p>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => void reloadSettings()}
-              >
-                {T.retry}
-              </button>
-            </div>
-          )}
-          {settings.phase === "ready" && (
-            <div className="notify-settings">
-              <div className="notify-check">
-                <input
-                  id={`${uid}-enabled`}
-                  type="checkbox"
-                  checked={settings.settings.event_reminders_enabled}
-                  disabled={busy}
-                  aria-describedby={`${uid}-enabled-hint`}
-                  onChange={(e) => {
-                    changeSettings({
-                      ...settings.settings,
-                      event_reminders_enabled: e.target.checked,
-                    });
-                  }}
-                />
-                <label htmlFor={`${uid}-enabled`}>{T.enabledLabel}</label>
-              </div>
-              <p id={`${uid}-enabled-hint`} className="notify-note">
-                {T.enabledHint}
-              </p>
-              <div className="notify-field">
-                <label htmlFor={`${uid}-lead`}>{T.leadLabel}</label>
-                <select
-                  id={`${uid}-lead`}
-                  value={String(settings.settings.lead_minutes)}
-                  disabled={busy || !settings.settings.event_reminders_enabled}
-                  onChange={(e) => {
-                    changeSettings({ ...settings.settings, lead_minutes: Number(e.target.value) });
+            <section className="notify-section" aria-labelledby={`${uid}-arrived`}>
+              <div className="notify-section-head">
+                <h3 id={`${uid}-arrived`}>{T.arrivedHeading}</h3>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy || arrived.phase !== "ready" || arrived.unread === 0}
+                  onClick={() => {
+                    guard(notifications.markAllRead, T.markFailed);
                   }}
                 >
-                  {LEAD_OPTIONS.map((minutes) => (
-                    <option key={minutes} value={String(minutes)}>
-                      {T.leadOption(minutes)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
-        </section>
-
-        {permission !== "unsupported" && (
-          <section className="notify-section" aria-labelledby={`${uid}-browser`}>
-            <h3 id={`${uid}-browser`}>{T.browserHeading}</h3>
-            {permission === "default" && (
-              <>
-                <p className="notify-note">{T.browserHint}</p>
-                <button type="button" className="btn btn-primary" onClick={enableBrowser}>
-                  {T.browserEnable}
+                  {T.markAllRead}
                 </button>
-              </>
+              </div>
+              {arrived.phase === "loading" && <p className="notify-note">{T.arrivedLoading}</p>}
+              {arrived.phase === "error" && (
+                <div className="notify-note">
+                  <p className="tone-error">{T.arrivedError}</p>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void notifications.refresh()}
+                  >
+                    {T.retry}
+                  </button>
+                </div>
+              )}
+              {arrived.phase === "ready" && arrived.items.length === 0 && (
+                <p className="notify-note">{T.arrivedEmpty}</p>
+              )}
+              {arrived.phase === "ready" && arrived.items.length > 0 && (
+                <ul className="notify-list">
+                  {arrived.items.map((item) => (
+                    <li key={item.id} className="notify-item" data-read={item.read}>
+                      <div className="notify-item-body">
+                        <p className="notify-item-title">{item.title}</p>
+                        <p className="notify-item-meta">
+                          <span>{kindText(item.kind)}</span>
+                          <span>{formatLastActivity(item.due_at, current)}</span>
+                          {item.event_start !== null && (
+                            <span>{T.eventStarts(clockText(item.event_start))}</span>
+                          )}
+                          {!item.read && <strong className="notify-unread">{T.unreadMark}</strong>}
+                        </p>
+                      </div>
+                      {!item.read && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          disabled={busy}
+                          aria-label={T.markReadLabel(item.title)}
+                          onClick={() => {
+                            guard(() => notifications.markRead(item.id), T.markFailed);
+                          }}
+                        >
+                          {T.markRead}
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="notify-section" aria-labelledby={`${uid}-upcoming`}>
+              <h3 id={`${uid}-upcoming`} ref={upcomingHeadingRef} tabIndex={-1}>
+                {T.upcomingHeading}
+              </h3>
+              {upcoming.phase === "loading" && <p className="notify-note">{T.upcomingLoading}</p>}
+              {upcoming.phase === "error" && (
+                <div className="notify-note">
+                  <p className="tone-error">{T.upcomingError}</p>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void reloadUpcoming()}
+                  >
+                    {T.retry}
+                  </button>
+                </div>
+              )}
+              {upcoming.phase === "ready" && upcoming.items.length === 0 && (
+                <p className="notify-note">{T.upcomingEmpty}</p>
+              )}
+              {upcoming.phase === "ready" && upcoming.items.length > 0 && (
+                <ul className="notify-list">
+                  {upcoming.items.map((item) => (
+                    <UpcomingRow
+                      key={item.id}
+                      item={item}
+                      now={current}
+                      busy={busy}
+                      confirming={confirming === item.id}
+                      onAsk={() => {
+                        setConfirming(item.id);
+                      }}
+                      onKeep={() => {
+                        setConfirming(null);
+                      }}
+                      onConfirm={() => {
+                        confirmCancel(item.id);
+                      }}
+                    />
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="notify-section" aria-labelledby={`${uid}-settings`}>
+              <h3 id={`${uid}-settings`}>{T.settingsHeading}</h3>
+              {settings.phase === "loading" && <p className="notify-note">{T.settingsLoading}</p>}
+              {settings.phase === "error" && (
+                <div className="notify-note">
+                  <p className="tone-error">{T.settingsError}</p>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void reloadSettings()}
+                  >
+                    {T.retry}
+                  </button>
+                </div>
+              )}
+              {settings.phase === "ready" && (
+                <div className="notify-settings">
+                  <div className="notify-check">
+                    <input
+                      id={`${uid}-enabled`}
+                      type="checkbox"
+                      checked={settings.settings.event_reminders_enabled}
+                      disabled={busy}
+                      aria-describedby={`${uid}-enabled-hint`}
+                      onChange={(e) => {
+                        changeSettings({
+                          ...settings.settings,
+                          event_reminders_enabled: e.target.checked,
+                        });
+                      }}
+                    />
+                    <label htmlFor={`${uid}-enabled`}>{T.enabledLabel}</label>
+                  </div>
+                  <p id={`${uid}-enabled-hint`} className="notify-note">
+                    {T.enabledHint}
+                  </p>
+                  <div className="notify-field">
+                    <label htmlFor={`${uid}-lead`}>{T.leadLabel}</label>
+                    <select
+                      id={`${uid}-lead`}
+                      value={String(settings.settings.lead_minutes)}
+                      disabled={busy || !settings.settings.event_reminders_enabled}
+                      onChange={(e) => {
+                        changeSettings({
+                          ...settings.settings,
+                          lead_minutes: Number(e.target.value),
+                        });
+                      }}
+                    >
+                      {LEAD_OPTIONS.map((minutes) => (
+                        <option key={minutes} value={String(minutes)}>
+                          {T.leadOption(minutes)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            {permission !== "unsupported" && (
+              <section className="notify-section" aria-labelledby={`${uid}-browser`}>
+                <h3 id={`${uid}-browser`}>{T.browserHeading}</h3>
+                {permission === "default" && (
+                  <>
+                    <p className="notify-note">{T.browserHint}</p>
+                    <button type="button" className="btn btn-primary" onClick={enableBrowser}>
+                      {T.browserEnable}
+                    </button>
+                  </>
+                )}
+                {permission === "granted" && <p className="notify-note">{T.browserOn}</p>}
+                {permission === "denied" && (
+                  <p className="note tone-warning" role="note">
+                    {T.browserDenied}
+                  </p>
+                )}
+              </section>
             )}
-            {permission === "granted" && <p className="notify-note">{T.browserOn}</p>}
-            {permission === "denied" && (
-              <p className="note tone-warning" role="note">
-                {T.browserDenied}
-              </p>
-            )}
-          </section>
-        )}
+          </div>
+        </div>
       </div>
     </>,
     document.body,

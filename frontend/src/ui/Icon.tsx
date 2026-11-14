@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
-export type IconName = "info" | "warning" | "ban" | "success" | "error" | "clock" | "bell";
+export type IconName =
+  "info" | "warning" | "ban" | "success" | "error" | "clock" | "bell" | "chevron" | "close";
 
 const SHAPES: Record<IconName, ReactNode> = {
   info: (
@@ -43,6 +44,8 @@ const SHAPES: Record<IconName, ReactNode> = {
       <path d="M8.4 16.8a1.8 1.8 0 0 0 3.2 0" strokeLinecap="round" />
     </>
   ),
+  chevron: <path d="m5 7.5 5 5 5-5" strokeLinecap="square" />,
+  close: <path d="m5 5 10 10M15 5 5 15" strokeLinecap="square" />,
   clock: (
     <>
       <circle cx="10" cy="10" r="7.5" />

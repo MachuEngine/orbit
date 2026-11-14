@@ -1,23 +1,26 @@
+/* 계정 연결 화면은 채팅 영역과 같은 시트 바탕의 밝은 서피스다(base.css의 밝은 서피스 목록). */
 .conn {
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
+  background: var(--color-sheet);
+  color: var(--color-on-paper);
 }
 
 .conn-header {
   display: flex;
+  flex-wrap: wrap; /* 좁은 화면(320px)에서는 버튼 줄이 아래로 내려가 가로 스크롤이 생기지 않는다 */
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-divider);
+  border-bottom: 1px solid var(--color-ink);
 }
 
 .conn-logo {
   width: 6.25rem;
   height: 2.5rem;
-  color: var(--color-text);
+  color: var(--color-ink);
 }
 
 .conn-body {
@@ -30,8 +33,18 @@
   padding: var(--space-5) var(--space-4);
 }
 
+/* 라벨: 시트·종이 위에서는 왼쪽 세로선을 ink로, 글자는 보조 on-paper로 둔다. */
+.conn .label,
+.conn .label-mono {
+  border-left-color: var(--color-ink);
+  color: var(--color-on-paper-muted);
+}
+
+/* 설정 화면의 큰 제목. 한글이라 줄 간격은 display-ko(1.05)다. */
 .conn-body h1 {
-  font-size: var(--text-xl);
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  line-height: var(--leading-display-ko);
 }
 
 .conn-card {
@@ -39,29 +52,48 @@
   justify-items: start;
   gap: var(--space-3);
   padding: var(--space-5);
-  background: var(--color-surface);
-  border: 1px solid var(--color-divider);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  background: var(--color-paper);
+  border: 1px solid var(--color-ink);
+  --crop-color: var(--color-ink);
+}
+
+.conn-card > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .conn-card h2 {
   font-size: var(--text-lg);
 }
 
-.conn-label {
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
+.conn-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* 계정 없음 빈 상태: 선화 봉투 그림 */
+.conn-empty-art {
+  width: 6rem;
+  height: auto;
+  color: var(--color-ink);
 }
 
 .conn-hint {
-  color: var(--color-text-muted);
+  color: var(--color-on-paper-muted);
   font-size: var(--text-sm);
 }
 
+.conn-scope-block {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  width: 100%;
+}
+
 .conn-scopes {
-  margin: var(--space-1) 0 0;
-  padding-left: var(--space-5);
+  width: 100%;
 }
 
 .conn-actions {
@@ -70,12 +102,53 @@
   gap: var(--space-2);
 }
 
-.conn-confirm {
+/* 시트 위의 레트로 창(hard 변형): ink 타이틀바(글자 없는 장식), 종이 본문, ink 테두리, 검정 단색 그림자.
+ * 본문은 밝은 바탕이므로 base.css의 밝은 바탕 목록에 들어 있다(ink 포커스 링, 종이용 의미 색, 링크).
+ * 확인 상자는 되돌리기 어려운 동작을 묻는 창이고, .idx-progress는 동기화 진행 상태 창이다. */
+.conn-confirm,
+.idx-progress {
   display: grid;
+  justify-items: start;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--color-warning);
-  border-radius: var(--radius-md);
+  width: 100%;
+  padding: calc(var(--space-4) + var(--space-3)) var(--space-4) var(--space-4);
+  background: var(--color-paper);
+  border: 1px solid var(--color-ink);
+  box-shadow: var(--shadow-hard);
+  color: var(--color-on-paper);
+}
+
+.conn-confirm::after,
+.idx-progress::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: var(--space-4);
+  background:
+    linear-gradient(var(--color-paper) 0 0) right var(--space-2) center / var(--space-2)
+      var(--space-2) no-repeat,
+    linear-gradient(var(--color-border) 0 0) right var(--space-5) center / var(--space-2)
+      var(--space-2) no-repeat,
+    var(--color-ink);
+  border-bottom: 1px solid var(--color-ink);
+  pointer-events: none;
+}
+
+.conn-confirm > p,
+.idx-progress > p {
+  max-width: 100%;
+}
+
+.idx-progress .progress {
+  width: 100%;
+}
+
+/* 진행 막대: ink 테두리(공용 .progress) + ink 채움. 어두운 바탕용 accent는 시트·종이 위에서 대비가 낮아 쓰지 않는다. */
+.idx-progress .progress-indeterminate::after {
+  background-color: var(--color-ink);
+  background-image: none;
 }
 
 /* 알림 영역은 비어 있어도 화면에 남겨 두어야 내용이 생길 때 화면낭독기가 읽는다. 비어 있을 때 생기는 간격만 뺀다. */
@@ -90,11 +163,14 @@
   gap: var(--space-2);
   width: 100%;
   padding-top: var(--space-3);
-  border-top: 1px solid var(--color-divider);
+  border-top: 1px dashed var(--color-ink);
 }
 
-.conn-docs h3 {
-  font-size: var(--text-md);
+.conn-docs h3,
+.idx h3 {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--leading-heading);
 }
 
 /* 메일 검색 색인 영역 (ADR-0019) */
@@ -104,11 +180,7 @@
   gap: var(--space-3);
   width: 100%;
   padding-top: var(--space-3);
-  border-top: 1px solid var(--color-divider);
-}
-
-.idx h3 {
-  font-size: var(--text-md);
+  border-top: 1px dashed var(--color-ink);
 }
 
 .idx-notice:empty {
@@ -135,41 +207,56 @@
   flex: 1 1 10rem;
 }
 
-.idx-field label {
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
+.idx-field .label {
+  justify-self: start;
 }
 
-.idx select {
-  width: 100%;
-  min-height: var(--control-height);
-  padding: var(--space-1) var(--space-3);
-  background: var(--color-surface);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+/* 네이티브 select의 둥근 화살표 대신 직각 삼각형 두 개로 화살표를 그린다. 색은 글자색이다. */
+/* 입력창: 종이 바탕 + ink 테두리 + 어두운 글자(채팅 입력창과 같은 모양). 포커스 링은 ink다(밝은 서피스 목록).
+ * 포커스·오류 상태의 테두리 색은 공용 .input보다 명시도를 높여 덮는다. */
+.conn .input,
+.conn .input:focus-visible {
+  background-color: var(--color-paper);
+  border-color: var(--color-ink);
+  color: var(--color-on-paper);
+}
+
+.conn .input[aria-invalid="true"] {
+  border-color: var(--color-paper-error);
+}
+
+.conn .input::placeholder {
+  color: var(--color-on-paper-muted);
+}
+
+.idx select.input {
+  appearance: none;
+  padding-right: var(--space-6);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-on-paper) 50%),
+    linear-gradient(135deg, var(--color-on-paper) 50%, transparent 50%);
+  background-position:
+    calc(100% - var(--space-4) - 4px) center,
+    calc(100% - var(--space-4)) center;
+  background-size:
+    4px 4px,
+    4px 4px;
+  background-repeat: no-repeat;
   font: inherit;
 }
 
 .idx select:disabled {
-  opacity: 0.6;
   cursor: not-allowed;
 }
 
 .idx-scopes {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  width: 100%;
 }
 
 .idx-scope {
   display: grid;
   gap: var(--space-2);
   padding: var(--space-3);
-  border: 1px solid var(--color-divider);
-  border-radius: var(--radius-md);
 }
 
 .idx-scope-row {
@@ -202,15 +289,20 @@
 .idx-facts {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2) var(--space-5);
+  gap: var(--space-3) var(--space-6);
   margin: 0;
 }
 
+/* 색인 수치는 큰 숫자로 보인다. 단위가 한글이라 줄 간격은 display-ko다. */
 .idx-facts dd {
-  margin: 0;
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-heading);
+  line-height: var(--leading-display-ko);
 }
 
-.idx select:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+.idx select:disabled {
+  opacity: 0.6;
 }

@@ -230,7 +230,7 @@ export function ChatScreen({
           onClose={closeDrawer}
         />
       )}
-      <main className="chat" inert={drawerShown}>
+      <main className="chat paper-texture" inert={drawerShown}>
         <h1 className="visually-hidden">{PRODUCT_NAME} 대화</h1>
         <header className="chat-header">
           <div className="chat-header-start">
@@ -239,7 +239,7 @@ export function ChatScreen({
               <button
                 type="button"
                 ref={toggleRef}
-                className="btn btn-secondary"
+                className="btn btn-ink"
                 aria-expanded={drawerShown}
                 aria-controls={drawerShown ? CONVERSATION_PANEL_ID : undefined}
                 onClick={() => {
@@ -256,7 +256,7 @@ export function ChatScreen({
             <button type="button" className="btn btn-secondary" onClick={onOpenConnections}>
               계정 연결
             </button>
-            <button type="button" className="btn btn-secondary" onClick={onSignOut}>
+            <button type="button" className="btn btn-ink" onClick={onSignOut}>
               로그아웃
             </button>
           </div>
@@ -265,7 +265,7 @@ export function ChatScreen({
         {/* 영역은 항상 그려 두고 내용만 바꿔야 화면낭독기가 변화를 읽는다. */}
         <div role="status" className="connection-banner-slot">
           {connectionNotice === "needs_connection" && (
-            <div className="connection-banner">
+            <div className="connection-banner crop">
               <p className="note tone-warning">
                 <Icon name="warning" />
                 <span>
@@ -301,7 +301,7 @@ export function ChatScreen({
             </div>
           </div>
           {showJump && approvalId === null && (
-            <button type="button" className="btn btn-secondary jump" onClick={jumpToBottom}>
+            <button type="button" className="btn btn-ink jump" onClick={jumpToBottom}>
               맨 아래로
             </button>
           )}
