@@ -15,7 +15,7 @@
 #     ORBIT_SESSION_SIGNING_KEY, ORBIT_LOGIN_ALLOWED_EMAILS, ORBIT_DATA_KEY_FILE(절대 경로), ORBIT_OPENAI_API_KEY
 #   변수 설명은 .env.example. 이 스크립트는 secrets/.env 내용을 출력하지 않는다.
 #
-# 모델(ADR-0015): 실사용 기본은 openai/gpt-6.1-terra(low). ORBIT_LLM_MODEL_ID 등을 미리 export하면 그 값을 쓴다.
+# 모델(ADR-0015, 2026-11-15 개정): 실사용 기본은 openai/gpt-6-luna(low). ORBIT_LLM_MODEL_ID 등을 미리 export하면 그 값을 쓴다.
 
 set -euo pipefail
 
@@ -38,11 +38,11 @@ load_env() {
   export ORBIT_ENV=dev
   export ORBIT_CONNECTOR_MODE="$mode"
   export ORBIT_LLM_PROVIDER="${ORBIT_LLM_PROVIDER:-openai}"
-  export ORBIT_LLM_MODEL_ID="${ORBIT_LLM_MODEL_ID:-openai/gpt-6.1-terra}"
+  export ORBIT_LLM_MODEL_ID="${ORBIT_LLM_MODEL_ID:-openai/gpt-6-luna}"
   export ORBIT_LLM_REASONING_EFFORT="${ORBIT_LLM_REASONING_EFFORT:-low}"
-  export ORBIT_LLM_PRICE_INPUT_PER_MTOK="${ORBIT_LLM_PRICE_INPUT_PER_MTOK:-1}"
-  export ORBIT_LLM_PRICE_CACHED_INPUT_PER_MTOK="${ORBIT_LLM_PRICE_CACHED_INPUT_PER_MTOK:-0.05}"
-  export ORBIT_LLM_PRICE_OUTPUT_PER_MTOK="${ORBIT_LLM_PRICE_OUTPUT_PER_MTOK:-5}"
+  export ORBIT_LLM_PRICE_INPUT_PER_MTOK="${ORBIT_LLM_PRICE_INPUT_PER_MTOK:-0.10}"
+  export ORBIT_LLM_PRICE_CACHED_INPUT_PER_MTOK="${ORBIT_LLM_PRICE_CACHED_INPUT_PER_MTOK:-0.01}"
+  export ORBIT_LLM_PRICE_OUTPUT_PER_MTOK="${ORBIT_LLM_PRICE_OUTPUT_PER_MTOK:-0.50}"
   export ORBIT_LLM_PRICE_SOURCE="${ORBIT_LLM_PRICE_SOURCE:-developers.openai.com/api/docs/pricing (2026-11-11)}"
   if [ "$mode" = "sim" ]; then
     export ORBIT_SIM_SNAPSHOT_PATH="${ORBIT_SIM_SNAPSHOT_PATH:-$ROOT/eval/datasets/orbit-eval/v0/world.json}"
