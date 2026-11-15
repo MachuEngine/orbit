@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { transcribeAudio } from "../api/endpoints";
 import { isApiError } from "../api/errors";
+import { isDesktop } from "../desktop/bridge";
 
 /** 서버 상한(ADR-0025 §2)과 같다. 넘으면 자동으로 멈추고 전사한다. */
 export const MAX_RECORD_SECONDS = 60;
@@ -32,6 +33,8 @@ function pickMimeType(): string | undefined {
 
 export const VOICE_TEXT = {
   permission: "마이크 권한이 없습니다. 브라우저 설정에서 이 사이트의 마이크를 허용해 주세요.",
+  permissionDesktop:
+    "마이크 권한이 없습니다. 시스템 설정의 개인정보 보호 및 보안 > 마이크에서 이 앱을 허용한 뒤 다시 시도해 주세요.",
   noDevice: "사용할 수 있는 마이크를 찾지 못했습니다.",
   startFailed: "마이크를 시작하지 못했습니다. 다른 앱이 마이크를 쓰고 있는지 확인해 주세요.",
   recordFailed: "녹음 중 문제가 생겼습니다. 다시 시도해 주세요.",
@@ -47,7 +50,9 @@ export const VOICE_TEXT = {
 
 function startErrorText(error: unknown): string {
   const name = error instanceof DOMException ? error.name : "";
-  if (name === "NotAllowedError" || name === "SecurityError") return VOICE_TEXT.permission;
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return isDesktop() ? VOICE_TEXT.permissionDesktop : VOICE_TEXT.permission;
+  }
   if (name === "NotFoundError" || name === "OverconstrainedError") return VOICE_TEXT.noDevice;
   return VOICE_TEXT.startFailed;
 }

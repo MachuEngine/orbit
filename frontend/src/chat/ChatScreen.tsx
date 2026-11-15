@@ -15,6 +15,7 @@ import { useRunStream } from "../runs/useRunStream";
 import { useAutoRead } from "../voice/autoRead";
 import { toSpeakableText } from "../voice/speakable";
 import { useSpeech } from "../voice/useSpeech";
+import { useDesktopVoiceToggle } from "../desktop/hooks";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { Icon } from "../ui/Icon";
 import { Logo } from "../ui/Logo";
@@ -167,6 +168,8 @@ export function ChatScreen({
     },
     onStart: stopSpeech, // 읽어 주던 음성이 마이크로 들어가지 않게 한다
   });
+  // 데스크톱의 전역 단축키(Option+Space)로 음성 입력을 켜고 끈다. 웹에서는 아무 일도 하지 않는다.
+  useDesktopVoiceToggle(voice);
   // 입력창을 모두 지우면 음성 질문이 아니게 된다.
   const composerEmpty = composer.text.trim() === "";
   useEffect(() => {

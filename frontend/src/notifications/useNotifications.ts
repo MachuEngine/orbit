@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getNotifications, markAllNotificationsRead, markNotificationRead } from "../api/endpoints";
 import { isApiError } from "../api/errors";
 import type { NotificationItem } from "../api/schemas";
+import { getDesktop } from "../desktop/bridge";
+import { useDesktopBadge } from "../desktop/hooks";
+import { showDesktopNotification } from "../desktop/notify";
 import { selectToNotify, showBrowserNotification } from "./browser";
 
 export const NOTIFICATION_POLL_MS = 30_000;
@@ -22,7 +25,7 @@ export interface NotificationsApi {
 /**
  * 도착한 알림을 `pollMs`(기본 30초)마다 읽는다(ADR-0021 §6). 탭이 숨겨지면 멈추고 다시 보이면 바로
  * 읽은 뒤 이어간다. 새로 도착해 읽지 않았고 도착한 지 10분이 안 된 알림은, 이 탭에서 아직 띄우지
- * 않았을 때만 브라우저 알림으로 띄운다(권한이 허용돼 있을 때). 로그인이 끝났으면(401) 폴링을 멈추고
+ * 않았을 때만 브라우저 알림으로 띄운다(권한이 허용돼 있을 때). 데스크톱 셸 안이면 시스템 알림과 독 배지를 쓴다. 로그인이 끝났으면(401) 폴링을 멈추고
  * `onUnauthorized`를 부른다. `now`는 테스트에서 바꿔 끼운다.
  */
 export function useNotifications({
@@ -63,7 +66,12 @@ export function useNotifications({
       applied.current = mine;
       setState({ phase: "ready", items: response.notifications, unread: response.unread_count });
       for (const item of selectToNotify(response.notifications, shown.current, nowRef.current())) {
-        if (showBrowserNotification(item)) shown.current.add(item.id);
+        // 데스크톱 셸 안이면 브라우저 `Notification` 대신 셸의 시스템 알림을 쓴다(ADR-0024 §6).
+        const sent =
+          getDesktop() !== undefined
+            ? showDesktopNotification(item)
+            : showBrowserNotification(item);
+        if (sent) shown.current.add(item.id);
       }
       return true;
     } catch (error) {
@@ -132,6 +140,9 @@ export function useNotifications({
     await markAllNotificationsRead();
     await load(true);
   }, [load]);
+
+  // 데스크톱이면 읽지 않은 수를 독 배지에 보인다. 로그인이 끝나면 지운다.
+  useDesktopBadge(enabled && state.phase === "ready" ? state.unread : 0);
 
   return { state, refresh, markRead, markAllRead };
 }
