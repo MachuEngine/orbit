@@ -31,7 +31,13 @@ from orbit.actions.hashing import args_hash, canonical_args
 from orbit.actions.models import WriteAction
 from orbit.actions.provenance import classify_emails
 from orbit.assistant.envelope import boundary_for
-from orbit.assistant.tools import CALENDAR_TOOLS, ReadOnlyTools, ToolInputError, ToolOutcome
+from orbit.assistant.tools import (
+    CALENDAR_TOOLS,
+    SUBMIT_ANSWER,
+    ReadOnlyTools,
+    ToolInputError,
+    ToolOutcome,
+)
 from orbit.assistant.workset import WorkSet
 from orbit.connectors.contracts import CalendarConnector, MailConnector
 from orbit.connectors.errors import CONNECTOR_NOTICE_KINDS
@@ -47,6 +53,7 @@ from orbit.records.runs import (
     list_messages,
     transition_run,
 )
+from orbit.runflow.answer import answer_tool_spec, with_answer_prompt
 from orbit.runflow.context import (
     CONVERSATION_CONTEXT,
     ConversationContext,
@@ -312,10 +319,14 @@ class RunNodes:
         if assistant is None:
             boundary = boundary_for(f"run:{run_id}")
             system = build_system_prompt(d.clock.now(), d.tz, boundary)
+            tools = run_tool_specs()
+            if d.answer_sink is not None:  # 평가 전용 답 제출 확장(ADR-0023 §6)
+                system = with_answer_prompt(system)
+                tools = (*tools, answer_tool_spec())
             request = LLMRequest(
                 messages=tuple(transcript.llm_messages(system, boundary)),
                 purpose="system_under_test",
-                tools=run_tool_specs(),
+                tools=tools,
                 tool_choice="auto",
                 temperature=TEMPERATURE,
             )
@@ -413,7 +424,8 @@ class RunNodes:
                 continue
             if llm_id in done:
                 continue
-            if name not in READ_TOOLS and name not in LOCAL_TOOLS:
+            submit = name == SUBMIT_ANSWER and self._d.answer_sink is not None
+            if name not in READ_TOOLS and name not in LOCAL_TOOLS and not submit:
                 await self._store_tool_result(
                     ws, run_id, step, llm_id, name, {"error": "unknown_tool"}, is_error=True
                 )
@@ -434,6 +446,10 @@ class RunNodes:
                 outcome = await self._run_doc_tool(ws, name, call.get("arguments"), tools.workset)
             else:
                 outcome = await tools.execute(name, call.get("arguments"))  # type: ignore[arg-type]
+                if submit and outcome.structured is not None and self._d.answer_sink is not None:
+                    # 제공자 ID가 든 구조화된 답은 메모리로만 넘긴다. 모델과 저장소에는
+                    # `{"status": "submitted"}`만 간다(ADR-0023 §6, ADR-0006).
+                    self._d.answer_sink(outcome.structured)
             if outcome.connector_error is not None:
                 # 결과 저장보다 먼저 남긴다. 저장 직후 중단돼도 재실행이 알림을 다시 만들지 않으면서
                 # 빠뜨리지도 않는다.

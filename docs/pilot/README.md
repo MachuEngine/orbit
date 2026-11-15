@@ -82,6 +82,58 @@ uv run python -m orbit.evalrunner run \
 - `runs/`는 git에서 제외된다. 결과 파일을 커밋하지 않는다.
 - 통계는 `python -m orbit.evalrunner stats ../runs/pilot/A.jsonl --compare ../runs/pilot/B.jsonl`로 낸다.
 
+## 실사용 경로(`runflow_v0`) 실행 (ADR-0023)
+
+`runflow_v0`는 평가 러너가 실사용 그래프(`orbit.runflow`)를 워커 없이 직접 구동하는 평가 대상이다. 에피소드마다
+평가 DB에 워크스페이스를 만들고 끝나면 지우므로 전용 DB `orbit_eval`이 필요하다. `ORBIT_EVAL_DATABASE_URL`
+(앱 역할 `orbit_app`)이 없으면 실행하지 않고, 개발 DB(`orbit`)를 가리키면 거부한다.
+
+### 평가 DB 준비
+
+새 볼륨에서는 `backend/db/init/00_roles.sql`이 `orbit_eval`을 만든다. 기존 볼륨(이미 떠 있는 개발 DB)에는
+`orbit_test`처럼 수동으로 만든다. 저장소 루트에서 실행한다.
+
+```bash
+docker compose -f backend/compose.yml exec -T postgres psql -U postgres -d postgres \
+  -c "CREATE DATABASE orbit_eval OWNER orbit_owner"
+docker compose -f backend/compose.yml exec -T postgres psql -U postgres -d orbit_eval <<'SQL'
+GRANT CREATE, USAGE ON SCHEMA public TO orbit_owner;
+GRANT USAGE ON SCHEMA public TO orbit_app;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+CREATE EXTENSION IF NOT EXISTS vector;
+SQL
+
+set -a; source backend/dev.env; set +a
+ORBIT_MIGRATION_DATABASE_URL="$ORBIT_EVAL_MIGRATION_DATABASE_URL" \
+  uv run --directory backend alembic upgrade head
+```
+
+스키마는 개발 DB와 같은 Alembic 마이그레이션으로 맞춘다. 마지막 명령의 `ORBIT_MIGRATION_DATABASE_URL`은 이 명령에만
+평가 DB 값으로 덮어쓴다(개발 DB는 건드리지 않는다).
+
+### 실행
+
+```bash
+set -a; source backend/dev.env; set +a
+cd backend
+uv run python -m orbit.evalrunner run \
+  --dataset ../eval/datasets/orbit-eval/v0 --split dev --sut runflow_v0 --index off \
+  --live-llm --estimate 5 --repeats 3 --seed 0 --prompt-version runflow_v0 \
+  --max-cost-usd 0.5 --max-total-tokens 2000000 \
+  --out ../runs/pilot/runflow-A.jsonl
+```
+
+- LLM 환경(`ORBIT_LLM_*`)은 위 `assistant_v0` 실행과 같다. 비용이 드는 실행은 사전 측정 뒤 개발자 승인을 받는다.
+- `--index off`(기본)는 색인 의존성 없이 실행한다(`search_indexed_mail`은 `index_unavailable`). `--index fake`는
+  아직 지원하지 않는다.
+- 결과 행에는 `assistant_v0` 행의 필드에 더해 `approval_violations`(DB `execution`·`approval`과 Sim 호출 기록으로
+  러너가 계산), `turns`(턴별 run 상태·승인 수·오류 종류), `reminders_created`가 있다. 설정 지문의
+  `config.sut_config`에 runflow 설정 지문, 답 제출 확장 버전(`eval-answer-v1`), 색인 모드가 들어간다.
+- 과제의 `approval_policy`(선택, 쓰기 순번별 `approve`·`reject`)는 시뮬레이션 사용자의 결정이다. 없으면 모두
+  승인한다.
+- 모델이 받는 도구 목록과 프롬프트에 `submit_answer`와 안내 한 단락이 더해진다. 실사용 입력과 정확히 같지
+  않다(ADR-0023 타당성 위협).
+
 ## 결과에 남는 설정 지문
 
 결과 `config.llm`에 `provider`, `reasoning_effort`, `temperature_sent`, `tool_strict`, `reasoning_items_roundtrip`,

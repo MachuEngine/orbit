@@ -95,6 +95,9 @@ def write_dataset(
     write_manifest(path, manifest)
     (path / WORLD).write_text(dumps_json(world), encoding="utf-8")
     rows = [t.model_dump(mode="json") for t in tasks]
+    for row in rows:  # 선택 필드는 값이 없으면 쓰지 않는다(v0 파일과 같은 바이트를 유지한다)
+        if row.get("approval_policy") is None:
+            row.pop("approval_policy", None)
     (path / TASKS).write_text(dumps_jsonl(rows), encoding="utf-8")
 
 

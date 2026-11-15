@@ -19,12 +19,14 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
+from sqlalchemy.engine import make_url
 
 from orbit.connectors.sim.faults import FaultPlan
 from orbit.core.config import get_llm_settings
 from orbit.evalrunner import stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
+from orbit.evalrunner.runflow_env import EvalDatabaseSettings, RunflowEnvironment
 from orbit.evalrunner.runner import (
     ExperimentBudget,
     FaultPlanSpec,
@@ -33,7 +35,7 @@ from orbit.evalrunner.runner import (
     estimate_experiment,
     run_experiment,
 )
-from orbit.evalrunner.suts import UnknownSutError, create_sut, sut_names
+from orbit.evalrunner.suts import DATABASE_SUTS, UnknownSutError, create_sut, sut_names
 from orbit.evalrunner.task_source import DatasetError, load_dataset
 from orbit.llm.factory import build_llm, llm_config_info
 
@@ -99,6 +101,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--dataset", required=True)
     run.add_argument("--split", required=True, choices=["dev", "test"])
     run.add_argument("--sut", required=True, help=f"등록된 이름: {', '.join(sut_names())}")
+    run.add_argument(
+        "--index", choices=["off"], default="off",
+        help="runflow_v0의 색인 검색 모드. off만 지원한다(fake는 평가 DB에 연결 행이 필요해 보류, "
+        "ADR-0023 §8)",
+    )  # fmt: skip
     run.add_argument("--repeats", type=int, default=3)
     run.add_argument("--out", required=True)
     run.add_argument("--seed", type=int, default=0, help="실험 시드이자 표본 추출 시드")
@@ -151,6 +158,23 @@ def _live_llm(declared_model_id: str) -> tuple[LLMFactory, dict[str, Any], str] 
     return (lambda task, repeat: llm), llm_config_info(settings), settings.llm_model_id
 
 
+def _database_env(sut: str) -> RunflowEnvironment | None:
+    """DB를 쓰는 평가 대상이면 `ORBIT_EVAL_DATABASE_URL`로 환경을 만든다. 쓸 수 없으면 None."""
+    if sut not in DATABASE_SUTS:
+        return None
+    try:
+        url = EvalDatabaseSettings().eval_database_url.get_secret_value()
+    except ValidationError:
+        print(f"{sut}에는 ORBIT_EVAL_DATABASE_URL(평가 DB, 앱 역할)이 필요하다", file=sys.stderr)
+        return None
+    if (make_url(url).database or "") == "orbit":
+        print(
+            "평가는 개발 DB(orbit)에서 실행하지 않는다. 전용 DB(orbit_eval)를 쓴다", file=sys.stderr
+        )
+        return None
+    return RunflowEnvironment(url)
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.split == "test" and not args.allow_test:
         raise SealedSplitError("test 분할 봉인")  # 출력 파일을 만들기 전에 거부한다
@@ -172,10 +196,15 @@ def _run(args: argparse.Namespace) -> int:
         llm_factory, llm_config, model_id = live
     else:
         llm_factory = load_script(args.llm_script) if args.llm_script else scripted_llm_factory({})
+    database_env = _database_env(args.sut)
+    if args.sut in DATABASE_SUTS and database_env is None:
+        return 2  # 출력 파일을 만들기 전에 거부한다
+    sut_options: dict[str, Any] = {"index_mode": args.index} if args.sut in DATABASE_SUTS else {}
     sha, dirty = _git_state(out.parent)  # 출력 파일을 만들기 전에 읽는다
     common: dict[str, Any] = {
         "split": args.split,
-        "sut_factory": lambda: create_sut(args.sut),
+        "sut_factory": lambda: create_sut(args.sut, **sut_options),
+        "database_env": database_env,
         "llm_factory": llm_factory,
         "seed": args.seed,
         "budget": Budget(args.max_steps, args.max_episode_tokens, args.max_seconds),

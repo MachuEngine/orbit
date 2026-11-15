@@ -11,6 +11,7 @@ Sim과 `UsageRecorder`에서 읽는다.
 import asyncio
 import hashlib
 import json
+import logging
 import random
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -27,6 +28,7 @@ from orbit.evalrunner.episode import (
     BudgetExceeded,
     Episode,
     EpisodeConnectors,
+    EpisodeDatabase,
     EpisodeOutput,
     EpisodeRecordingLLM,
     ReadOnlyClock,
@@ -35,11 +37,18 @@ from orbit.evalrunner.episode import (
     SutTurn,
     SystemUnderTest,
 )
+from orbit.evalrunner.runflow_env import (
+    DbObservation,
+    RunflowEnvironment,
+    approval_violations,
+)
 from orbit.evalrunner.scoring import FailureType, score_episode
 from orbit.evalrunner.structured import answer_ids
 from orbit.evalrunner.task_source import SPLITS, Dataset, DatasetError, TaskView
 from orbit.llm.interface import LLM, UsageRecorder
 from orbit.llm.model_id import is_declared_model
+
+logger = logging.getLogger(__name__)
 
 UNSPECIFIED_MODEL = "unspecified"
 
@@ -126,6 +135,13 @@ def _config_dict(
     }
     if llm_config is not None:  # 실제 LLM 제공자 설정(ADR-0014). 스크립트 실행에는 없다.
         config["llm"] = dict(llm_config)
+    sut_info = getattr(sut, "config_info", None)
+    if callable(
+        sut_info
+    ):  # runflow 지문·답 제출 확장·색인 모드처럼 평가 대상이 더하는 설정(ADR-0023)
+        config["sut_config"] = sut_info(
+            model_id=model_id, llm_info=dict(llm_config) if llm_config is not None else None
+        )
     return config
 
 
@@ -159,8 +175,22 @@ class EpisodeResult:
     cached_input_tokens: int = 0
     reasoning_tokens: int = 0  # output_tokens의 부분집합(추론에 쓴 토큰)
     length_finishes: int = 0  # 출력 토큰 한도로 끝난 LLM 응답 수(finish_reason == "length")
+    # 아래 셋은 DB를 쓰는 평가 대상(`runflow_v0`)에서만 값이 있다. 없으면 결과 행에도 없다.
+    approval_violations: int = 0
+    turns: tuple[Mapping[str, Any], ...] | None = None  # 턴별 run 상태·승인 수(러너가 DB에서 읽음)
+    reminders_created: int | None = None
+    cleanup_failed: bool | None = None  # 평가 DB 정리 실패 여부(runflow_v0에서만)
 
     def to_dict(self) -> dict[str, Any]:
+        row = self._base_dict()
+        if self.cleanup_failed is not None:  # DB를 쓴 에피소드(관찰이 실패하면 turns가 없다)
+            row["approval_violations"] = self.approval_violations
+            row["turns"] = None if self.turns is None else [dict(t) for t in self.turns]
+            row["reminders_created"] = self.reminders_created
+            row["cleanup_failed"] = bool(self.cleanup_failed)
+        return row
+
+    def _base_dict(self) -> dict[str, Any]:
         return {
             "experiment_id": self.experiment_id,
             "config": dict(self.config),
@@ -175,7 +205,7 @@ class EpisodeResult:
                 "detail": self.detail,
             },
             "state_diff_match": self.state_diff_match,
-            "approval_violations": 0,  # v0 고정. 승인 경로는 4단계에서 채운다
+            "approval_violations": 0,  # 승인 경로가 없는 평가 대상은 0
             "checks": dict(self.checks),
             "unscored": list(self.unscored),
             "text_fact_recall": self.text_fact_recall,
@@ -216,6 +246,7 @@ async def run_episode(
     fingerprint: str,
     declared_model_id: str = UNSPECIFIED_MODEL,
     monotonic: Callable[[], float] = time.perf_counter,
+    database_env: RunflowEnvironment | None = None,
 ) -> EpisodeResult:
     clock = FixedClock(task.as_of_time)  # 에피소드마다 자기 시계(D1-5)
     world = base_world.fork(episode_seed(seed, task.task_id, repeat), clock=clock)
@@ -225,47 +256,78 @@ async def run_episode(
     recording_llm = EpisodeRecordingLLM(llm, recorder)
     account = task.account_id
     step_counter = StepCounter(budget, recorder, connectors.calls, monotonic=monotonic)
-    episode = Episode(
-        # 정답(gold)과 분할·태그는 러너만 가진다. SUT에는 아래 네 필드만 준다.
-        task=SutTask(
-            task_id=task.task_id,
-            turns=tuple(SutTurn(t.role, t.content) for t in task.turns),
-            as_of_time=task.as_of_time,
-            account_id=account,
-        ),
-        connectors=EpisodeConnectors(
-            mail=connectors.mail[account], calendar=connectors.calendar[account]
-        ),
-        clock=ReadOnlyClock(clock),
-        llm=recording_llm,
-        budget=budget,
-        steps=step_counter,
-    )
-
+    # 평가 DB 워크스페이스는 러너가 준비하고 정리한다. 평가 대상은 이 핸들만 쓴다(ADR-0023 §2).
+    database: EpisodeDatabase | None = None
     error_type: FailureType | None = None
     detail: str | None = None
     output: EpisodeOutput | None = None
-    started = monotonic()
+    observation: DbObservation | None = None
+    cleanup_failed = False
     timeout = asyncio.timeout(budget.max_seconds)
     try:
-        async with timeout:
-            result = await sut.run(episode)
-        if isinstance(result, EpisodeOutput) and isinstance(result.final_text, str):
-            output = result
-        else:
-            error_type, detail = "sut_error", "InvalidOutput"
-    except BudgetExceeded as exc:
-        error_type, detail = "budget_exceeded", exc.reason
-    except TimeoutError as exc:
-        if timeout.expired():
-            error_type, detail = "budget_exceeded", "time"
-        else:
+        if database_env is not None:
+            database = await database_env.prepare(
+                as_of=task.as_of_time, seed=episode_seed(seed, task.task_id, repeat)
+            )
+        # 구성 중 예외가 나도 아래 `finally`가 정리(잠금 해제·행 삭제)한다.
+        episode = Episode(
+            # 정답(gold)과 분할·태그는 러너만 가진다. SUT에는 아래 네 필드만 준다.
+            task=SutTask(
+                task_id=task.task_id,
+                turns=tuple(SutTurn(t.role, t.content) for t in task.turns),
+                as_of_time=task.as_of_time,
+                account_id=account,
+                approval_policy=tuple(task.approval_policy or ()),
+            ),
+            connectors=EpisodeConnectors(
+                mail=connectors.mail[account],
+                calendar=connectors.calendar[account],
+                drive=connectors.drive[account],
+            ),
+            clock=ReadOnlyClock(clock),
+            llm=recording_llm,
+            budget=budget,
+            steps=step_counter,
+            database=database,
+        )
+        started = monotonic()
+        try:
+            async with timeout:
+                result = await sut.run(episode)
+            if isinstance(result, EpisodeOutput) and isinstance(result.final_text, str):
+                output = result
+            else:
+                error_type, detail = "sut_error", "InvalidOutput"
+        except BudgetExceeded as exc:
+            error_type, detail = "budget_exceeded", exc.reason
+        except TimeoutError as exc:
+            if timeout.expired():
+                error_type, detail = "budget_exceeded", "time"
+            else:
+                error_type, detail = "sut_error", type(exc).__name__
+        except ConnectorError as exc:
+            error_type, detail = "connector_error_unhandled", type(exc).__name__
+        except Exception as exc:  # SUT의 어떤 오류도 에피소드 실패로 기록한다
             error_type, detail = "sut_error", type(exc).__name__
-    except ConnectorError as exc:
-        error_type, detail = "connector_error_unhandled", type(exc).__name__
-    except Exception as exc:  # SUT의 어떤 오류도 에피소드 실패로 기록한다
-        error_type, detail = "sut_error", type(exc).__name__
-    latency_ms = round((monotonic() - started) * 1000)
+        latency_ms = round((monotonic() - started) * 1000)
+        if database_env is not None and database is not None:
+            try:
+                # 평가 대상이 보고한 값이 아니라 러너가 DB에서 직접 읽는다(ADR-0009 §3).
+                observation = await database_env.observe(database)
+            except Exception as exc:  # 관찰 실패는 이 에피소드만 채점 불가로 두고 실험은 계속한다
+                error_type, detail = "harness_error", type(exc).__name__
+    finally:
+        if database_env is not None and database is not None:
+            try:
+                await database_env.cleanup(database)  # 실패·시간 초과 뒤에도 지운다
+            except Exception as exc:
+                # 남은 행은 같은 ID의 다음 `prepare`가 치운다. ID와 예외 이름만 남긴다.
+                cleanup_failed = True
+                logger.warning(
+                    "평가 DB 정리 실패: workspace_id=%s error=%s",
+                    database.workspace_id,
+                    type(exc).__name__,
+                )
 
     calls = connectors.calls.records
     usage = recorder.total_usage
@@ -280,10 +342,23 @@ async def run_episode(
         calls,
         diff(before, world),
         output.structured if output is not None else None,
+        reminders_created=len(observation.reminders) if observation is not None else 0,
     )
+    violations = approval_violations(observation, calls) if observation is not None else 0
     failure: FailureType | None
-    if score.failure_type in ("forbidden_tool", "unexpected_state_change"):
+    if score.failure_type == "forbidden_tool":
         # 안전 위반은 오류·예산 초과에 가려지지 않는다
+        failure, detail = score.failure_type, None
+    elif error_type == "harness_error":
+        # 러너가 DB를 관찰하지 못해 승인 위반·리마인더를 알 수 없다. 평가 대상의 실패와 구분한다.
+        # 다만 Sim diff만으로 아는 `unexpected_state_change`는 가리지 않는다(리마인더 제외).
+        if score.failure_type == "unexpected_state_change":
+            failure, detail = score.failure_type, None
+        else:
+            failure = "harness_error"
+    elif violations > 0:  # 승인 없는 외부 쓰기는 `forbidden_tool`과 같은 안전 단계다(ADR-0023 §4)
+        failure, detail = "approval_violation", None
+    elif score.failure_type == "unexpected_state_change":
         failure, detail = score.failure_type, None
     elif error_type is not None:
         failure = error_type
@@ -305,6 +380,8 @@ async def run_episode(
             k: (v if k in ("forbidden_tools", "state_diff") else None)
             for k, v in score.checks.items()
         }
+    if observation is not None:
+        checks = {**checks, "approval": violations == 0}
     text_skipped = output is not None and output.text_skipped
     return EpisodeResult(
         experiment_id=experiment_id,
@@ -335,6 +412,10 @@ async def run_episode(
         latency_ms=latency_ms,
         text_skipped=text_skipped,
         length_finishes=sum(r.finish_reason == "length" for r in recorder.records),
+        approval_violations=violations,
+        turns=(tuple(t.to_dict() for t in observation.turns) if observation is not None else None),
+        reminders_created=len(observation.reminders) if observation is not None else None,
+        cleanup_failed=cleanup_failed if database_env is not None else None,
     )
 
 
@@ -387,13 +468,15 @@ async def run_experiment(
     llm_config: Mapping[str, Any] | None = None,
     sink: ResultSink | None = None,
     monotonic: Callable[[], float] = time.perf_counter,
+    database_env: RunflowEnvironment | None = None,
 ) -> ExperimentSummary:
     """반복 우선(1회차 전 과제 -> 2회차 ...)으로 실행한다. 과제 순서는 실험 시드로 고정 셔플해
     순서 편향(누적 상한 중단 시 특정 과제만 남는 문제)을 줄인다. 결과는 끝날 때마다 `sink`로 넘기고
     요약에도 모은다.
 
     SUT는 에피소드마다 `sut_factory()`로 새로 만들고, LLM은 `llm_factory(task, repeat)`로
-    새로 받는다(에피소드 간 상태 공유 없음).
+    새로 받는다(에피소드 간 상태 공유 없음). `database_env`가 있으면 에피소드마다 평가 DB
+    워크스페이스를 만들고 끝난 뒤 지우며, 실험이 끝나면(중단해도) DB 접속을 닫는다(ADR-0023 §2).
     """
     if split not in SPLITS:
         raise ValueError(f"split은 {SPLITS} 중 하나여야 한다: {split!r}")
@@ -440,38 +523,43 @@ async def run_experiment(
     exp_id = experiment_id or f"exp-{fingerprint[:12]}"
     summary = ExperimentSummary(exp_id, fingerprint, len(tasks) * repeats)
 
-    ordered = sorted(tasks, key=lambda t: t.task_id)
-    random.Random(f"order:{seed}").shuffle(ordered)  # noqa: S311
-    for repeat in range(1, repeats + 1):
-        for task in ordered:
-            result = await run_episode(
-                task=task,
-                base_world=base_world,
-                sut=sut_factory(),
-                llm=llm_factory(task, repeat),
-                budget=budget,
-                fault=fault,
-                seed=seed,
-                repeat=repeat,
-                experiment_id=exp_id,
-                config=config,
-                fingerprint=fingerprint,
-                declared_model_id=model_id,
-                monotonic=monotonic,
-            )
-            summary.results.append(result)
-            if sink is not None:
-                sink(result)
-            summary.total_tokens += result.input_tokens + result.output_tokens
-            if result.cost_usd is None:
-                summary.cost_unknown_episodes += 1
-            else:
-                summary.total_cost_usd += result.cost_usd
-            reason = _stop_reason(summary, experiment_budget)
-            if reason is not None:
-                summary.stopped_reason = reason
-                return summary
-    return summary
+    try:
+        ordered = sorted(tasks, key=lambda t: t.task_id)
+        random.Random(f"order:{seed}").shuffle(ordered)  # noqa: S311
+        for repeat in range(1, repeats + 1):
+            for task in ordered:
+                result = await run_episode(
+                    task=task,
+                    base_world=base_world,
+                    sut=sut_factory(),
+                    llm=llm_factory(task, repeat),
+                    budget=budget,
+                    fault=fault,
+                    seed=seed,
+                    repeat=repeat,
+                    experiment_id=exp_id,
+                    config=config,
+                    fingerprint=fingerprint,
+                    declared_model_id=model_id,
+                    monotonic=monotonic,
+                    database_env=database_env,
+                )
+                summary.results.append(result)
+                if sink is not None:
+                    sink(result)
+                summary.total_tokens += result.input_tokens + result.output_tokens
+                if result.cost_usd is None:
+                    summary.cost_unknown_episodes += 1
+                else:
+                    summary.total_cost_usd += result.cost_usd
+                reason = _stop_reason(summary, experiment_budget)
+                if reason is not None:
+                    summary.stopped_reason = reason
+                    return summary
+        return summary
+    finally:
+        if database_env is not None:
+            await database_env.aclose()
 
 
 def _stop_reason(summary: ExperimentSummary, cap: ExperimentBudget) -> str | None:

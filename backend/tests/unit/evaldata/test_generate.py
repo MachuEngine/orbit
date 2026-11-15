@@ -105,6 +105,7 @@ def test_task_contract_fields() -> None:
         "gold",
         "difficulty",
         "tags",
+        "approval_policy",  # 선택 필드(ADR-0023 §3). v0 데이터에는 없고 파일에도 쓰지 않는다
     ]
     assert list(Gold.model_fields) == [
         "answer_facts",

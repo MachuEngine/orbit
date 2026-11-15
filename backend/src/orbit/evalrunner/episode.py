@@ -6,14 +6,17 @@
 
 import asyncio
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
-from orbit.connectors.contracts import CalendarConnector, MailConnector
+from orbit.connectors.contracts import CalendarConnector, DriveConnector, MailConnector
 from orbit.connectors.sim.calls import CallLog
 from orbit.core.clock import Clock
+from orbit.core.ids import Uuid7Generator
+from orbit.db.session import AsyncDatabase
 from orbit.llm.interface import LLM, RecordingLLM, UsageRecord, UsageRecorder
 from orbit.llm.types import LLMRequest, LLMResponse
 
@@ -118,6 +121,9 @@ class SutTask:
     turns: tuple["SutTurn", ...]
     as_of_time: datetime
     account_id: str
+    # 시뮬레이션 사용자의 승인 결정(ADR-0023 §3). 정답이 아니라 사용자 행동 입력이다. n번째 승인
+    # 요청(0부터, 에피소드 전체 순서)에 `approve`·`reject`를 준다. 목록이 끝나면 모두 승인한다.
+    approval_policy: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,6 +148,7 @@ class EpisodeConnectors:
 
     mail: MailConnector
     calendar: CalendarConnector
+    drive: DriveConnector | None = None  # `runflow_v0`가 쓴다(문서 도구)
 
 
 class EpisodeRecordingLLM(RecordingLLM):
@@ -180,6 +187,20 @@ class EpisodeRecordingLLM(RecordingLLM):
 
 
 @dataclass(frozen=True)
+class EpisodeDatabase:
+    """러너가 에피소드마다 준비한 평가 DB 핸들(ADR-0023 §2). `runflow_v0`만 쓴다.
+
+    워크스페이스와 대화는 러너가 만들고 에피소드 뒤 지운다. 평가 대상은 이 ID와 핸들만 쓴다.
+    """
+
+    db: AsyncDatabase
+    workspace_id: uuid.UUID
+    conversation_id: uuid.UUID
+    checkpoint_conninfo: str  # psycopg 접속 문자열(`postgresql://...`). 체크포인터 전용
+    ids: Uuid7Generator  # 에피소드 시드로 고정한 ID 생성기
+
+
+@dataclass(frozen=True)
 class Episode:
     """에피소드 하나에 평가 대상이 쓸 수 있는 것. 정답·FaultPlan·호출 기록은 숨긴다."""
 
@@ -189,6 +210,7 @@ class Episode:
     llm: RecordingLLM
     budget: Budget
     steps: StepCounter
+    database: EpisodeDatabase | None = None  # DB를 쓰는 평가 대상(`runflow_v0`)에만 있다
 
 
 @dataclass(frozen=True)

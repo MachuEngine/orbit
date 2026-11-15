@@ -10,6 +10,7 @@ from orbit.assistant.prompt import PROMPT_VERSION
 from orbit.connectors.contracts import ConnectorError
 from orbit.evalrunner.episode import Episode, EpisodeOutput, SystemUnderTest
 from orbit.evalrunner.llm_script import SUBMIT_ANSWER
+from orbit.evalrunner.runflow_sut import RunflowV0SUT
 from orbit.evalrunner.tools import ToolDispatcher, serialize_result, tool_specs
 from orbit.llm.types import LLMRequest, Message, ToolSpec
 
@@ -127,13 +128,17 @@ class AssistantV0SUT:
         )
 
 
-SutFactory = Callable[[], SystemUnderTest]
+SutFactory = Callable[..., SystemUnderTest]
 
 _REGISTRY: dict[str, SutFactory] = {
     "noop": NoopSUT,
     "scripted_tool": ScriptedToolSUT,
     "assistant_v0": AssistantV0SUT,
+    "runflow_v0": RunflowV0SUT,  # 평가 DB 필요(ADR-0023)
 }
+
+# 러너가 에피소드마다 평가 DB 핸들(`Episode.database`)을 준비해야 하는 평가 대상
+DATABASE_SUTS = frozenset({"runflow_v0"})
 
 
 def register_sut(name: str, factory: SutFactory) -> None:
@@ -150,9 +155,10 @@ class UnknownSutError(ValueError):
     pass
 
 
-def create_sut(name: str) -> SystemUnderTest:
+def create_sut(name: str, **options: Any) -> SystemUnderTest:
+    """`options`는 평가 대상 생성자에 그대로 넘긴다(예: `runflow_v0`의 `index_mode`)."""
     try:
         factory = _REGISTRY[name]
     except KeyError:
         raise UnknownSutError(f"알 수 없는 SUT: {name} (등록: {sut_names()})") from None
-    return factory()
+    return factory(**options)

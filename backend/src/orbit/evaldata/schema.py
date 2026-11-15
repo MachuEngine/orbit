@@ -116,6 +116,9 @@ class Task(_Model):
     gold: Gold
     difficulty: dict[str, int | float | str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
+    # 시뮬레이션 사용자의 승인 결정(ADR-0023 §3). n번째 쓰기 승인 요청에 대한 결정이고 목록 밖은
+    # 승인이다. 없으면(v0) 모두 승인한다. 정답이 아니라 사용자 행동 입력이라 평가 대상에게 보인다.
+    approval_policy: list[Literal["approve", "reject"]] | None = None
 
 
 ReviewDecision = Literal["approve", "fix", "exclude"]
