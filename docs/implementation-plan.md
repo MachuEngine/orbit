@@ -187,13 +187,16 @@ Google Drive·Docs Connector 계약과 Sim·Google 구현, 계약 테스트, 읽
 - 진행분은 브랜치 `stage-12/demo-deploy`(머지 전)에 있다: ADR-0022(GCP e2-micro VM + Docker Compose + Cloud KMS, `실험 중`), 내장 워커, 정적 서빙, Dockerfile, 시작 시 안전 점검, 접근 로그 쿼리 가리기. 다시 시작할 때 할 일은 그 브랜치의 이 절에 적었다.
 배포 환경 ADR(관리형 DB의 pgvector 0.8 이상), KMS 키 관리, 관측(로그·지표·추적), 다중 사용자·초대, Google 앱 검증과 제한 범위 보안 평가, 접근 로그의 쿼리 문자열 가리기
 
-#### 13단계. 데스크톱 앱과 음성 (큼, 2026-11-15 개발자 결정으로 평가 실행보다 먼저)
+#### 13단계. 데스크톱 앱과 음성 (큼, 완료 2026-11-15, 2026-11-15 개발자 결정으로 평가 실행보다 먼저)
 - 설계: ADR-0024(Electron 셸, macOS 먼저, 서버 출처 로드, 시스템 브라우저 + loopback 로그인 핸드오프), ADR-0025(마이크 토글 STT `gpt-transcribe`, OS 내장 TTS, 오디오 비저장).
 - 13a 음성(웹 공통): `SpeechToText` 인터페이스와 `/api/voice/transcribe`, 입력창 마이크 버튼, 읽어 주기. 상한·로그 규칙.
 - 13b 데스크톱 셸: `desktop/`(main·preload), 보안 설정, 이동·권한 제한, 상주·메뉴 막대, 네이티브 알림·독 배지, 전역 단축키, Playwright Electron 스모크.
 - 13c 로그인·연결 핸드오프: `/api/auth/desktop/*`, 연결 티켓, 마이그레이션, 통합 테스트, 개발자 계정 수동 확인.
 - 평가 추가(평가 계획 초안): STT CER·고유명사 정확도, 음성 종단 성공률, 지연·비용, 비교 후보(STT 모델, 계단식 vs Realtime, OS 음성 vs OpenAI 음성).
 - 보류: 서명·공증·자동 업데이트·배포, Windows, 항상 듣기, 음성 승인.
+- 결과: 13a 음성(STT `gpt-transcribe` 서버 전사, 크기·형식·WAV fmt 검증, 사용량 상한, 마이그레이션 0011), 13b Electron 셸(45.3.2, 출처·권한·IPC 제한, 상주·네이티브 알림·배지·`Option+Space`), 13c 로그인·연결 핸드오프(PKCE + loopback, 연결은 앱이 완료해 연결 CSRF 차단, 마이그레이션 0012). 검토에서 연결 CSRF(높음)를 찾아 ADR-0024 §5를 개정했다.
+- 확인: DB 포함 `ORBIT_DESKTOP_SMOKE=1 scripts/check.sh`(pytest 2004, 프론트 479, 데스크톱 201, Electron 스모크 17). 개발 DB 0012 적용 후 데스크톱 앱 실행. 실제 Google 로그인·연결, 마이크·OpenAI 전사, 시스템 알림, 단축키의 수동 확인 결과는 기록되지 않았다.
+- 남은 작은 일: 안내 화면 `frame-ancestors`, Google 일시 오류 시 연결 재시도 안내, 데스크톱 스모크 CI(macOS 러너) 여부.
 
 ### 평가 보류 목록 (구현 이후 묶어서 진행)
 > 2026-11-15: 평가 단계를 시작한다. 평가 종류·지표·비교 실험·메타 평가·평가 스위트 구성은 `docs/evaluation-plan-draft.md`가 이 표를 대체한다(Agent 패턴 비교 등 기존 항목 유지, 실계정 계약 테스트(6E)는 12단계로 이동). 아래 표는 기록용으로 남긴다.
