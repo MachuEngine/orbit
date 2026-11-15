@@ -13,7 +13,7 @@
 """
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -37,6 +37,11 @@ from orbit.records.runs import (
 )
 from orbit.runflow.answer import ANSWER_EXTENSION_VERSION
 from orbit.runflow.deps import RunDeps
+from orbit.runflow.eval_variants import (
+    FACTS_EXTENSION_VERSION,
+    REASONING_ROUNDTRIP_VERSION,
+    ReasoningCache,
+)
 from orbit.runflow.fingerprint import PATTERN, config_fingerprint
 from orbit.runflow.graph import advance_run
 from orbit.runflow.prompt import PROMPT_VERSION
@@ -47,6 +52,8 @@ MAX_APPROVALS_PER_RUN = (
 )
 MAX_DRIVE_ROUNDS = 2 * (MAX_APPROVALS_PER_RUN + 1)  # `advance_run` 호출 상한(run 하나)
 INDEX_MODES = ("off",)
+# CLI 이름(`--runflow-variant`) -> SUT 버전 문자열에 붙는 이름 (ADR-0023 §10)
+VARIANTS = {"facts": FACTS_EXTENSION_VERSION, "reasoning-rt": REASONING_ROUNDTRIP_VERSION}
 
 
 class RunFailed(RuntimeError):  # noqa: N818  도메인 용어
@@ -92,22 +99,51 @@ class RunflowV0SUT:
     name = "runflow_v0"
     TIME_ZONE = "Asia/Seoul"
 
-    def __init__(self, *, index_mode: str = "off") -> None:
+    def __init__(self, *, index_mode: str = "off", variants: Iterable[str] = ()) -> None:
         if index_mode not in INDEX_MODES:
             raise ValueError(f"지원하지 않는 색인 모드: {index_mode!r} (지원: {INDEX_MODES})")
+        chosen = set(variants)
+        unknown = chosen - set(VARIANTS)
+        if unknown:
+            raise ValueError(f"지원하지 않는 변형: {sorted(unknown)} (지원: {sorted(VARIANTS)})")
         self._index_mode = index_mode
+        self._facts = "facts" in chosen
+        self._reasoning_rt = "reasoning-rt" in chosen
+
+    @property
+    def variant_names(self) -> list[str]:
+        """켠 변형의 버전 이름(정렬)."""
+        return sorted(
+            name
+            for key, name in VARIANTS.items()
+            if (key == "facts" and self._facts) or (key == "reasoning-rt" and self._reasoning_rt)
+        )
 
     @property
     def version(self) -> str:
-        return f"0+{PROMPT_VERSION}+{ANSWER_EXTENSION_VERSION}+index-{self._index_mode}"
+        base = f"0+{PROMPT_VERSION}+{ANSWER_EXTENSION_VERSION}+index-{self._index_mode}"
+        # 켠 변형은 고정 순서(facts-v1, reasoning-rt)로 붙인다
+        ordered = [
+            n
+            for n in (FACTS_EXTENSION_VERSION, REASONING_ROUNDTRIP_VERSION)
+            if n in self.variant_names
+        ]
+        return "".join([base, *(f"+{n}" for n in ordered)])
 
     def config_info(
         self, *, model_id: str, llm_info: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """결과의 설정 지문에 더할 항목(runflow 지문, 답 제출 확장, 색인 모드)."""
         return {
-            "runflow_fingerprint": config_fingerprint(model_id, llm_info, answer_extension=True),
+            "runflow_fingerprint": config_fingerprint(
+                model_id,
+                llm_info,
+                answer_extension=True,
+                facts_extension=self._facts,
+                reasoning_roundtrip=self._reasoning_rt,
+            ),
             "answer_extension": ANSWER_EXTENSION_VERSION,
+            "variants": self.variant_names,
             "index_mode": self._index_mode,
             "max_approvals_per_run": MAX_APPROVALS_PER_RUN,
         }
@@ -134,8 +170,14 @@ class RunflowV0SUT:
             jobs=None,
             mail_index=None,
             answer_sink=submission,
+            facts_extension=self._facts,
+            reasoning_cache=ReasoningCache() if self._reasoning_rt else None,
         )
-        fingerprint = config_fingerprint(answer_extension=True)
+        fingerprint = config_fingerprint(
+            answer_extension=True,
+            facts_extension=self._facts,
+            reasoning_roundtrip=self._reasoning_rt,
+        )
         decisions = 0  # 에피소드 전체의 승인 결정 수(정책 순번)
         last_run: uuid.UUID | None = None
         for turn in (t for t in episode.task.turns if t.role == "user"):

@@ -70,6 +70,17 @@ def test_cost_cap_exit_code(tmp_path: Path) -> None:
     assert len((tmp_path / "c.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
+def test_runflow_variant_requires_runflow_sut(tmp_path: Path) -> None:
+    args = _run_args(tmp_path, "v.jsonl", "--runflow-variant", "facts")
+    assert main(args) == 2
+    assert not (tmp_path / "v.jsonl").exists()
+
+
+def test_runflow_variant_rejects_unknown_choice(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        main(_run_args(tmp_path, "w.jsonl", "--runflow-variant", "nope"))
+
+
 def test_unknown_sut_is_usage_error(tmp_path: Path) -> None:
     assert main(_run_args(tmp_path, "u.jsonl", "--sut", "nope")) == 2
 

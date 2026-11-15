@@ -36,6 +36,7 @@ from orbit.evalrunner.task_source import Dataset, load_dataset
 from orbit.llm.interface import LLM
 from orbit.llm.scripted import ScriptedLLM
 from orbit.runflow.answer import ANSWER_PROMPT_PARAGRAPH, answer_tool_spec, with_answer_prompt
+from orbit.runflow.eval_variants import FACTS_PROMPT_PARAGRAPH, ReasoningCache, with_facts_prompt
 from orbit.runflow.fingerprint import config_fingerprint
 from orbit.runflow.prompt import PROMPT_VERSION, build_system_prompt
 from orbit.runflow.write_tools import run_tool_specs
@@ -656,10 +657,115 @@ async def test_invalid_submission_returns_error_and_sink_is_not_called(make_harn
     assert "unknown_handle" in repr(h.llm.requests[1].messages)
 
 
+async def test_facts_extension_adds_paragraph_before_answer_prompt(make_harness: Make) -> None:
+    h = await make_harness([{"text": "끝"}])
+    h.deps.answer_sink = lambda answer: None
+    h.deps.facts_extension = True
+    run_id = await h.start("내일 일정")
+    await h.work()
+    base = build_system_prompt(h.clock.now(), h.deps.tz, boundary_for(f"run:{run_id}"))
+    assert h.llm.requests[0].messages[0].content == with_answer_prompt(with_facts_prompt(base))
+    system = h.llm.requests[0].messages[0].content
+    assert system.index(FACTS_PROMPT_PARAGRAPH) < system.index(ANSWER_PROMPT_PARAGRAPH)
+
+
+async def test_runner_records_variants_and_returns_reasoning_items(app_url: str) -> None:
+    t = task("v-1", ["내일 일정이 뭐가 있나요"], gold=read_gold())
+    script = read_script()
+    script[0] = {**script[0], "provider_items": [REASONING]}
+    summary, env, factory = await run(
+        app_url, [t], {"v-1": script},
+        sut=lambda: create_sut("runflow_v0", variants=["facts", "reasoning-rt"]),
+    )  # fmt: skip
+    r = only(summary)
+    assert r.success, r.detail
+    row = r.to_dict()
+    assert row["config"]["sut_config"]["variants"] == ["facts-v1", "reasoning-rt"]
+    requests = factory.made["v-1"].requests
+    assert FACTS_PROMPT_PARAGRAPH in str(requests[0].messages[0].content)
+    assert [m.provider_items for m in assistant_messages(requests[1])] == [(REASONING,)]
+    assert not any("SYNTH-ENC-0001" in m for b in env.before_cleanup for m in b["messages"])
+
+
+async def test_facts_extension_off_keeps_prompt(make_harness: Make) -> None:
+    h = await make_harness([{"text": "끝"}])
+    assert h.deps.facts_extension is False and h.deps.reasoning_cache is None
+    run_id = await h.start("안녕")
+    await h.work()
+    base = build_system_prompt(h.clock.now(), h.deps.tz, boundary_for(f"run:{run_id}"))
+    assert h.llm.requests[0].messages[0].content == base
+
+
+REASONING = {"type": "reasoning", "id": "rs_synth_1", "encrypted_content": "SYNTH-ENC-0001"}
+
+
+def rt_script() -> list[dict[str, Any]]:
+    return [
+        {"tool_calls": [call("list_events", **DAY)], "provider_items": [REASONING]},
+        {"text": "끝"},
+    ]
+
+
+def assistant_messages(request: Any) -> list[Any]:
+    return [m for m in request.messages if m.role == "assistant"]
+
+
+async def test_reasoning_cache_returns_items_on_next_step_only_in_memory(
+    make_harness: Make, async_db: Any
+) -> None:
+    h = await make_harness(rt_script())
+    h.deps.reasoning_cache = ReasoningCache()
+    run_id = await h.start("내일 일정")
+    await h.work()
+    assert await h.status(run_id) == "succeeded"
+    assert assistant_messages(h.llm.requests[0]) == []
+    sent = assistant_messages(h.llm.requests[1])
+    assert [m.provider_items for m in sent] == [(REASONING,)]
+    # DB 어디에도 추론 항목이 없다
+    async with async_db.workspace_session(h.ws) as s:
+        stored = [
+            json.dumps(r[0], ensure_ascii=False)
+            for r in await s.execute(
+                text("SELECT content FROM run_message WHERE workspace_id = :ws"), {"ws": h.ws}
+            )
+        ] + [
+            json.dumps([r[0], r[1]], ensure_ascii=False)
+            for r in await s.execute(
+                text("SELECT args, provenance FROM tool_call WHERE workspace_id = :ws"),
+                {"ws": h.ws},
+            )
+        ]
+    assert stored
+    assert not any("SYNTH-ENC-0001" in t or "rs_synth_1" in t for t in stored)
+
+
+async def test_reasoning_cache_off_does_not_return_items(make_harness: Make) -> None:
+    h = await make_harness(rt_script())
+    run_id = await h.start("내일 일정")
+    await h.work()
+    assert await h.status(run_id) == "succeeded"
+    assert [m.provider_items for m in assistant_messages(h.llm.requests[1])] == [()]
+
+
+async def test_reasoning_cache_does_not_cross_runs(make_harness: Make) -> None:
+    h = await make_harness([*rt_script(), {"text": "다음"}])
+    h.deps.reasoning_cache = ReasoningCache()
+    first = await h.start("내일 일정")
+    await h.work()
+    assert await h.status(first) == "succeeded"
+    second = await h.start("고마워")
+    await h.work()
+    assert await h.status(second) == "succeeded"
+    # 두 번째 run의 첫 요청에는 앞선 run의 추론 항목이 붙지 않는다
+    assert all(m.provider_items == () for m in h.llm.requests[2].messages)
+
+
 def test_sut_rejects_unsupported_index_mode() -> None:
     with pytest.raises(ValueError):
         create_sut("runflow_v0", index_mode="fake")
     assert create_sut("runflow_v0").version == f"0+{PROMPT_VERSION}+eval-answer-v1+index-off"
+    with_variants = create_sut("runflow_v0", variants=["facts", "reasoning-rt"])
+    assert with_variants.version.endswith("+index-off+facts-v1+reasoning-rt")
 
 
 # ------------------------------------------------- 같은 시드 재실행·잠금·예외 정책

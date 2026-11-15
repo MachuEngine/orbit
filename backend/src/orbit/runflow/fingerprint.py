@@ -15,6 +15,11 @@ from orbit.runflow.answer import (
     answer_tool_spec,
 )
 from orbit.runflow.context import CONTEXT_CONFIG
+from orbit.runflow.eval_variants import (
+    FACTS_EXTENSION_VERSION,
+    FACTS_PROMPT_PARAGRAPH,
+    REASONING_ROUNDTRIP_VERSION,
+)
 from orbit.runflow.nodes import TEMPERATURE
 from orbit.runflow.prompt import PROMPT_VERSION
 from orbit.runflow.write_tools import run_tool_specs
@@ -29,6 +34,8 @@ def config_fingerprint(
     embedding_model_id: str | None = None,
     stt_model_id: str | None = None,
     answer_extension: bool = False,
+    facts_extension: bool = False,
+    reasoning_roundtrip: bool = False,
 ) -> str:
     """`model_id`는 고정 모델 ID(D9-3). 없거나 비어 있으면 "unset"으로 넣는다.
 
@@ -39,6 +46,9 @@ def config_fingerprint(
     `stt_model_id`(음성 전사 모델, ADR-0025)가 없으면 기본 모델 ID로 본다.
     `answer_extension`(평가 전용, ADR-0023 §6)이 True면 답 제출 확장(버전·도구 정의·안내 문구)을
     지문에 더한다. 기본값(False)에서는 확장이 없던 때와 지문이 같다.
+    `facts_extension`·`reasoning_roundtrip`(평가 전용, ADR-0023 §10)도 켰을 때만 버전과 문단을
+    지문에 더한다. `reasoning_roundtrip`이면 `llm.reasoning_items_roundtrip`은 `llm_info`의 실제
+    값(추론 강도 none이면 False)이다.
     """
     payload: dict[str, Any] = {
         "pattern": PATTERN,
@@ -60,9 +70,20 @@ def config_fingerprint(
             "tool": asdict(answer_tool_spec()),
             "prompt": ANSWER_PROMPT_PARAGRAPH,
         }
+    if facts_extension:
+        payload["facts_extension"] = {
+            "version": FACTS_EXTENSION_VERSION,
+            "prompt": FACTS_PROMPT_PARAGRAPH,
+        }
+    if reasoning_roundtrip:
+        payload["reasoning_roundtrip"] = {"version": REASONING_ROUNDTRIP_VERSION}
     if llm_info is not None:
         del payload["temperature"]
-        # 워커 경로는 provider_items를 저장하지 않아 추론 항목을 되돌리지 않는다.
-        payload["llm"] = {**llm_info, "reasoning_items_roundtrip": False}
+        # 워커 경로는 provider_items를 저장하지 않아 추론 항목을 되돌리지 않는다. 평가 전용
+        # `reasoning-rt`를 켜면 제공자 설정이 허용하는 만큼(llm_info 값) 되돌린다.
+        roundtrip = (
+            bool(llm_info.get("reasoning_items_roundtrip")) if reasoning_roundtrip else False
+        )
+        payload["llm"] = {**llm_info, "reasoning_items_roundtrip": roundtrip}
     text = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()

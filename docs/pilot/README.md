@@ -129,6 +129,11 @@ uv run python -m orbit.evalrunner run \
 - 결과 행에는 `assistant_v0` 행의 필드에 더해 `approval_violations`(DB `execution`·`approval`과 Sim 호출 기록으로
   러너가 계산), `turns`(턴별 run 상태·승인 수·오류 종류), `reminders_created`가 있다. 설정 지문의
   `config.sut_config`에 runflow 설정 지문, 답 제출 확장 버전(`eval-answer-v1`), 색인 모드가 들어간다.
+- 원인 확인용 변형(ADR-0023 §10): `--runflow-variant facts`(프롬프트에 `assistant_v0`의 [사실 확인] 단락을 더함,
+  `facts-v1`)와 `--runflow-variant reasoning-rt`(추론 항목을 메모리에만 두고 다음 step 요청에 되돌림)를 켠다.
+  옵션을 반복해 함께 켤 수 있고, `--sut runflow_v0`가 아니면 거부한다. 켠 변형은 SUT 버전 문자열 끝과
+  `config.sut_config.variants`, runflow 설정 지문에 기록되며, 끄면 지문이 변형이 없던 때와 같다.
+  예: `... --sut runflow_v0 --runflow-variant facts --runflow-variant reasoning-rt ...`
 - 과제의 `approval_policy`(선택, 쓰기 순번별 `approve`·`reject`)는 시뮬레이션 사용자의 결정이다. 없으면 모두
   승인한다.
 - 모델이 받는 도구 목록과 프롬프트에 `submit_answer`와 안내 한 단락이 더해진다. 실사용 입력과 정확히 같지

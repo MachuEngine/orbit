@@ -27,6 +27,7 @@ from orbit.evalrunner import stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
 from orbit.evalrunner.runflow_env import EvalDatabaseSettings, RunflowEnvironment
+from orbit.evalrunner.runflow_sut import VARIANTS
 from orbit.evalrunner.runner import (
     ExperimentBudget,
     FaultPlanSpec,
@@ -106,6 +107,12 @@ def _parser() -> argparse.ArgumentParser:
         help="runflow_v0의 색인 검색 모드. off만 지원한다(fake는 평가 DB에 연결 행이 필요해 보류, "
         "ADR-0023 §8)",
     )  # fmt: skip
+    run.add_argument(
+        "--runflow-variant", action="append", default=[], choices=sorted(VARIANTS),
+        help="runflow_v0 전용 원인 확인 변형(ADR-0023 §10). 반복해 여러 개를 켤 수 있다: "
+        "facts(facts-v1, 프롬프트에 [사실 확인] 단락), reasoning-rt(추론 항목 되돌리기). "
+        "runflow_v0가 아니면 오류",
+    )  # fmt: skip
     run.add_argument("--repeats", type=int, default=3)
     run.add_argument("--out", required=True)
     run.add_argument("--seed", type=int, default=0, help="실험 시드이자 표본 추출 시드")
@@ -184,6 +191,9 @@ def _run(args: argparse.Namespace) -> int:
     if sink_path.exists():
         print(f"이미 있는 파일에는 쓰지 않는다: {sink_path}", file=sys.stderr)
         return 2
+    if args.runflow_variant and args.sut != "runflow_v0":
+        print("--runflow-variant는 --sut runflow_v0에서만 쓴다", file=sys.stderr)
+        return 2
     if args.live_llm and args.llm_script:
         print("--live-llm과 --llm-script는 함께 쓸 수 없다", file=sys.stderr)
         return 2
@@ -200,6 +210,8 @@ def _run(args: argparse.Namespace) -> int:
     if args.sut in DATABASE_SUTS and database_env is None:
         return 2  # 출력 파일을 만들기 전에 거부한다
     sut_options: dict[str, Any] = {"index_mode": args.index} if args.sut in DATABASE_SUTS else {}
+    if args.sut == "runflow_v0":
+        sut_options["variants"] = tuple(args.runflow_variant)
     sha, dirty = _git_state(out.parent)  # 출력 파일을 만들기 전에 읽는다
     common: dict[str, Any] = {
         "split": args.split,
