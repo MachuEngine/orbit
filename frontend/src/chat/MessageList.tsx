@@ -3,6 +3,7 @@ import { executionResultText } from "../approvals/logic";
 import type { ChatMessage, ExecutionOutcome } from "../runs/reducer";
 import { Icon, type IconName } from "../ui/Icon";
 import type { ComposerStatus } from "../composer/useComposer";
+import { ReadAloudButton } from "../voice/ReadAloudButton";
 import { Markdown } from "./Markdown";
 
 function resultIcon(status: ExecutionOutcome["status"]): { icon: IconName; tone: string } {
@@ -25,6 +26,7 @@ export function MessageList({
   sendStatus,
   results,
   working,
+  readAloud,
 }: {
   messages: ChatMessage[];
   /** 아직 서버에 접수되지 않은 사용자 메시지 */
@@ -33,6 +35,8 @@ export function MessageList({
   results: ExecutionOutcome[];
   /** 응답을 기다리는 중이면 자리를 미리 잡아 둔다 */
   working: boolean;
+  /** 비서 답마다 "읽어 주기" 버튼을 보인다(ADR-0025 §4). 없으면 버튼이 없다. */
+  readAloud?: { speakingKey: string | null; onToggle: (key: string, text: string) => void };
 }) {
   const empty = messages.length === 0 && outgoing === null;
   return (
@@ -64,6 +68,15 @@ export function MessageList({
               <Markdown text={message.text} />
             ) : (
               <p>{message.text}</p>
+            )}
+            {message.role === "assistant" && readAloud !== undefined && (
+              <ReadAloudButton
+                text={message.text}
+                speaking={readAloud.speakingKey === message.id}
+                onToggle={(speakable) => {
+                  readAloud.onToggle(message.id, speakable);
+                }}
+              />
             )}
           </li>
         ),

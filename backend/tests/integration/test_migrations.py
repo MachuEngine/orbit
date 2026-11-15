@@ -20,7 +20,7 @@ def _tables(owner_url: str) -> set[str]:
                     " 'checkpoint_writes', 'checkpoint_migrations', 'auth_session',"
                     " 'app_user', 'membership', 'connection', 'index_scope',"
                     " 'sync_state', 'source_item', 'chunk', 'notification',"
-                    " 'notification_setting'))"
+                    " 'notification_setting', 'voice_usage'))"
                 )
             )
             return {r[0] for r in rows}
@@ -89,6 +89,7 @@ def test_upgrade_downgrade_upgrade(owner_url: str) -> None:
         "chunk",
         "notification",
         "notification_setting",
+        "voice_usage",
         "procrastinate_jobs",
         "procrastinate_events",
         "procrastinate_workers",

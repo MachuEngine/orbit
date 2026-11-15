@@ -19,6 +19,7 @@ import {
   sessionSchema,
   startConnectionResponseSchema,
   syncResponseSchema,
+  transcribeResponseSchema,
   upcomingResponseSchema,
   type Approval,
   type ConnectionsResponse,
@@ -250,4 +251,23 @@ export function putNotificationSettings(
     body,
     schema: notificationSettingsSchema,
   });
+}
+
+// ---------------------------------------------------------------- 음성 입력 (ADR-0025)
+
+/**
+ * 녹음을 글자로 바꾼다. 서버는 오디오를 저장하지 않는다. 실패하면 `ApiError.detail`에 종류가 온다
+ * (`too_large`·`too_long`·`unsupported_format`·`usage_limit_exceeded`·`provider_error`·`stt_unavailable`).
+ */
+export async function transcribeAudio(
+  audio: Blob,
+  client: ApiClient = defaultClient,
+): Promise<string> {
+  const form = new FormData();
+  form.append("audio", audio, "recording");
+  const response = await client.request("POST", "/api/voice/transcribe", {
+    body: form,
+    schema: transcribeResponseSchema,
+  });
+  return response.text;
 }

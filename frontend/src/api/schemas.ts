@@ -233,3 +233,6 @@ export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
 
 export const notificationIdResponseSchema = z.object({ id: z.string() });
 export const readAllResponseSchema = z.object({ updated: z.number().int() });
+
+/** `POST /api/voice/transcribe`. 전사 문장이다(ADR-0025). */
+export const transcribeResponseSchema = z.object({ text: z.string() });

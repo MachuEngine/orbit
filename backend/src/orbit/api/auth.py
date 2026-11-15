@@ -58,6 +58,8 @@ def ensure_startable(settings: Settings) -> None:
     """dev이거나 Google 로그인 설정이 모두 있을 때만 시작한다(ADR-0016 §1)."""
     if settings.env == "dev":
         return
+    if settings.stt_provider == "fake":
+        raise RuntimeError("ORBIT_ENV=dev가 아니면 ORBIT_STT_PROVIDER=fake로 시작할 수 없다")
     missing = settings.missing_google_login_settings()
     if missing:
         raise RuntimeError(

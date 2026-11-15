@@ -12,6 +12,10 @@ import { turnsToView } from "../conversations/turns";
 import { useConversationList } from "../conversations/useConversationList";
 import { useMediaQuery, WIDE_LAYOUT_QUERY } from "../conversations/useMediaQuery";
 import { useRunStream } from "../runs/useRunStream";
+import { useAutoRead } from "../voice/autoRead";
+import { toSpeakableText } from "../voice/speakable";
+import { useSpeech } from "../voice/useSpeech";
+import { useVoiceInput } from "../voice/useVoiceInput";
 import { Icon } from "../ui/Icon";
 import { Logo } from "../ui/Logo";
 import { Composer } from "./Composer";
@@ -53,6 +57,12 @@ export function ChatScreen({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { state, connection, addUserMessage, replaceMessages } = useRunStream(runId);
   const idempotency = useIdempotencyKey();
+  // 음성 입력(ADR-0025): 전사 결과로 질문한 run은 설정에 따라 답을 자동으로 읽는다.
+  const speech = useSpeech();
+  const stopSpeech = speech.stop;
+  const [autoRead, setAutoRead] = useAutoRead();
+  const voiceAsked = useRef(false); // 전사 결과가 입력창에 들어간 뒤 아직 보내지 않았다
+  const autoReadRunId = useRef<string | null>(null);
   const [sendConflict, setSendConflict] = useState<"busy" | "key_reused" | null>(null);
 
   const wide = useMediaQuery(WIDE_LAYOUT_QUERY);
@@ -98,6 +108,7 @@ export function ChatScreen({
     async (text: string) => {
       setOutgoing(text);
       setSendConflict(null);
+      stopSpeech(); // 이전 답을 읽는 중이면 새 질문과 함께 멈춘다
       // 응답이 유실돼 같은 내용을 다시 보내도 서버가 같은 run으로 알아보게 같은 키를 쓴다.
       const key = idempotency.keyFor(text);
       let created;
@@ -133,10 +144,34 @@ export function ChatScreen({
       addUserMessage(`user-${messageCounter.current}`, text);
       setRunId(created.run_id);
       setOutgoing(null);
+      autoReadRunId.current = voiceAsked.current ? created.run_id : null;
+      voiceAsked.current = false;
     },
-    [addUserMessage, idempotency, refreshList],
+    [addUserMessage, idempotency, refreshList, stopSpeech],
   );
   const composer = useComposer(send);
+  const appendText = composer.appendText;
+  const footerRef = useRef<HTMLElement>(null);
+  const voice = useVoiceInput({
+    // 입력창 영역(또는 포커스가 없는 상태)에서만 Esc로 취소한다. 승인 카드·알림 패널·대화 목록의 Esc는 건드리지 않는다.
+    shouldHandleEscape: () => {
+      const active = document.activeElement;
+      return (
+        active === null || active === document.body || footerRef.current?.contains(active) === true
+      );
+    },
+    onTranscript: (text) => {
+      appendText(text);
+      voiceAsked.current = true;
+      inputRef.current?.focus(); // 전송은 하지 않는다. 고치거나 그대로 보내는 것은 사용자가 정한다.
+    },
+    onStart: stopSpeech, // 읽어 주던 음성이 마이크로 들어가지 않게 한다
+  });
+  // 입력창을 모두 지우면 음성 질문이 아니게 된다.
+  const composerEmpty = composer.text.trim() === "";
+  useEffect(() => {
+    if (composerEmpty) voiceAsked.current = false;
+  }, [composerEmpty]);
   const sending = composer.status === "sending";
 
   /** 화면을 다른 대화(또는 빈 새 대화)로 바꾼다. 이전 대화의 실시간 구독은 `runId`가 바뀌며 닫힌다. */
@@ -197,6 +232,21 @@ export function ChatScreen({
   useEffect(() => {
     if (state.finished) refreshList();
   }, [state.finished, refreshList]);
+  // 음성으로 질문한 run이 정상 종료되면 마지막 비서 답만 읽는다(승인 카드·도구 결과는 읽지 않는다).
+  const speakRef = useRef(speech.speak);
+  useEffect(() => {
+    speakRef.current = speech.speak;
+  });
+  useEffect(() => {
+    if (!autoRead || autoReadRunId.current === null || autoReadRunId.current !== runId) return;
+    if (!state.finished) return;
+    autoReadRunId.current = null; // run마다 한 번만
+    if (state.status !== "succeeded") return;
+    const last = state.messages[state.messages.length - 1];
+    if (last?.role !== "assistant") return;
+    const speakable = toSpeakableText(last.text);
+    if (speakable !== "") speakRef.current(last.id, speakable);
+  }, [autoRead, runId, state.finished, state.status, state.messages]);
   const busy = state.status === "queued" || state.status === "running";
   const approvalId = state.pendingApproval?.approvalId ?? null;
   const approvalWait = state.status === "waiting_approval" || approvalId !== null;
@@ -296,6 +346,9 @@ export function ChatScreen({
                 sendStatus={composer.status}
                 results={state.results}
                 working={busy}
+                {...(speech.supported
+                  ? { readAloud: { speakingKey: speech.speakingKey, onToggle: speech.toggle } }
+                  : {})}
               />
               {approvalId !== null && <ApprovalPanel key={approvalId} approvalId={approvalId} />}
             </div>
@@ -307,7 +360,7 @@ export function ChatScreen({
           )}
         </div>
 
-        <footer className="chat-footer">
+        <footer className="chat-footer" ref={footerRef}>
           <div className="chat-column">
             <StatusBar
               items={[
@@ -320,6 +373,10 @@ export function ChatScreen({
               composer={composer}
               inputRef={inputRef}
               blocked={approvalWait || loading}
+              voice={voice}
+              {...(speech.supported && voice.supported
+                ? { autoRead: { checked: autoRead, onChange: setAutoRead } }
+                : {})}
               {...(loading ? { blockedHint: "대화를 불러오는 중입니다." } : {})}
               {...(sendConflict === "busy" ? { failureText: BUSY_TEXT } : {})}
               {...(sendConflict === "key_reused" ? { failureText: KEY_REUSED_TEXT } : {})}

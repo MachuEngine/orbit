@@ -76,6 +76,14 @@ def test_non_dev_with_complete_settings_starts_without_dev_login_route() -> None
     assert "/api/session" in found
 
 
+def test_non_dev_refuses_fake_stt_but_dev_allows_it() -> None:
+    with pytest.raises(RuntimeError, match="ORBIT_STT_PROVIDER=fake"):
+        create_app(full(stt_provider="fake"))
+    assert "/api/voice/transcribe" in paths(
+        Settings(database_url=DB, env="dev", stt_provider="fake")
+    )
+
+
 def test_dev_without_google_settings_starts_with_dev_login_only() -> None:
     found = paths(Settings(database_url=DB, env="dev"))
     assert "/api/dev/login" in found
