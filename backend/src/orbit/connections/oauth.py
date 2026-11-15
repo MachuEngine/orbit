@@ -9,6 +9,11 @@
 - 철회: Google 철회 엔드포인트에 토큰을 보내고 결과 종류만 돌려준다.
 - 문서 권한 추가(ADR-0020 §1): 선택 범위(`DRIVE_SCOPES`)만 `include_granted_scopes=true`로 요청한다.
   같은 서명 쿠키에 목적(`docs`)과 대상 연결 ID를 담는다. 쿠키 서명이 이 값들을 지켜 준다.
+- 데스크톱(ADR-0024 §5): 시스템 브라우저에는 세션이 없다. 연결 티켓을 받은 `desktop-begin`이 서명
+  쿠키에
+  티켓이 묶인 워크스페이스·사용자 ID(`DesktopBinding`)를 함께 담고, 콜백은 세션 쿠키 대신 이 값을
+  쓴다.
+  `state` 대조, 계정 일치, 범위 규칙은 웹과 같다.
 """
 
 import hashlib
@@ -17,7 +22,7 @@ import json
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import httpx
@@ -26,6 +31,7 @@ from pydantic import SecretStr
 from orbit.auth.google import (
     FLOW_TTL_SECONDS,
     HTTP_TIMEOUT_SECONDS,
+    DesktopLoginRequest,
     GoogleOIDC,
     GoogleOIDCConfig,
     LoginError,
@@ -39,6 +45,9 @@ from orbit.core.clock import Clock
 CONNECT_COOKIE = "orbit_connect"
 CONNECT_PATH = "/api/connections/google"
 _MAC_CONTEXT = b"orbit.connect.flow.v1."
+_BEGIN_CONTEXT = b"orbit.connect.begin.v1."
+BEGIN_FORM_TTL_SECONDS = 600
+BEGIN_COOKIE = "orbit_begin"
 
 # ADR-0016 §2 최소 집합. Calendar는 일정 읽기·쓰기(calendar.events)와 캘린더 목록 조회
 # (calendarlist.readonly), Gmail은 검색·읽기(readonly)와 초안 생성·발송(compose, SPIKE-005).
@@ -81,12 +90,26 @@ class ConnectError(Exception):
 
 
 @dataclass(frozen=True)
+class DesktopBinding:
+    """데스크톱 연결 티켓이 묶은 워크스페이스·사용자와 앱의 loopback 정보. 서명 쿠키 안에서만
+    신뢰한다."""
+
+    workspace_id: uuid.UUID
+    user_id: uuid.UUID
+    request: DesktopLoginRequest
+
+
+@dataclass(frozen=True)
 class ConnectFlow:
-    """서명 쿠키에서 읽은 연결 흐름. `purpose`가 `docs`면 `connection_id`의 문서 권한 추가다."""
+    """서명 쿠키에서 읽은 연결 흐름. `purpose`가 `docs`면 `connection_id`의 문서 권한 추가다.
+
+    `desktop`이 있으면 데스크톱 시작이라 세션 쿠키 대신 그 워크스페이스·사용자로 처리한다.
+    """
 
     flow: LoginFlow
     purpose: str | None = None
     connection_id: uuid.UUID | None = None
+    desktop: DesktopBinding | None = None
 
 
 @dataclass(frozen=True)
@@ -117,7 +140,7 @@ class GoogleConnectOAuth(GoogleOIDC):
             self._config.signing_key, _MAC_CONTEXT + payload.encode("ascii"), hashlib.sha256
         ).digest()
 
-    def _seal_connect(self, flow: LoginFlow, extra: dict[str, str]) -> str:
+    def _seal_connect(self, flow: LoginFlow, extra: dict[str, Any]) -> str:
         expires = int(self._clock.now().timestamp()) + FLOW_TTL_SECONDS
         body = json.dumps(
             {"s": flow.state, "n": flow.nonce, "v": flow.code_verifier, "e": expires, **extra},
@@ -132,16 +155,68 @@ class GoogleConnectOAuth(GoogleOIDC):
         assert value is not None  # read_flow_cookie가 None을 거절한다  # noqa: S101
         data = json.loads(_b64d(value.split(".")[0]))
         purpose, raw_id = data.get("p"), data.get("c")
-        if purpose is None and raw_id is None:
-            return ConnectFlow(flow)
+        keys = ("w", "u", "dc", "dp", "da")
+        raw_ws, raw_user, raw_challenge, raw_port, raw_app = (data.get(k) for k in keys)
         try:
+            desktop: DesktopBinding | None = None
+            if any(data.get(k) is not None for k in keys):
+                if not (
+                    isinstance(raw_ws, str)
+                    and isinstance(raw_user, str)
+                    and isinstance(raw_challenge, str)
+                    and isinstance(raw_app, str)
+                    and isinstance(raw_port, int)
+                    and not isinstance(raw_port, bool)
+                ):
+                    raise ValueError  # noqa: TRY301
+                desktop = DesktopBinding(
+                    uuid.UUID(raw_ws),
+                    uuid.UUID(raw_user),
+                    DesktopLoginRequest(raw_challenge, raw_port, raw_app),
+                )
+            if purpose is None and raw_id is None:
+                return ConnectFlow(flow, desktop=desktop)
             if purpose != DOCS_PURPOSE or not isinstance(raw_id, str):
                 raise ValueError  # noqa: TRY301
-            return ConnectFlow(flow, purpose, uuid.UUID(raw_id))
+            return ConnectFlow(flow, purpose, uuid.UUID(raw_id), desktop)
         except ValueError:
             raise LoginError("expired") from None
 
-    def begin_scope_add(self, connection_id: uuid.UUID, *, login_hint: str) -> tuple[str, str]:
+    # ------------------------------------------------ desktop-begin 폼 CSRF 방어
+
+    def _begin_mac(self, ticket: str, nonce: str, expires: int) -> str:
+        message = f"{ticket}.{nonce}.{expires}".encode("ascii")
+        key = self._config.signing_key
+        return _b64e(hmac.new(key, _BEGIN_CONTEXT + message, hashlib.sha256).digest())
+
+    def begin_token(self, ticket: str) -> tuple[str, str]:
+        """(폼에 넣을 서명 값, 쿠키에 넣을 nonce). 티켓·nonce·만료에 서명한다."""
+        nonce = secrets.token_urlsafe(16)
+        expires = int(self._clock.now().timestamp()) + BEGIN_FORM_TTL_SECONDS
+        return f"{nonce}.{expires}.{self._begin_mac(ticket, nonce, expires)}", nonce
+
+    def check_begin_token(self, ticket: str, token: str | None, cookie_nonce: str | None) -> bool:
+        """폼 값의 서명·만료·티켓이 맞고 쿠키 nonce와 같을 때만 True."""
+        if not token or not cookie_nonce or len(token) > 256 or not token.isascii():
+            return False
+        parts = token.split(".")
+        if len(parts) != 3 or not parts[1].isdigit():
+            return False
+        nonce, raw_expires, mac = parts
+        expires = int(raw_expires)
+        if self._clock.now().timestamp() >= expires:
+            return False
+        if not hmac.compare_digest(mac.encode(), self._begin_mac(ticket, nonce, expires).encode()):
+            return False
+        return hmac.compare_digest(nonce.encode(), cookie_nonce.encode())
+
+    def begin_scope_add(
+        self,
+        connection_id: uuid.UUID,
+        *,
+        login_hint: str,
+        desktop: DesktopBinding | None = None,
+    ) -> tuple[str, str]:
         """문서 권한 추가: (Google 인가 URL, 서명한 임시 쿠키 값).
 
         선택 범위만 요청하고 이미 허용한 범위는 `include_granted_scopes`로 합친다.
@@ -169,11 +244,12 @@ class GoogleConnectOAuth(GoogleOIDC):
             }
         )
         separator = "&" if "?" in self._config.auth_url else "?"
-        cookie = self._seal_connect(flow, {"p": DOCS_PURPOSE, "c": str(connection_id)})
+        extra = {"p": DOCS_PURPOSE, "c": str(connection_id), **_binding_fields(desktop)}
+        cookie = self._seal_connect(flow, extra)
         return f"{self._config.auth_url}{separator}{query}", cookie
 
-    def begin_connect(self) -> tuple[str, str]:
-        """(Google 인가 URL, 서명한 임시 쿠키 값)."""
+    def begin_connect(self, desktop: DesktopBinding | None = None) -> tuple[str, str]:
+        """(Google 인가 URL, 서명한 임시 쿠키 값). `desktop`이 있으면 쿠키에 함께 묶는다."""
         flow = LoginFlow(
             state=secrets.token_urlsafe(32),
             nonce=secrets.token_urlsafe(32),
@@ -195,12 +271,21 @@ class GoogleConnectOAuth(GoogleOIDC):
             }
         )
         separator = "&" if "?" in self._config.auth_url else "?"
-        return f"{self._config.auth_url}{separator}{query}", self._seal(flow)
+        cookie = self._seal_connect(flow, _binding_fields(desktop))
+        return f"{self._config.auth_url}{separator}{query}", cookie
 
     async def complete_connect(
-        self, *, flow: LoginFlow, state: str | None, code: str | None
+        self,
+        *,
+        flow: LoginFlow,
+        state: str | None,
+        code: str | None,
+        verify_state: bool = True,
     ) -> ConnectGrant:
-        if not state or not hmac.compare_digest(state.encode(), flow.state.encode()):
+        """`verify_state=False`는 데스크톱 완료 단계 전용이다. `state`는 콜백에서 이미 대조했다."""
+        if verify_state and (
+            not state or not hmac.compare_digest(state.encode(), flow.state.encode())
+        ):
             raise ConnectError("state")
         if not code or len(code) > 2048:
             raise ConnectError("exchange")
@@ -254,6 +339,18 @@ class GoogleConnectOAuth(GoogleOIDC):
     async def revoke(self, token: str) -> RevokeOutcome:
         """Google에 토큰 철회를 요청한다. 이미 무효인 토큰(400 invalid_token)도 철회로 본다."""
         return await revoke_token(self._revoke_url, token, transport=self._transport)
+
+
+def _binding_fields(desktop: DesktopBinding | None) -> dict[str, Any]:
+    if desktop is None:
+        return {}
+    return {
+        "w": str(desktop.workspace_id),
+        "u": str(desktop.user_id),
+        "dc": desktop.request.code_challenge,
+        "dp": desktop.request.port,
+        "da": desktop.request.app_state,
+    }
 
 
 def _secret(value: object) -> SecretStr | None:

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PRODUCT_NAME } from "../brand";
+import { getLoginBridge } from "../desktop/bridge";
 import { Icon } from "../ui/Icon";
 import { Logo } from "../ui/Logo";
 import { loginErrorMessage } from "./loginError";
@@ -26,6 +27,24 @@ export function LoginScreen({
   onDevSignIn: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  // 데스크톱 앱: Google 로그인은 시스템 브라우저에서 끝내고 결과를 앱이 받는다(ADR-0024 §4).
+  const desktop = getLoginBridge();
+  const [pending, setPending] = useState(false);
+  const [desktopError, setDesktopError] = useState<string | null>(null);
+  useEffect(() => {
+    if (desktop === undefined) return undefined;
+    return desktop.onLoginEvent((event) => {
+      if (event.status !== "failed") return; // 완료되면 셸이 창을 다시 불러온다
+      setPending(false);
+      setDesktopError(event.reason);
+    });
+  }, [desktop]);
+  const startDesktopLogin = () => {
+    if (desktop === undefined) return;
+    setDesktopError(null);
+    setPending(true);
+    desktop.startLogin();
+  };
   const clickDev = () => {
     setBusy(true);
     void onDevSignIn().finally(() => {
@@ -35,16 +54,35 @@ export function LoginScreen({
   // 방금 한 개발용 로그인 실패가 있으면 그 문구를, 아니면 Google 로그인 실패 문구를 보인다.
   const message = devLoginFailed
     ? DEV_LOGIN_FAILED
-    : loginError !== null
-      ? loginErrorMessage(loginError)
-      : "";
+    : desktopError !== null
+      ? loginErrorMessage(desktopError)
+      : loginError !== null
+        ? loginErrorMessage(loginError)
+        : "";
   return (
     <main className="login paper-texture">
       <div className="login-card paper-texture">
         <Logo className="login-logo" />
         <h1 className="visually-hidden">{PRODUCT_NAME} 로그인</h1>
         <p>메일·일정·문서를 대화로 다루려면 로그인해 주세요.</p>
-        {methods.google && (
+        {methods.google && desktop !== undefined && (
+          <>
+            <button
+              type="button"
+              className="btn btn-primary"
+              aria-describedby="login-error"
+              onClick={startDesktopLogin}
+            >
+              {pending ? "브라우저 다시 열기" : "Google로 로그인"}
+            </button>
+            <p role="status" className="login-pending">
+              {pending
+                ? "브라우저에서 로그인을 마치세요. 마치면 이 앱이 자동으로 로그인됩니다."
+                : ""}
+            </p>
+          </>
+        )}
+        {methods.google && desktop === undefined && (
           <a
             className="btn btn-primary"
             href="/api/auth/google/start"

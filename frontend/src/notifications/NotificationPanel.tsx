@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { isDesktop } from "../desktop/bridge";
 import type { NotificationItem, NotificationSettings } from "../api/schemas";
 import { browserPermission, requestBrowserPermission, type BrowserPermission } from "./browser";
 import { clockText, formatUpcoming } from "./format";
@@ -38,6 +39,7 @@ export function NotificationPanel({
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [permission, setPermission] = useState<BrowserPermission>(() => browserPermission());
+  const desktop = isDesktop();
   const current = now();
 
   // 최신 `onClose`는 ref로 읽는다. 부모가 다시 그릴 때마다 효과가 다시 돌면 포커스가 패널로 튄다.
@@ -340,7 +342,14 @@ export function NotificationPanel({
               )}
             </section>
 
-            {permission !== "unsupported" && (
+            {desktop && (
+              <section className="notify-section" aria-labelledby={`${uid}-desktop`}>
+                <h3 id={`${uid}-desktop`}>{T.desktopHeading}</h3>
+                <p className="notify-note">{T.desktopNote}</p>
+              </section>
+            )}
+
+            {!desktop && permission !== "unsupported" && (
               <section className="notify-section" aria-labelledby={`${uid}-browser`}>
                 <h3 id={`${uid}-browser`}>{T.browserHeading}</h3>
                 {permission === "default" && (

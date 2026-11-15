@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { isApiError } from "../api/errors";
 import type { Connection } from "../api/schemas";
 import { PRODUCT_NAME } from "../brand";
+import { getConnectBridge } from "../desktop/bridge";
 import { Icon } from "../ui/Icon";
 import { Logo } from "../ui/Logo";
 import { Envelope } from "../ui/illustrations/Envelope";
 import {
   CONNECTED_MESSAGE,
+  DESKTOP_TEXT,
   DOCS_ADDED_MESSAGE,
   DOCS_TEXT,
   REVOKE_MESSAGES,
@@ -19,7 +21,7 @@ import { useConnections } from "./useConnections";
 import "./connections.css";
 
 interface Notice {
-  tone: "success" | "warning" | "error";
+  tone: "success" | "warning" | "error" | "info";
   text: string;
 }
 
@@ -60,13 +62,43 @@ export function ConnectionsScreen({
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  /** 웹은 동의 화면으로 이동하고, 데스크톱 앱은 셸이 시스템 브라우저로 연다. */
+  const go = (url: string) => {
+    const desktop = getConnectBridge();
+    if (desktop === undefined) {
+      navigate(url);
+      return;
+    }
+    desktop.openConnectFlow(url);
+    setBusy(false);
+    setNotice({ tone: "info", text: DESKTOP_TEXT.waiting });
+  };
+
+  // 데스크톱: 브라우저에서 동의를 마치면 셸이 앱 세션으로 완료를 제출하고 결과를 알린다. 목록을 다시
+  // 불러오고 결과 문구를 보인다(ADR-0024 §5).
+  useEffect(() => {
+    const desktop = getConnectBridge();
+    if (desktop === undefined) return undefined;
+    return desktop.onConnectEvent((event) => {
+      void reload();
+      setBusy(false);
+      setNotice(
+        event.status === "done"
+          ? {
+              tone: "success",
+              text: event.result === "docs_added" ? DOCS_ADDED_MESSAGE : CONNECTED_MESSAGE,
+            }
+          : { tone: "error", text: connectionErrorMessage(event.reason) },
+      );
+    });
+  }, [reload]);
 
   const connect = () => {
     setBusy(true);
     setNotice(null);
     start().then(
       (url) => {
-        navigate(url);
+        go(url);
       },
       () => {
         setBusy(false);
@@ -83,7 +115,7 @@ export function ConnectionsScreen({
     setNotice(null);
     addDocs(id).then(
       (url) => {
-        navigate(url);
+        go(url);
       },
       (error: unknown) => {
         setBusy(false);

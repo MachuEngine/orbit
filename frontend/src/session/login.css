@@ -54,3 +54,12 @@
 .login-error:empty {
   margin-top: calc(-1 * var(--space-4));
 }
+
+/* 데스크톱 로그인 대기 안내. 비어 있을 때 생기는 간격만 뺀다(`.login-error:empty`와 같다). */
+.login-pending {
+  font-size: var(--text-sm);
+}
+
+.login-pending:empty {
+  margin-top: calc(-1 * var(--space-4));
+}

@@ -14,9 +14,13 @@
   나눠서 커밋해야 하면 `workspace_session`을 새로 연다.
 - 워크스페이스 없이 DB에 닿는 경로는 `ping()`, `unscoped_auth_session_lookup()`,
   `unscoped_auth_session_profile()`, `unscoped_login_upsert_user()`,
-  `unscoped_mail_index_due_connections()`, `unscoped_event_reminder_due_connections()`,
-  `unscoped_notification_expired_workspaces()`뿐이다.
-  `ping()` 말고는 모두 `SECURITY DEFINER` 함수 호출만 한다(마이그레이션 0004·0005·0008·0010).
+  `unscoped_desktop_login_exchange()`, `unscoped_desktop_connect_ticket_redeem()`,
+  `unscoped_desktop_handoff_purge()`, `unscoped_mail_index_due_connections()`,
+  `unscoped_event_reminder_due_connections()`, `unscoped_notification_expired_workspaces()`뿐이다.
+  `ping()` 말고는 모두 `SECURITY DEFINER` 함수 호출이 중심이다
+  (마이그레이션 0004·0005·0008·0010·0012).
+  `unscoped_desktop_login_exchange()`만 함수가 알려 준 워크스페이스로 같은 트랜잭션에서
+  `auth_session`을 넣거나 폐기한다(RLS를 그대로 받는다).
   새 경로가 필요하면 이름에 `unscoped`를 넣는다.
 """
 
@@ -151,6 +155,96 @@ class AsyncDatabase:
                 )
             ).one()
         return tuple(row)
+
+    async def unscoped_desktop_login_exchange(
+        self,
+        *,
+        code_hash: str,
+        code_challenge: str,
+        now: datetime,
+        session_id: uuid.UUID,
+        token_hash: str,
+        csrf_token_hash: str,
+        expires_at: datetime,
+    ) -> tuple[str, uuid.UUID | None]:
+        """데스크톱 로그인 핸드오프 코드를 받아 세션을 만든다. 반환: (결과, 워크스페이스 ID).
+
+        한 트랜잭션에서 `desktop_login_code_redeem` 함수(SECURITY DEFINER, 마이그레이션 0012)로 코드
+        검증·사용 처리를 하고, 성공이면 함수가 알려 준 워크스페이스로 `auth_session`을 넣는다(이
+        삽입은
+        `orbit_app`의 RLS를 그대로 받는다). 결과는 `ok`, `reused`, `invalid`이고 `ok` 말고는
+        세션을 만들지
+        않는다. `reused`(이미 쓴 코드를 올바른 challenge로 다시 보냄)면 그 코드로 만든 세션을
+        폐기한다.
+        세션이 없는 상태에서 쓰는 경로라 인증 정보는 코드와 PKCE 검증기뿐이다.
+        """
+        async with self._engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT * FROM desktop_login_code_redeem(:h, :c, :now, :sid)"),
+                    {"h": code_hash, "c": code_challenge, "now": now, "sid": session_id},
+                )
+            ).one()
+            outcome, user_id, workspace_id, revoke_id = row
+            if outcome == "ok":
+                await conn.execute(_SET_WORKSPACE, {"workspace_id": str(workspace_id)})
+                await conn.execute(
+                    text(
+                        "INSERT INTO auth_session (id, workspace_id, user_id, token_hash,"
+                        " csrf_token_hash, created_at, expires_at)"
+                        " VALUES (:id, :ws, :uid, :th, :ch, :now, :exp)"
+                    ),
+                    {
+                        "id": session_id,
+                        "ws": workspace_id,
+                        "uid": user_id,
+                        "th": token_hash,
+                        "ch": csrf_token_hash,
+                        "now": now,
+                        "exp": expires_at,
+                    },
+                )
+                return "ok", workspace_id
+            if outcome == "reused" and revoke_id is not None:
+                await conn.execute(_SET_WORKSPACE, {"workspace_id": str(workspace_id)})
+                await conn.execute(
+                    text(
+                        "UPDATE auth_session SET revoked_at = :now"
+                        " WHERE id = :id AND workspace_id = :ws AND revoked_at IS NULL"
+                    ),
+                    {"now": now, "id": revoke_id, "ws": workspace_id},
+                )
+                return "reused", None
+        return "invalid", None
+
+    async def unscoped_desktop_connect_ticket_redeem(
+        self, ticket_hash: str, now: datetime
+    ) -> tuple[Any, ...] | None:
+        """계정 연결 티켓을 사용 처리하고 (user_id, workspace_id, intent, connection_id)를 돌려준다.
+
+        `desktop_connect_ticket_redeem` 함수(SECURITY DEFINER, 마이그레이션 0012)만 호출한다. 없거나
+        만료됐거나 이미 썼으면 None이다.
+        """
+        async with self._engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT * FROM desktop_connect_ticket_redeem(:h, :now)"),
+                    {"h": ticket_hash, "now": now},
+                )
+            ).first()
+        return None if row is None else tuple(row)
+
+    async def unscoped_desktop_handoff_purge(self, before: datetime) -> int:
+        """만료 시각이 `before`보다 앞선 핸드오프 코드·연결 티켓을 지우고 지운 개수를 돌려준다.
+
+        워크스페이스를 가로지르는 주기 작업용이다. `desktop_handoff_purge` 함수(SECURITY DEFINER,
+        마이그레이션 0012)만 호출하고 행 내용은 읽지 않는다.
+        """
+        async with self._engine.begin() as conn:
+            count = (
+                await conn.execute(text("SELECT desktop_handoff_purge(:b)"), {"b": before})
+            ).scalar_one()
+        return int(count)
 
     async def unscoped_mail_index_due_connections(
         self, stale_before: datetime, error_retry_before: datetime

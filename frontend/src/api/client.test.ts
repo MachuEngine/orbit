@@ -162,3 +162,16 @@ describe("런타임 검증", () => {
     expect(callInit(fetchMock).body).toBe('{"decision":"approve"}');
   });
 });
+
+describe("ApiClient multipart", () => {
+  it("FormData는 JSON으로 바꾸지 않고 Content-Type 없이 보내며 CSRF는 붙인다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    const form = new FormData();
+    form.append("audio", new Blob(["x"], { type: "audio/webm" }), "recording");
+    await makeClient(fetchMock).request("POST", "/api/x", { body: form, schema });
+    const init = callInit(fetchMock);
+    expect(init.body).toBe(form);
+    expect(init.headers).not.toHaveProperty("Content-Type");
+    expect((init.headers as Record<string, string>)["X-CSRF-Token"]).toBe("tok123");
+  });
+});

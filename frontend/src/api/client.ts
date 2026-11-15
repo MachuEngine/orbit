@@ -14,6 +14,7 @@ export interface ApiClientOptions {
 }
 
 export interface RequestOptions<S extends z.ZodType | undefined> {
+  /** `FormData`면 multipart로 보내고, 그 밖의 값은 JSON으로 보낸다. */
   body?: unknown;
   /** 응답 본문 검증 스키마. 없으면 본문을 읽지 않는다. */
   schema?: S;
@@ -67,7 +68,10 @@ export class ApiClient {
       if (token !== undefined) headers[CSRF_HEADER] = token;
     }
     const init: RequestInit = { method, headers, credentials: "same-origin" };
-    if (options.body !== undefined) {
+    if (options.body instanceof FormData) {
+      // multipart는 Content-Type을 지정하지 않는다. 브라우저가 경계(boundary)와 함께 정한다.
+      init.body = options.body;
+    } else if (options.body !== undefined) {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(options.body);
     }

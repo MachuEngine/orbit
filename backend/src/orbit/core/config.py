@@ -25,6 +25,11 @@
   `ORBIT_MAIL_INDEX_QUERY_STALE_SECONDS`(질의 직전 동기화 기준, 기본 5분),
   `ORBIT_MAIL_INDEX_QUERY_SYNC_TIMEOUT_SECONDS`(질의 직전 동기화 시간 상한, 기본 10초).
   OpenAI 임베더의 키와 주소는 `LLMSettings`의 `ORBIT_OPENAI_API_KEY`·`ORBIT_OPENAI_BASE_URL`을 쓴다.
+- 음성 입력(ADR-0025): `ORBIT_STT_PROVIDER`(`openai`|`fake`, 기본 openai. fake는 테스트·Sim용 결정적
+  구현), `ORBIT_STT_MODEL_ID`(기본 `gpt-transcribe`. 빈 값·`latest` 별칭이면 시작 시 실패),
+  `ORBIT_VOICE_MAX_TRANSCRIBES_PER_HOUR`(워크스페이스당 시간당 전사 횟수, 기본 60),
+  `ORBIT_VOICE_MAX_SECONDS_PER_DAY`(워크스페이스당 24시간 총 녹음 시간 초, 기본 1800).
+  OpenAI 구현의 키와 주소는 `LLMSettings`의 `ORBIT_OPENAI_API_KEY`·`ORBIT_OPENAI_BASE_URL`을 쓴다.
 """
 
 import uuid
@@ -33,6 +38,9 @@ from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from orbit.llm.stt import DEFAULT_STT_MODEL_ID, validate_stt_model_id
+from orbit.voice.limits import DEFAULT_MAX_SECONDS_PER_DAY, DEFAULT_MAX_TRANSCRIBES_PER_HOUR
 
 
 class Settings(BaseSettings):
@@ -75,6 +83,17 @@ class Settings(BaseSettings):
     mail_index_sync_interval_seconds: float = Field(default=900.0, gt=0)
     mail_index_query_stale_seconds: float = Field(default=300.0, ge=0)
     mail_index_query_sync_timeout_seconds: float = Field(default=10.0, gt=0)
+
+    # 음성 입력 (ADR-0025)
+    stt_provider: Literal["openai", "fake"] = "openai"
+    stt_model_id: str = DEFAULT_STT_MODEL_ID
+    voice_max_transcribes_per_hour: int = Field(default=DEFAULT_MAX_TRANSCRIBES_PER_HOUR, gt=0)
+    voice_max_seconds_per_day: float = Field(default=DEFAULT_MAX_SECONDS_PER_DAY, gt=0)
+
+    @field_validator("stt_model_id")
+    @classmethod
+    def _fixed_stt_model_id(cls, value: str) -> str:
+        return validate_stt_model_id(value)  # 빈 값·별칭이면 ValueError라 시작이 실패한다
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -290,3 +309,29 @@ class LLMSettings(BaseSettings):
 def get_llm_settings() -> LLMSettings:
     """환경 변수에서 LLM 설정을 읽는다. 필수 값이 없으면 ValidationError가 난다."""
     return LLMSettings()
+
+
+class OpenAIAccess(BaseSettings):
+    """OpenAI 키·주소만 읽는다. 모델 ID가 필요 없는 호출(STT)이 `LLMSettings` 없이 쓰려는 것이다.
+
+    환경 변수는 `LLMSettings`와 같다(`ORBIT_OPENAI_API_KEY`, `ORBIT_OPENAI_BASE_URL`).
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ORBIT_", extra="ignore")
+
+    openai_api_key: SecretStr | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+
+    @field_validator("openai_api_key", mode="before")
+    @classmethod
+    def _blank_key_is_unset(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("openai_base_url")
+    @classmethod
+    def _require_https(cls, value: str) -> str:
+        if not value.startswith("https://"):
+            raise ValueError("base URL은 https://만 허용한다")
+        return value

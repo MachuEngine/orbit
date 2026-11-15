@@ -66,6 +66,12 @@ export const DOCS_TEXT = {
     "이 연결로는 문서 권한을 추가할 수 없습니다. 연결 상태를 새로 불러왔으니 계정을 다시 연결해 주세요.",
 } as const;
 
+/** 데스크톱 앱: 동의는 시스템 브라우저에서 끝낸다(ADR-0024 §5). */
+export const DESKTOP_TEXT = {
+  waiting:
+    "브라우저에서 동의를 마친 뒤 이 앱으로 돌아와 주세요. 앱이 연결을 마무리하면 결과를 알려 드립니다.",
+} as const;
+
 export const REVOKE_MESSAGES = {
   revoked: "연결을 해제했습니다. Google에서도 권한을 거두었습니다.",
   none: "연결을 해제했습니다.",

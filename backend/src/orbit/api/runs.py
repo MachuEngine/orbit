@@ -216,6 +216,7 @@ async def post_run(
                 settings.llm_model_id,
                 _llm_info(),
                 embedding_model_id=settings.embedding_model_id,
+                stt_model_id=settings.stt_model_id,
             ),
             clock=clock,
             ids=ids,

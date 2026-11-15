@@ -61,6 +61,8 @@ export const NOTIFY_TEXT = {
   browserEnable: "브라우저 알림 켜기",
   browserHint: `${PRODUCT_NAME} 탭이 열려 있을 때 새 알림을 브라우저 알림으로도 보여 드립니다. 탭을 모두 닫으면 다음에 열 때 목록에서 확인할 수 있습니다.`,
   browserOn: `브라우저 알림이 켜져 있습니다. ${PRODUCT_NAME} 탭이 열려 있을 때만 알려 드립니다.`,
+  desktopHeading: "데스크톱 알림",
+  desktopNote: `${PRODUCT_NAME} 창을 닫아 두어도 새 알림을 시스템 알림으로 알려 드리고, 읽지 않은 수를 독 아이콘에 표시합니다. 완전히 끝내려면 메뉴 막대 아이콘에서 종료를 선택하세요.`,
   browserDenied:
     "브라우저에서 알림이 차단되어 있습니다. 주소창 옆 사이트 설정에서 알림을 허용한 뒤 이 화면을 다시 열어 주세요.",
 } as const;

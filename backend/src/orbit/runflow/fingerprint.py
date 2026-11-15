@@ -6,12 +6,14 @@ from collections.abc import Mapping
 from dataclasses import asdict
 from typing import Any
 
+from orbit.llm.stt import DEFAULT_STT_MODEL_ID
 from orbit.mailindex.limits import DEFAULT_EMBEDDING_MODEL_ID, INDEX_CONFIG
 from orbit.notify.limits import NOTIFY_CONFIG
 from orbit.runflow.context import CONTEXT_CONFIG
 from orbit.runflow.nodes import TEMPERATURE
 from orbit.runflow.prompt import PROMPT_VERSION
 from orbit.runflow.write_tools import run_tool_specs
+from orbit.voice.limits import VOICE_CONFIG
 
 PATTERN = "write-v0"
 
@@ -20,6 +22,7 @@ def config_fingerprint(
     model_id: str | None = None,
     llm_info: Mapping[str, Any] | None = None,
     embedding_model_id: str | None = None,
+    stt_model_id: str | None = None,
 ) -> str:
     """`model_id`는 고정 모델 ID(D9-3). 없거나 비어 있으면 "unset"으로 넣는다.
 
@@ -27,6 +30,7 @@ def config_fingerprint(
     추론 강도, temperature 전송 여부, 단가표 등)을 지문에 넣는다.
     `embedding_model_id`(색인 임베딩 모델, ADR-0019)가 없으면 기본 모델 ID로 본다. 색인·검색 상수
     (`INDEX_CONFIG`)와 알림 상수(`NOTIFY_CONFIG`, ADR-0021)는 항상 지문에 들어간다.
+    `stt_model_id`(음성 전사 모델, ADR-0025)가 없으면 기본 모델 ID로 본다.
     """
     payload: dict[str, Any] = {
         "pattern": PATTERN,
@@ -39,6 +43,7 @@ def config_fingerprint(
             "embedding_model_id": embedding_model_id or DEFAULT_EMBEDDING_MODEL_ID,
         },
         "notify": NOTIFY_CONFIG,
+        "voice": {**VOICE_CONFIG, "stt_model_id": stt_model_id or DEFAULT_STT_MODEL_ID},
         "tools": [asdict(spec) for spec in run_tool_specs()],
     }
     if llm_info is not None:

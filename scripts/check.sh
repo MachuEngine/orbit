@@ -75,8 +75,43 @@ check_frontend() {
   if npm --prefix frontend test -- --run; then ok "vitest"; else fail "vitest"; fi
 }
 
+# ── 데스크톱(Electron, ADR-0024) ─────────────────────
+# 스모크(실제 Electron 창)는 macOS 로컬에서 ORBIT_DESKTOP_SMOKE=1일 때만 돌린다.
+# CI는 ELECTRON_SKIP_BINARY_DOWNLOAD=1로 바이너리 없이 정적 검사·단위 테스트만 한다.
+check_desktop() {
+  section "데스크톱"
+  if [ ! -d desktop ]; then
+    ok "desktop/ 없음, 건너뛴다"
+    return
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    fail "npm이 설치되어 있지 않다"
+    return
+  fi
+  if [ ! -d desktop/node_modules ] || [ desktop/package-lock.json -nt desktop/node_modules/.package-lock.json ]; then
+    if ! npm ci --prefix desktop; then
+      fail "npm ci (desktop)"
+      return
+    fi
+  fi
+  run_desktop() {
+    local label="$1"; shift
+    if npm --prefix desktop run "$@"; then ok "$label"; else fail "$label"; fi
+  }
+  run_desktop "eslint (desktop)" lint
+  run_desktop "prettier --check (desktop)" format:check
+  run_desktop "tsc (desktop)" typecheck
+  if npm --prefix desktop test; then ok "vitest (desktop)"; else fail "vitest (desktop)"; fi
+  if [ "${ORBIT_DESKTOP_SMOKE:-0}" = "1" ]; then
+    run_desktop "Electron 스모크" test:smoke
+  else
+    ok "Electron 스모크 건너뜀 (ORBIT_DESKTOP_SMOKE=1로 실행)"
+  fi
+}
+
 check_backend
 check_frontend
+check_desktop
 
 echo
 if [ "$FAILED" -ne 0 ]; then

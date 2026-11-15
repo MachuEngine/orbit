@@ -16,6 +16,7 @@ from orbit.api.connections import build_connections_router
 from orbit.api.mail_index import build_mail_index_router
 from orbit.api.notifications import build_notifications_router
 from orbit.api.runs import router as runs_router
+from orbit.api.voice import build_voice_router
 from orbit.auth.google import GoogleOIDCConfig
 from orbit.connections.oauth import GoogleConnectOAuth
 from orbit.core.clock import Clock, SystemClock
@@ -23,6 +24,8 @@ from orbit.core.config import Settings, get_settings
 from orbit.core.ids import Uuid7Generator
 from orbit.crypto.envelope import EnvelopeCipher, EnvelopeError, load_kek_from_file
 from orbit.db.session import AsyncDatabase
+from orbit.llm.stt import SpeechToText
+from orbit.llm.stt_factory import build_stt
 from orbit.mailindex.deps import MailIndexDeps
 from orbit.mailindex.embedding import NullEmbedder
 from orbit.records.jobs import make_procrastinate_app
@@ -106,12 +109,15 @@ def create_app(
     ids: Uuid7Generator | None = None,
     google_transport: httpx.AsyncBaseTransport | None = None,
     resolver: ConnectorResolver | None = None,
+    stt: SpeechToText | None = None,
 ) -> FastAPI:
     resolved = settings if settings is not None else get_settings()
     ensure_startable(resolved)  # dev가 아니고 Google 로그인 설정이 빠졌으면 시작하지 않는다
     resolved_clock: Clock = clock if clock is not None else SystemClock()
     resolved_ids = ids if ids is not None else Uuid7Generator(resolved_clock)
     connect_oauth, cipher = build_connections(resolved, resolved_clock, google_transport)
+    # 음성 전사(ADR-0025). 주입이 없으면 설정으로 만든다. 키가 없으면 None이고 API는 503이다.
+    resolved_stt = stt if stt is not None else build_stt(resolved)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -146,6 +152,7 @@ def create_app(
     api.include_router(build_connections_router(resolved, connect_oauth, cipher))
     api.include_router(build_mail_index_router())
     api.include_router(build_notifications_router())
+    api.include_router(build_voice_router(resolved_stt))
     api.include_router(runs_router)
 
     @api.get("/healthz")

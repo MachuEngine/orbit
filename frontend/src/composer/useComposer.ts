@@ -66,6 +66,14 @@ export function useComposer(send: (text: string) => Promise<void>) {
     [submit],
   );
 
+  /** 입력창 끝에 글을 덧붙인다(음성 입력 결과). 기존 내용이 있으면 공백 하나를 사이에 둔다. */
+  const appendText = useCallback((addition: string) => {
+    setText((current) => {
+      if (current.trim() === "") return addition;
+      return /\s$/.test(current) ? current + addition : `${current} ${addition}`;
+    });
+  }, []);
+
   const inputProps = {
     value: text,
     onChange: (event: ChangeEvent<HTMLTextAreaElement>) => {
@@ -80,5 +88,5 @@ export function useComposer(send: (text: string) => Promise<void>) {
     },
   };
 
-  return { text, status, inputProps, submit, retry };
+  return { text, status, inputProps, submit, retry, appendText };
 }

@@ -343,3 +343,89 @@
 .composer-error .btn {
   margin-top: var(--space-2);
 }
+
+/* 음성 입력·읽어 주기 (ADR-0025). 새 색 없이 기존 토큰만 쓴다.
+ * 켜진 마이크는 ink 채움(btn-ink와 같은 값)과 경과 시간으로 보이게 하고 색만으로 구분하지 않는다. */
+.voice-toggle {
+  flex: none;
+}
+
+.voice-toggle-on,
+.chat .voice-toggle-on {
+  background: var(--color-ink);
+  border-color: var(--color-border);
+  color: var(--color-paper);
+}
+
+.voice-timer {
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-regular);
+}
+
+/* 녹음 상태 안내: 문구가 생기고 사라져도 아래 요소가 튀지 않도록 한 줄 높이를 잡아 둔다. */
+.voice-status {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-height: var(--space-5);
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.voice-status .icon {
+  margin-top: var(--space-1);
+}
+
+.voice-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--tone-error);
+}
+
+.voice-error .icon {
+  margin-top: var(--space-1);
+}
+
+.voice-auto-read {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-on-paper-muted);
+  cursor: pointer;
+}
+
+.voice-auto-read input {
+  accent-color: var(--color-ink);
+  flex: none;
+}
+
+/* 답변 아래 작은 버튼. 같은 .btn 모양에서 크기만 줄인다. */
+.message .read-aloud {
+  min-height: 0;
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+}
+
+/* 375px 폭: 마이크 버튼은 아이콘(과 경과 시간)만 보이게 줄여 입력창이 좁아지지 않게 한다.
+ * 글자는 화면낭독기용 이름으로 남긴다. */
+@media (max-width: 30rem) {
+  .voice-toggle {
+    padding-inline: var(--space-2);
+  }
+
+  .voice-toggle-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
