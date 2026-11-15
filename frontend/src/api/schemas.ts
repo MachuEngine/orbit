@@ -157,6 +157,9 @@ export type ConnectionsResponse = z.infer<typeof connectionsResponseSchema>;
 /** `POST /api/connections/google/start`. 화면이 이 주소로 직접 이동한다. */
 export const startConnectionResponseSchema = z.object({ authorization_url: z.string() });
 
+/** `POST /api/connections/google/desktop-ticket`. 데스크톱 셸이 시스템 브라우저로 여는 시작 주소다. */
+export const desktopTicketResponseSchema = z.object({ url: z.string() });
+
 /** `DELETE /api/connections/{id}`. `provider_revoke`는 Google 쪽 철회 결과다. */
 export const disconnectResponseSchema = z.object({
   id: z.string(),

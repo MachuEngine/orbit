@@ -1,3 +1,4 @@
+import type { PreparedConnect } from "../desktop/bridge";
 import { api as defaultClient, type ApiClient } from "./client";
 import {
   approvalSchema,
@@ -7,6 +8,7 @@ import {
   createRunResponseSchema,
   decisionResponseSchema,
   deleteScopeResponseSchema,
+  desktopTicketResponseSchema,
   disconnectResponseSchema,
   indexScopeSchema,
   indexStatusSchema,
@@ -75,6 +77,22 @@ export async function startDocsScope(
     schema: startConnectionResponseSchema,
   });
   return response.authorization_url;
+}
+
+/**
+ * 데스크톱 앱용 연결 시작 주소를 받는다(ADR-0024 §5). 앱 창은 Google 동의 화면을 열 수 없어 일회용
+ * 티켓이 든 서버 주소를 받아 셸이 시스템 브라우저로 연다. 셸이 준비한 `code_challenge`·포트·앱 `state`를
+ * 함께 보내 티켓에 묶는다(연결 CSRF 방지). `docs_scope`는 연결 ID가 필요하다.
+ */
+export async function startDesktopConnect(
+  body: ({ intent: "connect" } | { intent: "docs_scope"; connection_id: string }) & PreparedConnect,
+  client: ApiClient = defaultClient,
+): Promise<string> {
+  const response = await client.request("POST", "/api/connections/google/desktop-ticket", {
+    body,
+    schema: desktopTicketResponseSchema,
+  });
+  return response.url;
 }
 
 export function disconnectConnection(

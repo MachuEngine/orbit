@@ -25,6 +25,7 @@ from typing import Any
 import procrastinate
 from procrastinate.retry import BaseRetryStrategy, RetryDecision
 
+from orbit.auth.desktop import purge_expired_handoffs
 from orbit.mailindex.jobs import (
     MAIL_INDEX_QUEUE,
     MAIL_INDEX_TICK,
@@ -55,12 +56,16 @@ from orbit.runflow.nodes import ExecutionNotSettled
 
 logger = logging.getLogger(__name__)
 
+PURGE_DESKTOP_HANDOFF = "purge_desktop_handoff"
+PURGE_DESKTOP_HANDOFF_CRON = "*/15 * * * *"
+
 __all__ = [
     "EXECUTE_RUN",
     "EXPIRE_APPROVALS",
     "MAIL_INDEX_QUEUE",
     "MAIL_INDEX_TICK",
     "NOTIFY_QUEUE",
+    "PURGE_DESKTOP_HANDOFF",
     "RECOVER_STALLED",
     "RESUME_RUN",
     "RUN_QUEUE",
@@ -159,6 +164,18 @@ def build_worker_app(
         )
         if recovered:
             logger.warning("멈춘 작업 %d개를 되돌렸다", len(recovered))
+
+    @app.periodic(cron=PURGE_DESKTOP_HANDOFF_CRON)
+    @app.task(name=PURGE_DESKTOP_HANDOFF, queueing_lock=PURGE_DESKTOP_HANDOFF)
+    async def purge_desktop_handoff(timestamp: int) -> None:
+        # 만료 후 1시간이 지난 데스크톱 핸드오프 코드·연결 티켓을 지운다(ADR-0024 §7).
+        try:
+            purged = await purge_expired_handoffs(deps.db, deps.clock)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s: 정리 실패 kind=%s", PURGE_DESKTOP_HANDOFF, type(exc).__name__)
+        else:
+            if purged:
+                logger.info("%s: 만료 행 %d개를 지웠다", PURGE_DESKTOP_HANDOFF, purged)
 
     _register_mail_index_tasks(app, deps)
     _register_notify_tasks(app, deps)

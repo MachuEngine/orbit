@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { devLogin, getSession, logout } from "../api/endpoints";
 import { isApiError } from "../api/errors";
+import { getDesktop } from "../desktop/bridge";
 import { clearLoginErrorFromUrl, readLoginError } from "./loginError";
 
 /** 서버가 열어 둔 로그인 수단. 개발용 로그인은 dev 서버에서만 켜진다. */
@@ -69,6 +70,8 @@ export function useSession() {
     try {
       await logout();
     } finally {
+      // 데스크톱 앱은 앱 전용 파티션의 쿠키·캐시·저장소를 지운다(ADR-0024 §2). 웹은 서버가 쿠키를 지운다.
+      getDesktop()?.clearSession?.();
       setState({ phase: "signed_out" });
     }
   }, []);

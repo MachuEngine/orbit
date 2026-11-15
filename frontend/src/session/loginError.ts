@@ -1,4 +1,7 @@
-/** Google 로그인 콜백이 `/?login_error=<종류>`로 돌려보내는 실패 종류(서버 `LoginErrorKind`). */
+/**
+ * Google 로그인 콜백이 `/?login_error=<종류>`로 돌려보내는 실패 종류(서버 `LoginErrorKind`).
+ * 데스크톱 앱의 로그인 실패 이벤트(`onLoginEvent`)도 같은 종류 이름을 쓴다.
+ */
 const MESSAGES = {
   denied: "Google 로그인을 취소했습니다. 로그인하려면 버튼을 다시 눌러 주세요.",
   expired: "로그인 시간이 지났습니다. 버튼을 눌러 처음부터 다시 로그인해 주세요.",
@@ -9,6 +12,8 @@ const MESSAGES = {
   email_unverified: "인증되지 않은 이메일의 Google 계정으로는 로그인할 수 없습니다.",
   not_allowed: "이 Google 계정은 아직 사용할 수 없습니다. 허용된 계정으로 로그인해 주세요.",
   unavailable: "Google 또는 서버에 연결하지 못했습니다. 잠시 뒤 다시 로그인해 주세요.",
+  // 데스크톱 앱: 로그인은 끝났지만 앱이 세션 쿠키를 저장하지 못했다.
+  session: "로그인은 마쳤지만 이 앱에 저장하지 못했습니다. 버튼을 눌러 다시 로그인해 주세요.",
 } as const;
 
 export type LoginErrorKind = keyof typeof MESSAGES;

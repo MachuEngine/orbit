@@ -10,6 +10,13 @@
   dev가 아니면 설정이 모두 있어야 앱이 시작된다(`ensure_startable`). 허용 목록 밖의 이메일은
   사용자를 만들지 않고 거부한다.
 - 로그인 흐름 임시 쿠키 `orbit_login`: 서명(HMAC), 10분, HttpOnly, SameSite=Lax, Path는 로그인 경로.
+- 데스크톱 로그인(ADR-0024 §4)
+  - `GET /auth/desktop/start`: 입력을 검증하고 같은 Google 로그인으로 302한다. 서명 쿠키에
+    `code_challenge`·포트·앱 `state`를 묶는다.
+  - 콜백이 데스크톱 요청이면 브라우저에 세션을 만들지 않고 일회용 핸드오프 코드를
+    `http://127.0.0.1:<port>/callback?code=…&state=…`로 302한다(실패는 `error=<종류>`).
+  - `POST /auth/desktop/exchange {code, code_verifier}`가 세션 쿠키·CSRF 쿠키를 앱 창에 설정한다.
+    실패는 모두 400 `invalid_grant`다.
 - 세션 유효성은 요청을 받을 때 한 번 확인한다. 이미 열린 SSE 연결은 만료로 끊지 않는다.
 """
 
@@ -29,13 +36,21 @@ from orbit.auth import (
     lookup_session,
     revoke_session,
 )
+from orbit.auth.desktop import (
+    exchange_handoff_code,
+    issue_handoff_code,
+    loopback_url,
+    parse_desktop_request,
+)
 from orbit.auth.google import (
     FLOW_COOKIE,
     FLOW_TTL_SECONDS,
+    DesktopLoginRequest,
     GoogleOIDC,
     GoogleOIDCConfig,
     LoginError,
     LoginErrorKind,
+    VerifiedIdentity,
     email_allowed,
 )
 from orbit.auth.users import login_upsert_user, session_profile
@@ -206,6 +221,109 @@ def build_auth_router(settings: Settings, google: GoogleOIDC | None = None) -> A
             _set_flow_cookie(response, settings, cookie)
             return response
 
+        @router.get("/auth/desktop/start")
+        async def desktop_start(
+            code_challenge: str | None = None,
+            port: str | None = None,
+            state: str | None = None,
+        ) -> Response:
+            """데스크톱 앱이 연 로그인 시작. 입력을 검증하고 기존 Google 로그인으로 보낸다."""
+            requested = parse_desktop_request(code_challenge, port, state)
+            if requested is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid_request")
+            url, cookie = google.begin(requested)
+            response = RedirectResponse(url, status_code=status.HTTP_302_FOUND)
+            _set_flow_cookie(response, settings, cookie)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        @router.post("/auth/desktop/exchange")
+        async def desktop_exchange(request: Request) -> Response:
+            """핸드오프 코드를 세션으로 바꾼다. 세션 없이 호출되고, 실패 사유는 구분하지 않는다."""
+            invalid = HTTPException(status.HTTP_400_BAD_REQUEST, "invalid_grant")
+            try:
+                body = await request.json()
+            except ValueError:
+                raise invalid from None
+            code = body.get("code") if isinstance(body, dict) else None
+            verifier = body.get("code_verifier") if isinstance(body, dict) else None
+            if not isinstance(code, str) or not isinstance(verifier, str):
+                raise invalid
+            clock: Clock = request.app.state.clock
+            ids: Uuid7Generator = request.app.state.ids
+            try:
+                issued = await exchange_handoff_code(
+                    request.app.state.db,
+                    code=code,
+                    code_verifier=verifier,
+                    clock=clock,
+                    ids=ids,
+                    session_ttl_seconds=settings.session_ttl_seconds,
+                )
+            except Exception as exc:
+                logger.error("데스크톱 로그인 교환 처리 실패: %s", type(exc).__name__)
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "unavailable") from None
+            if issued is None:
+                raise invalid
+            response = Response(status_code=status.HTTP_204_NO_CONTENT)
+            response.headers["Cache-Control"] = "no-store"
+            _set_cookies(response, settings, issued.token, issued.csrf_token)
+            return response
+
+        def _peek_desktop(request: Request) -> DesktopLoginRequest | None:
+            """쿠키가 유효하고 데스크톱 요청이면 그 정보를 돌려준다. 어떤 오류도 None이다."""
+            try:
+                return google.read_flow_cookie(request.cookies.get(FLOW_COOKIE)).desktop
+            except LoginError:
+                return None
+
+        def _fail(desktop: DesktopLoginRequest | None, kind: LoginErrorKind) -> Response:
+            """웹은 `/?login_error=`로, 데스크톱은 앱의 loopback 수신기로 실패 종류를 알린다."""
+            if desktop is None:
+                return _login_failure(settings, kind)
+            logger.info("데스크톱 Google 로그인 실패: kind=%s", kind)
+            response = RedirectResponse(
+                loopback_url(desktop, error=kind), status_code=status.HTTP_302_FOUND
+            )
+            response.headers["Cache-Control"] = "no-store"
+            _clear_flow_cookie(response, settings)
+            return response
+
+        async def _finish_desktop(
+            request: Request, desktop: DesktopLoginRequest, identity: VerifiedIdentity
+        ) -> Response:
+            """데스크톱 로그인 완료: 세션 대신 핸드오프 코드를 만들어 loopback으로 보낸다."""
+            db: AsyncDatabase = request.app.state.db
+            clock: Clock = request.app.state.clock
+            ids: Uuid7Generator = request.app.state.ids
+            try:
+                result = await login_upsert_user(
+                    db,
+                    google_sub=identity.sub,
+                    email=identity.email,
+                    display_name=identity.display_name,
+                    clock=clock,
+                    ids=ids,
+                )
+                handoff = await issue_handoff_code(
+                    db,
+                    workspace_id=result.workspace_id,
+                    user_id=result.user_id,
+                    code_challenge=desktop.code_challenge,
+                    clock=clock,
+                    ids=ids,
+                )
+            except Exception as exc:
+                logger.error("데스크톱 로그인 처리 실패: %s", type(exc).__name__)
+                return _fail(desktop, "unavailable")
+            logger.info("데스크톱 Google 로그인 성공: user_id=%s", result.user_id)
+            response = RedirectResponse(
+                loopback_url(desktop, code=handoff), status_code=status.HTTP_302_FOUND
+            )
+            response.headers["Cache-Control"] = "no-store"
+            _clear_flow_cookie(response, settings)
+            return response
+
         @router.get("/auth/google/callback")
         async def google_callback(
             request: Request,
@@ -213,15 +331,18 @@ def build_auth_router(settings: Settings, google: GoogleOIDC | None = None) -> A
             state: str | None = None,
             error: str | None = None,
         ) -> Response:
+            desktop = _peek_desktop(request)
             if error:  # 동의 화면에서 거절하는 등 Google이 오류로 돌려보낸 경우
-                return _login_failure(settings, "denied")
+                return _fail(desktop, "denied")
             try:
                 flow = google.read_flow_cookie(request.cookies.get(FLOW_COOKIE))
                 identity = await google.complete(flow=flow, state=state, code=code)
                 if not email_allowed(identity.email, settings.login_allowed_emails):
                     raise LoginError("not_allowed")
             except LoginError as exc:
-                return _login_failure(settings, exc.kind)
+                return _fail(desktop, exc.kind)
+            if flow.desktop is not None:
+                return await _finish_desktop(request, flow.desktop, identity)
             db: AsyncDatabase = request.app.state.db
             clock: Clock = request.app.state.clock
             ids: Uuid7Generator = request.app.state.ids

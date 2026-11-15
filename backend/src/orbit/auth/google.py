@@ -69,10 +69,20 @@ class GoogleOIDCConfig:
 
 
 @dataclass(frozen=True)
+class DesktopLoginRequest:
+    """데스크톱 앱이 시작한 로그인의 핸드오프 정보(ADR-0024 §4). 서명 쿠키에 묶여 콜백까지 간다."""
+
+    code_challenge: str
+    port: int
+    app_state: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class LoginFlow:
     state: str = field(repr=False)
     nonce: str = field(repr=False)
     code_verifier: str = field(repr=False)
+    desktop: DesktopLoginRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -116,12 +126,13 @@ class GoogleOIDC:
 
     # ------------------------------------------------------------ 시작
 
-    def begin(self) -> tuple[str, str]:
-        """(Google 인가 URL, 서명한 임시 쿠키 값)."""
+    def begin(self, desktop: DesktopLoginRequest | None = None) -> tuple[str, str]:
+        """(Google 인가 URL, 서명한 임시 쿠키 값). `desktop`이 있으면 서명 쿠키에 함께 묶는다."""
         flow = LoginFlow(
             state=secrets.token_urlsafe(32),
             nonce=secrets.token_urlsafe(32),
             code_verifier=secrets.token_urlsafe(48),  # 64자, RFC 7636 범위(43~128)
+            desktop=desktop,
         )
         query = urlencode(
             {
@@ -145,10 +156,19 @@ class GoogleOIDC:
 
     def _seal(self, flow: LoginFlow) -> str:
         expires = int(self._clock.now().timestamp()) + FLOW_TTL_SECONDS
-        body = json.dumps(
-            {"s": flow.state, "n": flow.nonce, "v": flow.code_verifier, "e": expires},
-            separators=(",", ":"),
-        )
+        data: dict[str, Any] = {
+            "s": flow.state,
+            "n": flow.nonce,
+            "v": flow.code_verifier,
+            "e": expires,
+        }
+        if flow.desktop is not None:
+            data["d"] = {
+                "c": flow.desktop.code_challenge,
+                "p": flow.desktop.port,
+                "a": flow.desktop.app_state,
+            }
+        body = json.dumps(data, separators=(",", ":"))
         payload = _b64e(body.encode("utf-8"))
         return f"{payload}.{_b64e(self._mac(payload))}"
 
@@ -177,7 +197,21 @@ class GoogleOIDC:
             raise invalid
         if self._clock.now().timestamp() >= expires:
             raise invalid
-        return LoginFlow(state=state, nonce=nonce, code_verifier=verifier)
+        desktop: DesktopLoginRequest | None = None
+        raw_desktop = data.get("d")
+        if raw_desktop is not None:
+            if not isinstance(raw_desktop, dict):
+                raise invalid
+            challenge, port, app_state = (raw_desktop.get(k) for k in ("c", "p", "a"))
+            if not (
+                isinstance(challenge, str)
+                and isinstance(app_state, str)
+                and isinstance(port, int)
+                and not isinstance(port, bool)
+            ):
+                raise invalid
+            desktop = DesktopLoginRequest(challenge, port, app_state)
+        return LoginFlow(state=state, nonce=nonce, code_verifier=verifier, desktop=desktop)
 
     # ------------------------------------------------------------ 완료
 

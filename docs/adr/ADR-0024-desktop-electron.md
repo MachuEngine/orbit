@@ -34,9 +34,16 @@ Google 로그인은 앱 창에서 열 수 없다. 다음 순서로 앱 창에 �
 4. 앱이 코드를 받으면 앱 창 안에서 `POST /api/auth/desktop/exchange {code, code_verifier}`를 호출하고, 서버가 검증 후 앱 창의 쿠키 저장소에 세션 쿠키를 설정한다.
 - 커스텀 URL 스킴(`orbit://`)은 다른 앱이 가로챌 수 있어 쓰지 않는다. 허용 목록·세션 TTL은 웹과 같다.
 
-### 5. 계정 연결(Gmail·Calendar·Drive 동의)
-- 동의 화면도 시스템 브라우저에서 연다. 지금 연결 흐름은 `state`를 브라우저 쿠키에 두므로, 데스크톱은 앱 창에서 일회용 연결 티켓(60초, 1회, 워크스페이스에 묶임)을 받아 `GET /api/connections/google/desktop-begin?ticket=…`를 시스템 브라우저로 연다. 서버가 티켓을 검증하고 브라우저에 `state` 쿠키를 둔 뒤 Google로 보낸다. 콜백은 기존 경로를 그대로 쓰고 완료 화면에 "앱으로 돌아가세요"를 보인다.
-- 앱은 연결 목록을 다시 불러 완료를 확인한다(기존 화면 동작).
+### 5. 계정 연결(Gmail·Calendar·Drive 동의): 앱이 완료한다
+- 위협(13c 검토에서 발견): 세션 없는 브라우저에서 티켓만으로 연결을 끝내면, 공격자가 자기 티켓 URL을 피해자에게 열게 해 피해자의 Google 계정을 공격자 워크스페이스에 연결할 수 있다(연결 CSRF). 웹 흐름은 세션 쿠키와 `state` 쿠키가 같은 브라우저에 있어야 해서 이 문제가 없다.
+- 결정: 브라우저는 동의만 받고, 연결 저장은 앱이 자기 세션으로 완료 코드를 제출할 때만 한다(로그인 핸드오프와 같은 PKCE + loopback 구조).
+  1. 앱 main이 `code_verifier`·`code_challenge`·앱 `state`를 만들고 `127.0.0.1` 임시 포트에 수신기를 연다. renderer는 main에게서 `code_challenge`·포트·앱 `state`만 받아(verifier는 main에만) `POST /api/connections/google/desktop-ticket`(세션·CSRF)에 함께 보내고 일회용 티켓 URL을 받는다.
+  2. 시스템 브라우저에서 `desktop-begin` 안내 화면을 열고, 사용자가 "계속"을 누르면(POST, 링크 미리보기·프리페치가 티켓을 소진하지 않게) 티켓을 소비하고 서명 쿠키에 워크스페이스·사용자·`code_challenge`·포트·앱 `state`를 묶어 Google로 보낸다.
+  3. 콜백은 토큰을 교환·저장하지 않는다. Google 인가 코드를 봉투 암호화해 대기 행(5분, 1회, 완료 코드 해시와 `code_challenge`에 묶임)에 두고 `http://127.0.0.1:<port>/callback?code=…&state=…`로 보낸다. 브라우저에는 "Orbit 앱으로 돌아가세요"를 보인다.
+  4. 앱 main이 `state`를 확인하고 앱 세션으로 `POST /api/connections/google/desktop-complete {code, code_verifier}`(세션·CSRF)를 호출한다. 서버는 세션의 워크스페이스·사용자가 대기 행과 같고 verifier가 맞을 때만 Google 인가 코드를 교환하고 기존 저장 규칙(계정 일치, 점진 권한)으로 연결을 저장한다.
+- 효과: 공격자가 피해자에게 URL을 열게 해도 완료 코드는 피해자 PC의 `127.0.0.1`로 가고 공격자 세션에서는 제출할 수 없다. 완료되지 않으면 토큰이 발급되지 않고 대기 행은 만료 후 지워진다.
+- 앱은 완료 결과를 화면에 알리고 연결 목록을 다시 불러온다.
+- 한계: 같은 PC의 악성 로컬 프로세스가 loopback 포트를 선점하면 로그인 코드를 가로챌 수 있다(§4도 같다). PKCE verifier가 앱 main에만 있어 교환은 막히지만, 공격자가 시작한 로그인 URL을 사용자가 열고 로그인하면 그 프로세스가 자기 verifier로 교환할 수 있다. 로컬 프로세스가 이미 악성인 경우는 위협 모델 밖으로 둔다.
 
 ### 6. 데스크톱 기능
 - 상주: 창을 닫아도 메뉴 막대 아이콘으로 남고, 알림 조회(30초)를 계속한다. 종료는 메뉴에서.
@@ -45,7 +52,8 @@ Google 로그인은 앱 창에서 열 수 없다. 다음 순서로 앱 창에 �
 - 마이크 권한: 처음 음성 입력 때 `askForMediaAccess('microphone')`. 거부되면 시스템 설정으로 안내한다.
 
 ### 7. 백엔드 변경
-- 새 API: `/api/auth/desktop/start`, `/api/auth/desktop/exchange`, `/api/connections/google/desktop-ticket`, `/api/connections/google/desktop-begin`. 핸드오프 코드·연결 티켓은 RLS 밖 저장소에 해시로만 두고(ADR-0006: ID·해시만), 만료 행은 주기 작업이 지운다. 마이그레이션 필요.
+- 새 API: `/api/auth/desktop/start`, `/api/auth/desktop/exchange`, `/api/connections/google/desktop-ticket`, `/api/connections/google/desktop-begin`. 핸드오프 코드·연결 티켓은 해시·ID·시각만 저장한다(ADR-0006). 세션 조회(`auth_session`, 0004)와 같은 방식으로 RLS(FORCE) 테이블에 두고 `orbit_app`은 INSERT만 하며, 세션이 없는 소비 시점에는 해시로 찾아 조건부 `UPDATE … RETURNING` 하는 `SECURITY DEFINER` 함수만 쓴다. 만료 행은 15분 주기 작업이 지운다(마이그레이션 0012).
+- 데스크톱 경로의 상태(로그인의 PKCE 값·loopback 포트, 연결의 워크스페이스·사용자)는 기존 서명 쿠키(`orbit_login`·`orbit_connect`)에 함께 묶는다. 이 값이 없으면 웹 흐름과 같다.
 - 기존 웹 흐름은 바꾸지 않는다.
 
 ### 8. 검증

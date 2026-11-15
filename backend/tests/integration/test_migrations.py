@@ -20,7 +20,9 @@ def _tables(owner_url: str) -> set[str]:
                     " 'checkpoint_writes', 'checkpoint_migrations', 'auth_session',"
                     " 'app_user', 'membership', 'connection', 'index_scope',"
                     " 'sync_state', 'source_item', 'chunk', 'notification',"
-                    " 'notification_setting', 'voice_usage'))"
+                    " 'notification_setting', 'voice_usage', 'desktop_login_code',"
+                    " 'desktop_connect_ticket',"
+                    " 'desktop_connect_pending'))"
                 )
             )
             return {r[0] for r in rows}
@@ -54,10 +56,11 @@ def _due_function_exists(owner_url: str) -> bool:
                 text(
                     "SELECT count(*) FROM pg_proc WHERE proname IN"
                     " ('mail_index_due_connections', 'event_reminder_due_connections',"
-                    " 'notification_expired_workspaces')"
+                    " 'notification_expired_workspaces', 'desktop_login_code_redeem',"
+                    " 'desktop_connect_ticket_redeem', 'desktop_handoff_purge')"
                 )
             ).scalar_one()
-            return int(found) == 3
+            return int(found) == 6
     finally:
         engine.dispose()
 
@@ -90,6 +93,9 @@ def test_upgrade_downgrade_upgrade(owner_url: str) -> None:
         "notification",
         "notification_setting",
         "voice_usage",
+        "desktop_login_code",
+        "desktop_connect_ticket",
+        "desktop_connect_pending",
         "procrastinate_jobs",
         "procrastinate_events",
         "procrastinate_workers",

@@ -62,3 +62,21 @@ export function parseBadgeCount(value: unknown): number | null {
   if (value < 0 || value > LIMITS.badgeMax) return null;
   return value;
 }
+
+export interface PrepareConnectArgs {
+  intent: "connect" | "docs_scope";
+}
+
+/**
+ * `prepareConnect` 인자 검증. `intent`만 확인한다(대상 연결 ID는 서버가 티켓·세션으로 확인하므로 main은
+ * 쓰지 않는다). 모르는 키는 거부한다.
+ */
+export function parsePrepareConnectArgs(value: unknown): PrepareConnectArgs | null {
+  if (!isRecord(value)) return null;
+  if (Object.keys(value).some((key) => key !== "intent" && key !== "connection_id")) return null;
+  const { intent, connection_id: connectionId } = value;
+  if (intent !== "connect" && intent !== "docs_scope") return null;
+  if (connectionId !== undefined && (typeof connectionId !== "string" || connectionId.length > 64))
+    return null;
+  return { intent };
+}

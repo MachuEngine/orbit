@@ -13,16 +13,26 @@ import {
   systemPreferences,
   Tray,
   type IpcMainEvent,
+  type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from "electron";
 import { CHANNELS, VERSION_ARG } from "../shared/channels";
 import { parseServerOrigin, parseShortcut } from "./config";
+import { completeConnect, ConnectController } from "./connect";
+import { connectFlowHref } from "./connectFlow";
 import { NotificationDedup } from "./dedup";
+import { exchangeCode, LoginController } from "./login";
+import { startLoopbackReceiver } from "./loopback";
 import { decideNavigation, decideWindowOpen, isServerUrl } from "./navigation";
 import { isPermissionAllowed, micAccessAction } from "./permissions";
-import { parseBadgeCount, parseNotifyPayload } from "./validate";
+import { clearSessionData } from "./session";
+import { parseBadgeCount, parseNotifyPayload, parsePrepareConnectArgs } from "./validate";
 
 const PARTITION = "persist:orbit";
+/** 서버가 로그인 교환에서 설정하는 세션 쿠키 이름(`orbit.api.auth.SESSION_COOKIE`). */
+const SESSION_COOKIE = "orbit_session";
+/** 서버가 세션과 함께 주는 CSRF 쿠키 이름(`orbit.api.auth.CSRF_COOKIE`). 값을 헤더로 되돌려 보낸다. */
+const CSRF_COOKIE = "orbit_csrf";
 
 app.setName("Orbit");
 
@@ -123,7 +133,7 @@ function installNavigationGuards(origin: string): void {
 }
 
 /** IPC 발신자가 앱 창의 최상위 프레임이고 서버 출처인지 확인한다. */
-function isTrustedSender(event: IpcMainEvent, origin: string): boolean {
+function isTrustedSender(event: IpcMainEvent | IpcMainInvokeEvent, origin: string): boolean {
   const frame = event.senderFrame;
   const win = mainWindow;
   if (frame === null || win === null || win.isDestroyed()) return false;
@@ -131,7 +141,86 @@ function isTrustedSender(event: IpcMainEvent, origin: string): boolean {
   return frame.parent === null && isServerUrl(frame.url, origin);
 }
 
+function createLoginController(origin: string): LoginController {
+  const ses = () => session.fromPartition(PARTITION);
+  return new LoginController({
+    origin,
+    startReceiver: startLoopbackReceiver,
+    // `code_verifier`는 main에서만 쓴다. 응답의 Set-Cookie는 앱 파티션의 쿠키 저장소에 들어간다.
+    exchange: (code, verifier) =>
+      exchangeCode((url, init) => ses().fetch(url, init), origin, code, verifier),
+    hasSessionCookie: async () =>
+      (await ses().cookies.get({ url: origin, name: SESSION_COOKIE })).length > 0,
+    openExternal,
+    reloadWindow: () => {
+      showWindow();
+      const win = mainWindow;
+      if (win !== null && !win.isDestroyed()) void win.loadURL(`${origin}/`);
+    },
+    emit: (event) => {
+      const win = mainWindow;
+      if (win !== null && !win.isDestroyed()) win.webContents.send(CHANNELS.loginEvent, event);
+    },
+  });
+}
+
+function createConnectController(origin: string): ConnectController {
+  const ses = () => session.fromPartition(PARTITION);
+  const emit = (channel: string, event: unknown) => {
+    const win = mainWindow;
+    if (win !== null && !win.isDestroyed()) win.webContents.send(channel, event);
+  };
+  return new ConnectController({
+    startReceiver: startLoopbackReceiver,
+    // 앱 세션으로 완료 API를 부른다. `code_verifier`는 main에서만 쓴다.
+    complete: async (code, verifier) => {
+      const cookies = await ses().cookies.get({ url: origin, name: CSRF_COOKIE });
+      return completeConnect(
+        (url, init) => ses().fetch(url, init),
+        origin,
+        cookies[0]?.value ?? null,
+        code,
+        verifier,
+      );
+    },
+    emit: (event) => {
+      showWindow();
+      emit(CHANNELS.connectEvent, event);
+    },
+  });
+}
+
 function registerIpc(origin: string): void {
+  const login = createLoginController(origin);
+  const connect = createConnectController(origin);
+
+  ipcMain.handle(CHANNELS.prepareConnect, async (event, raw: unknown) => {
+    if (!isTrustedSender(event, origin) || parsePrepareConnectArgs(raw) === null) {
+      throw new Error("허용하지 않는 요청입니다.");
+    }
+    return connect.prepare();
+  });
+
+  ipcMain.on(CHANNELS.startLogin, (event) => {
+    if (!isTrustedSender(event, origin)) return;
+    void login.start();
+  });
+
+  ipcMain.on(CHANNELS.openConnectFlow, (event, raw: unknown) => {
+    if (!isTrustedSender(event, origin)) return;
+    const href = connectFlowHref(raw, origin);
+    if (href !== null) openExternal(href);
+  });
+
+  ipcMain.on(CHANNELS.clearSession, (event) => {
+    if (!isTrustedSender(event, origin)) return;
+    login.cancel();
+    connect.cancel();
+    void clearSessionData(session.fromPartition(PARTITION)).then((ok) => {
+      if (!ok) console.warn("[orbit-desktop] 세션 저장소를 모두 지우지 못했습니다.");
+    });
+  });
+
   ipcMain.on(CHANNELS.notify, (event, raw: unknown) => {
     if (!isTrustedSender(event, origin)) return;
     const payload = parseNotifyPayload(raw);
