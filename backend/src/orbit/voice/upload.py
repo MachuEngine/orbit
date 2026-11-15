@@ -18,6 +18,8 @@ from python_multipart.multipart import MultipartParser, parse_options_header
 from orbit.voice.limits import MAX_AUDIO_BYTES, MAX_COMPRESSED_AUDIO_BYTES
 
 FIELD_NAME = "audio"
+_WAV_FORMATS = (1, 3)  # PCM, IEEE float
+_WAV_RATE_RANGE = (8000, 48000)
 _MAX_HEADER_BYTES = 4096
 
 # 주장된 MIME 형식 → 표준 형식(OpenAI에 넘기는 값)
@@ -77,12 +79,36 @@ def _wav_duration(data: bytes) -> float | None:
         chunk_id = data[pos : pos + 4]
         (declared,) = struct.unpack_from("<I", data, pos + 4)
         body = pos + 8
-        if chunk_id == b"fmt " and body + 12 <= len(data):
-            (byte_rate,) = struct.unpack_from("<I", data, body + 8)
+        if chunk_id == b"fmt ":
+            byte_rate = _validated_byte_rate(data, body)
         elif chunk_id == b"data":
             return (len(data) - body) / byte_rate if byte_rate > 0 else None
         pos = body + declared + (declared & 1)
     return None
+
+
+def _validated_byte_rate(data: bytes, body: int) -> int:
+    """`fmt ` 청크의 값이 서로 맞고 범위 안일 때만 초당 바이트 수를 돌려준다. 아니면 0이다.
+
+    PCM(1)과 IEEE float(3)만, 채널 1~2, 8~48kHz, 8·16·24·32비트를 허용한다. 헤더의
+    `byte_rate`를 위조해 길이를 짧게 보이게 하는 파일을 막으려고 `block_align`과 `byte_rate`가
+    나머지 값에서 계산한 값과 같은지 확인한다.
+    """
+    if body + 16 > len(data):
+        return 0
+    audio_format, channels, rate, byte_rate, block_align, bits = struct.unpack_from(
+        "<HHIIHH", data, body
+    )
+    if (
+        audio_format not in _WAV_FORMATS
+        or channels not in (1, 2)
+        or not _WAV_RATE_RANGE[0] <= rate <= _WAV_RATE_RANGE[1]
+        or bits not in (8, 16, 24, 32)
+        or block_align != channels * bits // 8
+        or byte_rate != rate * block_align
+    ):
+        return 0
+    return int(byte_rate)
 
 
 class AudioUploadParser:

@@ -9,6 +9,7 @@
   멈춘 워크스페이스의 행은 남지만 최대 2일 치 이하로 작다(전역 정리 작업은 두지 않는다).
 """
 
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -82,9 +83,14 @@ async def reserve(
 
 
 async def correct(db: AsyncDatabase, ws: uuid.UUID, usage_id: uuid.UUID, *, seconds: float) -> None:
-    """제공자가 알려 준 실제 길이로 기록된 초를 바꾼다(같은 워크스페이스 세션 안에서)."""
+    """제공자가 알려 준 실제 길이로 기록된 초를 바꾼다(같은 워크스페이스 세션 안에서).
+
+    유한하지 않거나 음수인 값은 믿지 않고 기록을 그대로 둔다.
+    """
+    if not math.isfinite(seconds) or seconds < 0:
+        return
     async with db.workspace_session(ws) as s:
         await s.execute(
             text("UPDATE voice_usage SET seconds = :seconds WHERE id = :id AND workspace_id = :ws"),
-            {"seconds": max(seconds, 0.0), "id": usage_id, "ws": ws},
+            {"seconds": seconds, "id": usage_id, "ws": ws},
         )

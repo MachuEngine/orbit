@@ -124,3 +124,33 @@ def test_rejects_bad_structure() -> None:
         with pytest.raises(UploadError) as err:
             parse_audio_upload(h, b)
         assert err.value.kind == "bad_request"
+
+
+@pytest.mark.parametrize(
+    ("offset", "fmt", "value"),
+    [
+        (28, "<I", 0xFFFFFFFF),  # byte_rate 위조(짧은 길이로 보이게 한다)
+        (28, "<I", 0),
+        (28, "<I", 4000),  # sample_rate * block_align(8000)과 다르다
+        (32, "<H", 4),  # block_align 불일치
+        (22, "<H", 6),  # 채널 범위 밖
+        (24, "<I", 1000),  # 표본 주파수 범위 밖
+        (34, "<H", 12),  # 비트 수 범위 밖
+        (20, "<H", 2),  # PCM·float이 아닌 형식(ADPCM)
+    ],
+)
+def test_wav_fmt_values_must_be_consistent(offset: int, fmt: str, value: int) -> None:
+    forged = bytearray(wav(120))
+    struct.pack_into(fmt, forged, offset, value)
+    with pytest.raises(UploadError) as err:
+        parse_audio_upload(*_multipart(bytes(forged), "audio/wav"))
+    assert (err.value.kind, err.value.status_code) == ("unsupported_format", 400)
+
+
+def test_wav_float_and_stereo_16bit_are_accepted() -> None:
+    stereo = bytearray(wav(2, rate=16000))
+    struct.pack_into("<H", stereo, 22, 2)  # 채널 2
+    struct.pack_into("<I", stereo, 28, 16000 * 2)  # byte_rate = rate * block_align(2)
+    struct.pack_into("<H", stereo, 32, 2)  # block_align = 2 * 8 / 8
+    audio = parse_audio_upload(*_multipart(bytes(stereo), "audio/wav"))
+    assert audio.duration_seconds == pytest.approx(len(stereo[44:]) / 32000)

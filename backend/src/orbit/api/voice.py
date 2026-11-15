@@ -106,8 +106,16 @@ def build_voice_router(stt: SpeechToText | None) -> APIRouter:
         except SttError as exc:
             raise _fail(502, "provider_error", size) from exc
         if transcript.duration_seconds is not None:
-            seconds = transcript.duration_seconds
-            await usage.correct(db, session.workspace_id, reservation.usage_id, seconds=seconds)
+            try:
+                await usage.correct(
+                    db,
+                    session.workspace_id,
+                    reservation.usage_id,
+                    seconds=transcript.duration_seconds,
+                )
+                seconds = transcript.duration_seconds
+            except Exception as exc:  # noqa: BLE001 - 보정 실패가 이미 끝난 전사를 막지 않는다
+                logger.warning("voice usage 보정 실패 kind=%s", type(exc).__name__)
         logger.info("voice transcribe 성공 bytes=%d seconds=%.1f", size, seconds)
         return {"text": transcript.text}
 

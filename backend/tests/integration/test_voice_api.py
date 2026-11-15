@@ -240,6 +240,47 @@ async def test_forged_wav_header_is_judged_by_actual_bytes(make_api: MakeApi) ->
     assert api.stt.calls == [] and await api.usage_rows() == []
 
 
+@pytest.mark.parametrize(
+    ("offset", "fmt", "value"),
+    [(28, "<I", 0xFFFFFFFF), (32, "<H", 4), (24, "<I", 1000), (34, "<H", 12)],
+)
+async def test_wav_with_inconsistent_fmt_is_400(
+    make_api: MakeApi, offset: int, fmt: str, value: int
+) -> None:
+    api: VoiceApi = await make_api()
+    forged = bytearray(wav(90))  # 실제로는 90초 분량
+    struct.pack_into(fmt, forged, offset, value)
+    r = await api.post(bytes(forged), "audio/wav")
+    assert r.status_code == 400 and r.json()["detail"] == "unsupported_format"
+    assert api.stt.calls == [] and await api.usage_rows() == []
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -5.0])
+async def test_invalid_provider_seconds_do_not_correct_usage(make_api: MakeApi, bad: float) -> None:
+    api: VoiceApi = await make_api()
+    api.stt.seconds = bad
+    assert (await api.post(webm(8000))).status_code == 200
+    [row] = await api.usage_rows()
+    assert row["seconds"] == pytest.approx(2.0, abs=0.1)  # 추정값 그대로
+
+
+async def test_correction_failure_still_returns_transcript(
+    make_api: MakeApi, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    api: VoiceApi = await make_api()
+    api.stt.seconds = 10.0
+
+    async def boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError(SECRET_SENTENCE)  # 메시지는 로그에 나오면 안 된다
+
+    monkeypatch.setattr("orbit.api.voice.usage.correct", boom)
+    caplog.set_level(logging.DEBUG)
+    r = await api.post(webm(8000))
+    assert r.status_code == 200 and r.json() == {"text": SECRET_SENTENCE}
+    assert "kind=RuntimeError" in caplog.text
+    assert SECRET_SENTENCE not in caplog.text
+
+
 async def test_provider_reported_seconds_correct_the_usage_row(make_api: MakeApi) -> None:
     api: VoiceApi = await make_api()
     api.stt.seconds = 42.5
