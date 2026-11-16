@@ -33,26 +33,12 @@ async def test_all_correct_succeeds(dataset: Dataset) -> None:
     assert summary.completed
     assert len(summary.results) == 8  # dev 과제 4개 x 2회. test 과제는 실행하지 않는다
     for r in summary.results:
-        if r.task_id == "t-005":  # 비어 있지 않은 expected_changes: 채점 불가
-            assert (r.success, r.failure_type) == (None, "unscored")
-        else:
-            assert (r.success, r.failure_type) == (True, None)
+        assert (r.success, r.failure_type) == (True, None)
     t1 = by_task(summary, "t-001")[0]
     assert t1.trajectory == ("list_events",)
     assert (t1.llm_calls, t1.input_tokens, t1.output_tokens) == (2, 20, 10)
     assert t1.cost_usd == pytest.approx(0.002)
     assert t1.state_diff_match is True
-
-
-async def test_nonempty_expected_changes_is_unscored_neither_success_nor_failure(
-    dataset: Dataset,
-) -> None:
-    summary = await run(dataset, repeats=1)
-    t5 = by_task(summary, "t-005")[0]
-    assert t5.success is None
-    assert t5.failure_type == "unscored"
-    assert t5.unscored == ("expected_changes",)
-    assert t5.state_diff_match is None
 
 
 async def test_wrong_answer_fails(dataset: Dataset) -> None:

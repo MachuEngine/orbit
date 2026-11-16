@@ -65,7 +65,11 @@ class OpenRouterLLM:
         *,
         retry_policy: RetryPolicy | None = None,
         sleep: Callable[[float], Any] | None = None,
+        include_error_message: bool = False,
     ) -> None:
+        # 기본은 꺼 둔다. 응답 본문에 프롬프트가 되돌아올 수 있어서다. 합성 데이터만 보내는 호출
+        # (평가 데이터 생성)이 4xx 원인을 보려고 켠다.
+        self._include_error_message = include_error_message
         self._model_id = validate_model_id(settings.llm_model_id)
         self._accepted_ids = frozenset(settings.llm_accepted_response_model_ids)
         self._provider_order = tuple(settings.llm_provider_order)
@@ -141,7 +145,8 @@ class OpenRouterLLM:
         if status == 429 or status >= 500:
             raise TransientLLMError(f"OpenRouter 일시 오류: HTTP {status}{_error_code(resp)}")
         if status >= 400:
-            raise LLMRequestError(f"OpenRouter 요청 거절: HTTP {status}{_error_code(resp)}")
+            detail = _error_message(resp) if self._include_error_message else ""
+            raise LLMRequestError(f"OpenRouter 요청 거절: HTTP {status}{_error_code(resp)}{detail}")
 
         parsed: LLMResponse | None = None
         try:
@@ -255,6 +260,18 @@ def _parse_tool_call(raw: Any) -> ToolCall:
         return ToolCall(id=str(raw["id"]), name=str(fn["name"]), arguments=args)
     except (KeyError, TypeError, ValueError):
         raise MalformedResponseError("도구 호출 형식이 올바르지 않다") from None
+
+
+def _error_message(resp: httpx.Response, limit: int = 200) -> str:
+    """`error.message`를 공백을 줄이고 `limit`자로 잘라 돌려준다. 없으면 빈 문자열."""
+    try:
+        message = resp.json()["error"]["message"]
+    except (ValueError, KeyError, TypeError):
+        return ""
+    if not isinstance(message, str) or not message.strip():
+        return ""
+    text = " ".join(message.split())
+    return f" - {text[:limit]}"
 
 
 def _error_code(resp: httpx.Response) -> str:

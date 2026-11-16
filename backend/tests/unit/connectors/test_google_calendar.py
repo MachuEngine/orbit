@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -363,20 +364,38 @@ async def test_update_and_cancel_send_if_match() -> None:
     assert len(rec.requests) == 2
 
 
-async def test_all_day_event_converts_between_date_and_utc_midnight() -> None:
+SEOUL = ZoneInfo("Asia/Seoul")
+CAL_META_PATH = b"/v3/calendars/primary%40example.com"
+
+
+def calendar_handler(
+    event: dict[str, Any] | None = None, *, time_zone: str | None = "Asia/Seoul"
+) -> Handler:
+    """`calendars.get`에는 캘린더 메타를, 그 밖의 요청에는 `event`를 돌려준다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.raw_path == CAL_META_PATH:
+            return httpx.Response(200, json={"id": CAL, "timeZone": time_zone} if time_zone else {})
+        return httpx.Response(200, json=event if event is not None else event_json())
+
+    return handler
+
+
+async def test_all_day_event_converts_between_date_and_calendar_midnight() -> None:
     raw = event_json(start={"date": "2026-11-21"}, end={"date": "2026-11-23"})
-    conn, rec, _ = make(lambda r: httpx.Response(200, json=raw))
+    conn, rec, _ = make(calendar_handler(raw))
     ev = await conn.get_event(CAL, EV)
     assert ev.all_day
-    assert ev.start == datetime(2026, 11, 21, tzinfo=UTC)
-    assert ev.end == datetime(2026, 11, 23, tzinfo=UTC)  # 끝 배타적
+    assert ev.start == datetime(2026, 11, 21, tzinfo=SEOUL)  # 캘린더 시간대 00:00
+    assert ev.start == datetime(2026, 11, 20, 15, tzinfo=UTC)
+    assert ev.end == datetime(2026, 11, 23, tzinfo=SEOUL)  # 끝 배타적
     created = await conn.create_event(
         CAL,
         EV,
         EventDraft(
             title="종일",
-            start=datetime(2026, 11, 21, tzinfo=UTC),
-            end=datetime(2026, 11, 23, tzinfo=UTC),
+            start=datetime(2026, 11, 21, tzinfo=SEOUL),
+            end=datetime(2026, 11, 23, tzinfo=SEOUL),
             all_day=True,
         ),
     )
@@ -384,17 +403,78 @@ async def test_all_day_event_converts_between_date_and_utc_midnight() -> None:
     body = json.loads(rec.requests[-1].content)
     assert body["start"] == {"date": "2026-11-21", "dateTime": None}
     assert body["end"] == {"date": "2026-11-23", "dateTime": None}
+    # 시간대 조회는 한 번이다(연결 안에서 기억한다)
+    assert [r.method for r in rec.requests] == ["GET", "GET", "POST"]
 
 
-async def test_all_day_rejects_non_midnight_before_sending() -> None:
-    conn, rec, _ = make(lambda r: httpx.Response(200, json=event_json()))
-    with pytest.raises(ValueError):
+async def test_all_day_write_date_uses_calendar_zone_not_utc() -> None:
+    """UTC로는 전날인 순간도 캘린더 시간대 날짜로 `date`를 보낸다."""
+    conn, rec, _ = make(calendar_handler(time_zone="America/Los_Angeles"))
+    la = ZoneInfo("America/Los_Angeles")
+    await conn.create_event(
+        CAL,
+        EV,
+        EventDraft(
+            title="종일",
+            start=datetime(2026, 11, 20, tzinfo=la),  # 2026-11-20T08:00Z
+            end=datetime(2026, 11, 21, tzinfo=la),
+            all_day=True,
+        ),
+    )
+    body = json.loads(rec.requests[-1].content)
+    assert body["start"]["date"] == "2026-11-20"
+    assert body["end"]["date"] == "2026-11-21"
+
+
+async def test_all_day_on_dst_day_reads_local_midnight() -> None:
+    raw = event_json(start={"date": "2026-11-01"}, end={"date": "2026-11-02"})
+    conn, _, _ = make(calendar_handler(raw, time_zone="America/Los_Angeles"))
+    ev = await conn.get_event(CAL, EV)
+    assert ev.start.astimezone(UTC) == datetime(2026, 11, 1, 7, tzinfo=UTC)  # PDT(-07:00)
+    assert ev.end.astimezone(UTC) == datetime(2026, 11, 2, 8, tzinfo=UTC)  # PST(-08:00)
+
+
+async def test_list_events_uses_response_time_zone_without_extra_request() -> None:
+    raw = event_json(start={"date": "2026-11-21"}, end={"date": "2026-11-22"})
+    conn, rec, _ = make(
+        lambda r: httpx.Response(200, json={"items": [raw], "timeZone": "Asia/Seoul"})
+    )
+    events = await conn.list_events(
+        CAL, datetime(2026, 11, 21, tzinfo=SEOUL), datetime(2026, 11, 22, tzinfo=SEOUL)
+    )
+    assert [e.start for e in events] == [datetime(2026, 11, 21, tzinfo=SEOUL)]
+    assert len(rec.requests) == 1
+
+
+async def test_all_day_without_calendar_time_zone_is_utc() -> None:
+    raw = event_json(start={"date": "2026-11-21"}, end={"date": "2026-11-22"})
+    conn, _, _ = make(calendar_handler(raw, time_zone=None))
+    ev = await conn.get_event(CAL, EV)
+    assert ev.start == datetime(2026, 11, 21, tzinfo=UTC)
+
+
+async def test_all_day_response_after_title_only_update_uses_calendar_zone() -> None:
+    raw = event_json(start={"date": "2026-11-21"}, end={"date": "2026-11-22"})
+    conn, _, _ = make(calendar_handler(raw))
+    updated = await conn.update_event(CAL, EV, EventPatch(title="새 제목"), if_match='"e1"')
+    assert updated.start == datetime(2026, 11, 21, tzinfo=SEOUL)
+
+
+async def test_all_day_rejects_non_local_midnight_before_sending() -> None:
+    conn, rec, _ = make(calendar_handler())
+    with pytest.raises(ValueError):  # UTC 00:00은 서울 09:00이다
         await conn.create_event(
             CAL,
             EV,
-            EventDraft(title="x", start=START, end=START + timedelta(days=1), all_day=True),
+            EventDraft(
+                title="x",
+                start=datetime(2026, 11, 21, tzinfo=UTC),
+                end=datetime(2026, 11, 22, tzinfo=UTC),
+                all_day=True,
+            ),
         )
-    assert rec.requests == []
+    assert [r.method for r in rec.requests] == ["GET"]  # 시간대 조회만 나가고 쓰기는 없다
+    assert rec.requests[0].url.raw_path == CAL_META_PATH
 
 
 async def test_timezone_offsets_are_parsed_and_sent_as_utc() -> None:
@@ -632,3 +712,9 @@ async def test_attendee_patch_stale_etag_fails_before_patch() -> None:
             CAL, EV, EventPatch(attendees=(Attendee(email="a@example.org"),)), if_match='"old"'
         )
     assert [r.method for r in rec.requests] == ["GET"]
+
+
+async def test_list_events_unknown_response_time_zone_is_connector_error() -> None:
+    conn, _, _ = make(lambda r: httpx.Response(200, json={"items": [], "timeZone": "Mars/Base"}))
+    with pytest.raises(TransientError):
+        await conn.list_events(CAL, START, START + timedelta(days=1))

@@ -38,7 +38,16 @@ MAX_FIELD_CHARS = 200  # 제목·이름·장소 같은 짧은 외부 문자열 �
 MAX_SEARCH_RESULTS = 20
 DEFAULT_SEARCH_RESULTS = 10
 
-ANSWER_KINDS = ("event_set", "event", "event_time", "time_slot")
+ANSWER_KINDS = (
+    "event_set",
+    "event",
+    "event_time",
+    "time_slot",
+    "message_set",
+    "document",
+    "abstain",
+    "clarify",
+)
 
 _SEARCH_SYNTAX = (
     "검색 문법은 부분집합만 지원한다: from:, to:, subject:, after:·before:(YYYY/MM/DD), "
@@ -108,7 +117,9 @@ def tool_specs() -> tuple[ToolSpec, ...]:
             SUBMIT_ANSWER,
             "답이 정해지면 구조화된 답을 제출한다. kind에 따라 필요한 필드가 다르다: "
             "event_set은 events, event는 event, event_time은 event와 start, "
-            "time_slot은 start. start는 오프셋이 있는 ISO 8601이다.",
+            "time_slot은 start, message_set은 messages(메일 핸들 목록), document는 document"
+            "(문서 핸들), abstain과 clarify는 다른 필드 없음. "
+            "start는 오프셋이 있는 ISO 8601이다.",
             {
                 "type": "object",
                 "properties": {
@@ -116,6 +127,8 @@ def tool_specs() -> tuple[ToolSpec, ...]:
                     "events": {"type": "array", "items": {"type": "string"}},
                     "event": {"type": "string"},
                     "start": {"type": "string"},
+                    "messages": {"type": "array", "items": {"type": "string"}},
+                    "document": {"type": "string"},
                 },
                 "required": ["kind"],
                 "additionalProperties": False,
@@ -227,7 +240,9 @@ class ReadOnlyTools:
         return moment.astimezone(self._tz).isoformat()
 
     def _event_summary(self, event: CalendarEvent) -> dict[str, Any]:
-        if event.all_day:  # 종일 일정은 UTC 날짜 경계다(계약). 시간대 변환을 하지 않는다.
+        if event.all_day:
+            # 종일 일정의 start·end는 캘린더 시간대 오프셋으로 표기된다(계약, ADR-0027). 그 시각의
+            # 날짜가 캘린더 시간대 날짜다. 추가 호출 없이 읽는다.
             start, end = event.start.date().isoformat(), event.end.date().isoformat()
         else:
             start, end = self._local(event.start), self._local(event.end)
@@ -344,6 +359,21 @@ class ReadOnlyTools:
                 if ref not in refs:  # 같은 핸들 중복은 한 번만 담는다
                     refs.append(ref)
             return {"kind": kind, "events": refs}
+        if kind == "message_set":
+            raw_messages = args.get("messages")
+            if not isinstance(raw_messages, list | tuple):
+                raise ToolInputError("invalid_arguments")
+            ids: list[str] = []
+            for handle in raw_messages:
+                message_id = self.workset.resolve_message(handle)
+                if message_id not in ids:  # 같은 핸들 중복은 한 번만 담는다
+                    ids.append(message_id)
+            return {"kind": kind, "messages": [{"message_id": i} for i in ids]}
+        if kind == "document":
+            return {
+                "kind": kind,
+                "document": {"file_id": self.workset.resolve_document(args.get("document"))},
+            }
         answer: dict[str, Any] = {"kind": kind}
         if kind in ("event", "event_time"):
             answer["event"] = self._event_ref(args.get("event"))

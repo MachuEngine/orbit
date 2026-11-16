@@ -33,7 +33,12 @@ ALTER ROLE orbit_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSW
 SELECT 'CREATE DATABASE orbit_test OWNER orbit_owner'
  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'orbit_test') \gexec
 
--- 두 DB 모두 마이그레이션이 public 스키마에 객체를 만든다. 확장은 슈퍼유저가 미리 만들어 둔다.
+-- 평가 전용 DB(ADR-0023). 평가 러너(`runflow_v0`)가 에피소드마다 워크스페이스를 만들고 지운다.
+-- 통합 테스트(orbit_test)와 같은 스키마(Alembic head)를 쓰되 따로 둬서 scripts/check.sh와 동시에 돌 수 있다.
+SELECT 'CREATE DATABASE orbit_eval OWNER orbit_owner'
+ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'orbit_eval') \gexec
+
+-- 세 DB 모두 마이그레이션이 public 스키마에 객체를 만든다. 확장은 슈퍼유저가 미리 만들어 둔다.
 \connect orbit
 GRANT CREATE, USAGE ON SCHEMA public TO orbit_owner;
 GRANT USAGE ON SCHEMA public TO orbit_app;
@@ -41,6 +46,12 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 CREATE EXTENSION IF NOT EXISTS vector;
 
 \connect orbit_test
+GRANT CREATE, USAGE ON SCHEMA public TO orbit_owner;
+GRANT USAGE ON SCHEMA public TO orbit_app;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+CREATE EXTENSION IF NOT EXISTS vector;
+
+\connect orbit_eval
 GRANT CREATE, USAGE ON SCHEMA public TO orbit_owner;
 GRANT USAGE ON SCHEMA public TO orbit_app;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;

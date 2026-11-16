@@ -41,6 +41,8 @@ from orbit.crypto.envelope import EnvelopeCipher
 from orbit.db.session import AsyncDatabase
 from orbit.llm.interface import LLM
 from orbit.mailindex.deps import MailIndexDeps
+from orbit.runflow.answer import AnswerSink
+from orbit.runflow.eval_variants import ReasoningCache
 
 DEFAULT_MAX_STEPS = 12  # 한 run의 LLM 호출 상한
 DEFAULT_LEASE_SECONDS = 300.0  # 커넥터 호출 타임아웃 x (1 + 재호출 1회)보다 길게(ADR-0012 §3)
@@ -244,3 +246,8 @@ class RunDeps:
     max_steps: int = DEFAULT_MAX_STEPS
     jobs: procrastinate.App | None = None  # 워커 앱. 있으면 승인 만료 확인 작업을 예약한다
     mail_index: MailIndexDeps | None = None  # 색인 검색 도구·동기화 작업(ADR-0019). 없으면 비활성
+    # 평가 전용(ADR-0023 §6). 있으면 `submit_answer` 도구·안내를 더하고 구조화된 답을 여기로 넘긴다.
+    answer_sink: AnswerSink | None = None
+    # 평가 전용 원인 확인 변형(ADR-0023 §10). 기본값에서는 프롬프트·요청이 변형이 없던 때와 같다.
+    facts_extension: bool = False  # True면 시스템 프롬프트에 [사실 확인] 단락(`facts-v1`)을 더한다
+    reasoning_cache: ReasoningCache | None = None  # 있으면 추론 항목을 메모리에만 두고 되돌린다

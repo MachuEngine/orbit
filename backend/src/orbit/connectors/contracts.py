@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime
+from datetime import UTC, date, datetime, time, tzinfo
 from typing import Literal, Protocol, runtime_checkable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
@@ -112,10 +113,14 @@ def _check_order(start: datetime | None, end: datetime | None) -> None:
 
 
 class CalendarEvent(_Model):
-    """일정. 종일 일정(`all_day=True`)의 `start`·`end`는 UTC 00:00이고 `end`는 배타적이다.
+    """일정. 종일 일정(`all_day=True`)의 `start`·`end`는 그 일정이 속한 캘린더 `time_zone`에서
+    00:00인 순간이고 `end`는 배타적이다(ADR-0027).
 
-    하루짜리 종일 일정은 `end = start + 1일`이다. v0 한계: 캘린더 `time_zone`은 종일 일정의
-    날짜 경계에 쓰지 않고 항상 UTC 날짜 경계로 본다.
+    하루짜리 종일 일정은 `end`가 다음 날 현지 00:00이다. 일광 절약 시간 전환일도 그날 현지
+    00:00이므로 `end - start`가 24시간이 아닐 수 있다. 구현체는 종일 일정을 돌려줄 때
+    `start`·`end`를
+    캘린더 시간대 오프셋으로 표기한다(순간은 같고 표기만 현지다). 그래서 `start.date()`가 현지
+    날짜다. 캘린더 `time_zone`이 없으면 UTC로 본다.
     """
 
     id: str
@@ -403,11 +408,12 @@ class CalendarConnector(Protocol):
     계약 오류(`ConnectorError` 계열) 말고 다음 입력 위반은 호출자 버그이므로 `ValueError`다.
     장애 주입이나 재시도로 복구할 대상이 아니다.
     - `create_event`의 `event_id`가 Google 규칙(`[a-v0-9]` 5~1024자)에 맞지 않는다.
-    - 종일 일정의 `start`·`end`가 UTC 00:00이 아니거나, 종일이 아닐 때 `start < end`가 아니다.
+    - 종일 일정의 `start`·`end`가 그 캘린더 시간대의 00:00이 아니거나(ADR-0027),
+      `start < end`가 아니다.
     - `update_event`의 패치를 병합한 결과가 `start < end`가 아니다(상태·버전은 바뀌지 않는다).
     - `list_events`의 `time_min`·`time_max`가 naive이거나 `time_min >= time_max`다.
 
-    종일 일정은 UTC 00:00 기준, `end` 배타적이다(`CalendarEvent` 참고, v0 한계).
+    종일 일정은 캘린더 시간대 00:00 기준, `end` 배타적이다(`CalendarEvent` 참고, ADR-0027).
     """
 
     async def list_calendars(self) -> list[Calendar]: ...
@@ -539,6 +545,44 @@ _CLIENT_EVENT_ID = re.compile(r"[a-v0-9]{5,1024}")
 def is_valid_client_event_id(value: str) -> bool:
     """Google 규칙: base32hex 소문자 `[a-v0-9]`, 5~1024자."""
     return _CLIENT_EVENT_ID.fullmatch(value) is not None
+
+
+def calendar_zone(time_zone: str) -> tzinfo:
+    """캘린더 `time_zone` 이름을 시간대로 바꾼다. 비었으면 UTC이고, 모르는 이름은 `ValueError`다."""
+    if not time_zone or time_zone == "UTC":
+        return UTC
+    try:
+        return ZoneInfo(time_zone)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        raise ValueError(f"알 수 없는 캘린더 시간대: {time_zone!r}") from None
+
+
+def local_midnight(day: date, time_zone: str) -> datetime:
+    """`day`의 캘린더 시간대 00:00인 순간(종일 일정의 날짜 경계, ADR-0027)."""
+    return datetime.combine(day, time(0, 0), tzinfo=calendar_zone(time_zone))
+
+
+def local_date(value: datetime, time_zone: str) -> date:
+    """순간 `value`가 캘린더 시간대에서 속한 날짜."""
+    return value.astimezone(calendar_zone(time_zone)).date()
+
+
+def check_event_times(
+    start: datetime, end: datetime, all_day: bool, time_zone: str = "UTC"
+) -> None:
+    """생성·수정 결과의 시각 검증(Sim·Google 공통). 어기면 `ValueError`다.
+
+    종일 일정의 `start`·`end`는 캘린더 `time_zone`에서 00:00이어야 한다(ADR-0027). 모든 일정은
+    `start < end`여야 한다(종일도 `end`가 배타적이라 같은 값이면 빈 일정이다).
+    """
+    if all_day:
+        zone = calendar_zone(time_zone)
+        for name, value in (("start", start), ("end", end)):
+            if value.astimezone(zone).time() != time(0, 0):
+                where = time_zone or "UTC"
+                raise ValueError(f"종일 일정의 {name}는 캘린더 시간대({where}) 00:00이어야 한다")
+    if not start.astimezone(UTC) < end.astimezone(UTC):
+        raise ValueError("end는 start보다 뒤여야 한다")
 
 
 def validate_client_event_id(value: str) -> str:

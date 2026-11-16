@@ -290,3 +290,15 @@ def test_settings_require_key_and_nonempty_order(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delenv("ORBIT_OPENROUTER_API_KEY", raising=False)
     with pytest.raises(ValidationError):
         LLMSettings()
+
+
+async def test_4xx_message_is_opt_in_and_truncated() -> None:
+    long_msg = "가" * 500
+    server = Server(_json(404, {"error": {"code": 404, "message": long_msg}}))
+    llm = OpenRouterLLM(
+        _settings(), server.transport(), sleep=_no_sleep, include_error_message=True
+    )
+    with pytest.raises(LLMRequestError) as info:
+        await llm.complete(_request())
+    text = str(info.value)
+    assert "HTTP 404" in text and "가" * 200 in text and "가" * 201 not in text

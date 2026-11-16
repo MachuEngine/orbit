@@ -10,6 +10,7 @@ from orbit.assistant.prompt import PROMPT_VERSION
 from orbit.connectors.contracts import ConnectorError
 from orbit.evalrunner.episode import Episode, EpisodeOutput, SystemUnderTest
 from orbit.evalrunner.llm_script import SUBMIT_ANSWER
+from orbit.evalrunner.runflow_sut import RunflowV0SUT
 from orbit.evalrunner.tools import ToolDispatcher, serialize_result, tool_specs
 from orbit.llm.types import LLMRequest, Message, ToolSpec
 
@@ -97,12 +98,12 @@ class AssistantV0SUT:
     """제품 경로 `ReadOnlyAssistant`(ADR-0011)를 감싸는 어댑터. 에피소드 입력을 변환할 뿐이다.
 
     `version`에 프롬프트 버전을 넣어 결과의 설정 지문(`sut.version`)에 남긴다.
-    v0는 사용자 시간대를 `Asia/Seoul`로 고정한다. 사용자 발화(`role == "user"`)만 넘긴다.
+    사용자 시간대는 과제의 `time_zone`(없으면 `Asia/Seoul`)이다.
+    사용자 발화(`role == "user"`)만 넘긴다.
     """
 
     name = "assistant_v0"
     version = f"0+{PROMPT_VERSION}+temp{TEMPERATURE:g}"
-    TIME_ZONE = "Asia/Seoul"
 
     def __init__(self, *, max_turns: int = 20) -> None:
         self._max_turns = max_turns
@@ -113,7 +114,7 @@ class AssistantV0SUT:
             calendar=episode.connectors.calendar,
             mail=episode.connectors.mail,
             clock=episode.clock,
-            tz=ZoneInfo(self.TIME_ZONE),
+            tz=ZoneInfo(episode.task.time_zone),
             on_step=episode.steps.consume,
             has_step_room=episode.steps.has_room,
             max_turns=self._max_turns,
@@ -127,13 +128,17 @@ class AssistantV0SUT:
         )
 
 
-SutFactory = Callable[[], SystemUnderTest]
+SutFactory = Callable[..., SystemUnderTest]
 
 _REGISTRY: dict[str, SutFactory] = {
     "noop": NoopSUT,
     "scripted_tool": ScriptedToolSUT,
     "assistant_v0": AssistantV0SUT,
+    "runflow_v0": RunflowV0SUT,  # 평가 DB 필요(ADR-0023)
 }
+
+# 러너가 에피소드마다 평가 DB 핸들(`Episode.database`)을 준비해야 하는 평가 대상
+DATABASE_SUTS = frozenset({"runflow_v0"})
 
 
 def register_sut(name: str, factory: SutFactory) -> None:
@@ -150,9 +155,10 @@ class UnknownSutError(ValueError):
     pass
 
 
-def create_sut(name: str) -> SystemUnderTest:
+def create_sut(name: str, **options: Any) -> SystemUnderTest:
+    """`options`는 평가 대상 생성자에 그대로 넘긴다(예: `runflow_v0`의 `index_mode`)."""
     try:
         factory = _REGISTRY[name]
     except KeyError:
         raise UnknownSutError(f"알 수 없는 SUT: {name} (등록: {sut_names()})") from None
-    return factory()
+    return factory(**options)

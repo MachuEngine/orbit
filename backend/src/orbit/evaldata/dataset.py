@@ -11,10 +11,20 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ValidationError
 
-from orbit.evaldata.schema import Manifest, ReviewEntry, Task
+from orbit.connectors.sim.faults import FaultPlan
+from orbit.evaldata.schema import (
+    DraftChange,
+    EventCancelledChange,
+    EventCreatedChange,
+    EventUpdatedChange,
+    Manifest,
+    ReviewEntry,
+    Task,
+)
 
 MANIFEST = "manifest.json"
 WORLD = "world.json"
@@ -95,6 +105,12 @@ def write_dataset(
     write_manifest(path, manifest)
     (path / WORLD).write_text(dumps_json(world), encoding="utf-8")
     rows = [t.model_dump(mode="json") for t in tasks]
+    for row in rows:  # 선택 필드는 값이 없으면 쓰지 않는다(v0 파일과 같은 바이트를 유지한다)
+        for key in ("approval_policy", "time_zone", "fault_plan"):
+            if row.get(key) is None:
+                row.pop(key, None)
+        if row["gold"].get("answer_facts_required") is False:
+            row["gold"].pop("answer_facts_required")
     (path / TASKS).write_text(dumps_jsonl(rows), encoding="utf-8")
 
 
@@ -172,6 +188,7 @@ def validate_dataset(
         if t.as_of_time.utcoffset() is None:
             problems.append(f"{t.task_id}: as_of_time에 시간대가 없다")
         scenario_splits.setdefault(t.scenario_id, set()).add(t.split)
+        problems.extend(_task_field_problems(t, accounts.get(t.account_id)))
     for sid, splits in sorted(scenario_splits.items()):
         if len(splits) > 1:
             problems.append(f"시나리오 {sid}의 과제가 dev와 test에 모두 있다")
@@ -195,4 +212,46 @@ def validate_dataset(
         )
     for tid in sorted(set(review or {}) - set(ids)):
         problems.append(f"review.jsonl에 없는 과제 {tid}가 있다")
+    return problems
+
+
+def _task_field_problems(task: Task, account: dict[str, Any] | None) -> list[str]:
+    """v1 선택 필드(`time_zone`·`fault_plan`·`expected_changes`)의 값 검증. 원문은 싣지 않는다."""
+    problems: list[str] = []
+    tid = task.task_id
+    if task.time_zone is not None:
+        try:
+            ZoneInfo(task.time_zone)
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            problems.append(f"{tid}: time_zone이 올바른 IANA 이름이 아니다")
+    if task.fault_plan is not None:
+        try:
+            FaultPlan.from_dict(task.fault_plan)
+        except ValidationError as exc:
+            problems.append(f"{tid}: fault_plan이 올바르지 않다: {describe_error(exc)}")
+    if account is None or not task.gold.expected_changes:
+        return problems
+    calendars = {c["id"] for c in account.get("calendars", [])}
+    events = {(e["calendar_id"], e["id"]) for e in account.get("events", [])}
+    messages = {m["id"] for m in account.get("messages", [])}
+    for i, change in enumerate(task.gold.expected_changes):
+        where = f"{tid}: expected_changes[{i}]"
+        if isinstance(change, EventCreatedChange | EventUpdatedChange | EventCancelledChange):
+            if change.calendar_id not in calendars:
+                problems.append(f"{where}: calendar_id가 world에 없다")
+            elif (
+                isinstance(change, EventUpdatedChange | EventCancelledChange)
+                and (
+                    change.calendar_id,
+                    change.event_id,
+                )
+                not in events
+            ):
+                problems.append(f"{where}: event_id가 world에 없다")
+        elif (
+            isinstance(change, DraftChange)
+            and change.reply_to_message_id is not None
+            and change.reply_to_message_id not in messages
+        ):
+            problems.append(f"{where}: reply_to_message_id가 world에 없다")
     return problems

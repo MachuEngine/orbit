@@ -12,6 +12,7 @@ LLM이 준 호출 ID는 step마다 겹칠 수 있어 (step, tool_call_id)로 찾
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -70,8 +71,17 @@ class Transcript:
                 return WorkSet.restore(row.content["handles"])
         return self.prior.latest_workset() or WorkSet()
 
-    def llm_messages(self, system_prompt: str, boundary: str) -> list[Message]:
-        """LLM 요청 메시지. 도구 결과는 저장된 JSON을 데이터 봉투로 감싸 넘긴다(ADR-0018 §2)."""
+    def llm_messages(
+        self,
+        system_prompt: str,
+        boundary: str,
+        provider_items: Mapping[int, tuple[dict[str, Any], ...]] | None = None,
+    ) -> list[Message]:
+        """LLM 요청 메시지. 도구 결과는 저장된 JSON을 데이터 봉투로 감싸 넘긴다(ADR-0018 §2).
+
+        `provider_items`(평가 전용 `reasoning-rt`, ADR-0023 §10)는 step -> 그 step 응답의 추론
+        항목이다. 있으면 해당 step의 assistant 메시지에만 붙인다. 저장소에서 읽은 값이 아니다.
+        """
         messages = [Message(role="system", content=system_prompt), *self.prior.messages(boundary)]
         for row in self.rows:
             content = row.content
@@ -86,8 +96,17 @@ class Transcript:
                     )
                     for c in content.get("tool_calls", [])
                 )
+                step = content.get("step")
+                items = (
+                    provider_items.get(step, ()) if provider_items and isinstance(step, int) else ()
+                )
                 messages.append(
-                    Message(role="assistant", content=content.get("text"), tool_calls=calls)
+                    Message(
+                        role="assistant",
+                        content=content.get("text"),
+                        tool_calls=calls,
+                        provider_items=items,
+                    )
                 )
             elif row.role == "tool":
                 messages.append(

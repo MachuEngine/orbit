@@ -42,6 +42,7 @@ def build_response(item: Mapping[str, Any]) -> LLMResponse:
         latency_ms=0,
         model_id=SCRIPTED_MODEL_ID,
         provider=None,
+        provider_items=tuple(dict(i) for i in item.get("provider_items", [])),
     )
 
 

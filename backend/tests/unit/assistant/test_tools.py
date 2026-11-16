@@ -298,3 +298,37 @@ async def test_connector_error_outcome_has_kind_reason_but_content_is_unchanged(
     assert outcome.is_error
     assert outcome.content == '{"error": "service_disabled"}'
     assert outcome.connector_error == ("service_disabled", "accessNotConfigured")
+
+
+async def test_all_day_event_dates_follow_calendar_time_zone(make_connectors: Any) -> None:
+    """종일 일정의 날짜는 캘린더 시간대(서울) 날짜다. 사용자 표시 시간대가 달라도 같다(ADR-0027)."""
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from orbit.connectors.contracts import EventDraft
+
+    calendar, mail = make_connectors()
+    # UTC 표기로 만든 서울 11-20 00:00(= 11-19T15:00Z). UTC 날짜로 읽으면 11-19로 틀린다.
+    await calendar.create_event(
+        "cal-alice-main",
+        "evnaa00001",
+        EventDraft(
+            title="종일",
+            start=datetime(2026, 11, 19, 15, tzinfo=UTC),
+            end=datetime(2026, 11, 20, 15, tzinfo=UTC),
+            all_day=True,
+        ),
+    )
+    for display_tz in (ZoneInfo("Asia/Seoul"), ZoneInfo("America/Los_Angeles")):
+        tools = ReadOnlyTools(calendar=calendar, mail=mail, tz=display_tz)
+        out = await call(
+            tools, "list_events", time_min="2026-11-19T00:00:00Z", time_max="2026-11-21T00:00:00Z"
+        )
+        (event,) = [e for e in out["events"] if e["title"] == "종일"]
+        assert (event["start"], event["end"], event["all_day"]) == (
+            "2026-11-20",
+            "2026-11-21",
+            True,
+        )
+        detail = await call(tools, "get_event", handle=event["handle"])
+        assert (detail["start"], detail["end"]) == ("2026-11-20", "2026-11-21")

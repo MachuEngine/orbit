@@ -94,7 +94,7 @@ def test_argument_validation_defaults() -> None:
 
 
 def test_prompt_explains_both_mail_tools_and_freshness() -> None:
-    assert PROMPT_VERSION == "runflow-v0.7"  # 리마인더 도구 안내 추가(ADR-0021)
+    assert PROMPT_VERSION == "runflow-v0.8"  # v0.7 리마인더 안내(ADR-0021), v0.8 되묻기(ADR-0026)
     prompt = build_system_prompt(datetime(2026, 11, 12, tzinfo=UTC), UTC, "0123456789ab")
     assert "search_mail" in prompt and "search_indexed_mail" in prompt
     assert "N분 전 기준" in prompt and "index_empty" in prompt

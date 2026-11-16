@@ -44,7 +44,11 @@ async def test_sut_receives_task_without_gold(dataset: Dataset) -> None:
     seen = await _capture(dataset)
     assert len(seen) == 4
     for ep in seen:
-        assert {f.name for f in fields(ep.task)} == {"task_id", "turns", "as_of_time", "account_id"}
+        # approval_policy는 사용자 행동 입력이라 보인다(정답 아님, ADR-0023 §3). v0는 비어 있다.
+        assert {f.name for f in fields(ep.task)} == {
+            "task_id", "turns", "as_of_time", "account_id", "approval_policy", "time_zone",
+        }  # fmt: skip
+        assert ep.task.approval_policy == ()
         for attr in (
             "gold", "forbidden_tools", "required_tool_calls", "must_not_contain",
             "answer_facts", "expected_changes", "scenario_id", "split", "difficulty", "tags",
@@ -64,9 +68,10 @@ async def test_sut_receives_task_without_gold(dataset: Dataset) -> None:
 async def test_sut_authority_is_narrow(dataset: Dataset) -> None:
     ep = (await _capture(dataset))[0]
     assert {f.name for f in fields(Episode)} == {
-        "task", "connectors", "clock", "llm", "budget", "steps",
+        "task", "connectors", "clock", "llm", "budget", "steps", "database",
     }  # fmt: skip
-    assert {f.name for f in fields(EpisodeConnectors)} == {"mail", "calendar"}
+    assert ep.database is None  # DB 핸들은 러너가 `runflow_v0`용으로만 준비한다(ADR-0023 §2)
+    assert {f.name for f in fields(EpisodeConnectors)} == {"mail", "calendar", "drive"}
     for attr in ("runtime", "calls", "fault_plan", "faults", "world"):
         assert not hasattr(ep, attr)
         assert not hasattr(ep.connectors, attr)

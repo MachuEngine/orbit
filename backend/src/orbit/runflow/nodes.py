@@ -31,7 +31,13 @@ from orbit.actions.hashing import args_hash, canonical_args
 from orbit.actions.models import WriteAction
 from orbit.actions.provenance import classify_emails
 from orbit.assistant.envelope import boundary_for
-from orbit.assistant.tools import CALENDAR_TOOLS, ReadOnlyTools, ToolInputError, ToolOutcome
+from orbit.assistant.tools import (
+    CALENDAR_TOOLS,
+    SUBMIT_ANSWER,
+    ReadOnlyTools,
+    ToolInputError,
+    ToolOutcome,
+)
 from orbit.assistant.workset import WorkSet
 from orbit.connectors.contracts import CalendarConnector, MailConnector
 from orbit.connectors.errors import CONNECTOR_NOTICE_KINDS
@@ -47,6 +53,7 @@ from orbit.records.runs import (
     list_messages,
     transition_run,
 )
+from orbit.runflow.answer import answer_tool_spec, with_answer_prompt
 from orbit.runflow.context import (
     CONVERSATION_CONTEXT,
     ConversationContext,
@@ -55,6 +62,7 @@ from orbit.runflow.context import (
 )
 from orbit.runflow.deps import NoConnection, RunDeps
 from orbit.runflow.docs_tool import DOC_TOOLS, DocTools
+from orbit.runflow.eval_variants import with_facts_prompt
 from orbit.runflow.index_tool import SEARCH_INDEXED_MAIL, IndexedMailSearch
 from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
 from orbit.runflow.prompt import build_system_prompt
@@ -270,7 +278,8 @@ class RunNodes:
                 return
             # `response.provider_items`(추론 항목 등)는 그래프 상태·DB에 저장하지 않는다(결정:
             # 프롬프트 파생 내용을 저장소에 늘리지 않는다). 그래서 워커 경로는 이 항목을 버리고,
-            # 다음 단계 요청에도 되돌려 보내지 않는다(docs/pilot/README.md 한계).
+            # 다음 단계 요청에도 되돌려 보내지 않는다(docs/pilot/README.md 한계). 예외: 평가 전용
+            # `reasoning-rt`(ADR-0023 §10)는 `RunDeps.reasoning_cache`(메모리)에만 둔다.
             content: dict[str, Any] = {
                 "step": step,
                 "tool_call_id": llm_call_id,
@@ -312,10 +321,18 @@ class RunNodes:
         if assistant is None:
             boundary = boundary_for(f"run:{run_id}")
             system = build_system_prompt(d.clock.now(), d.tz, boundary)
+            tools = run_tool_specs()
+            if d.facts_extension:  # 평가 전용 [사실 확인] 단락(ADR-0023 §10). 답 제출 안내보다 앞
+                system = with_facts_prompt(system)
+            if d.answer_sink is not None:  # 평가 전용 답 제출 확장(ADR-0023 §6)
+                system = with_answer_prompt(system)
+                tools = (*tools, answer_tool_spec())
+            # 평가 전용 `reasoning-rt`: 같은 run의 앞선 step 추론 항목을 메모리에서 되돌린다
+            returned = d.reasoning_cache.for_run(str(run_id)) if d.reasoning_cache else None
             request = LLMRequest(
-                messages=tuple(transcript.llm_messages(system, boundary)),
+                messages=tuple(transcript.llm_messages(system, boundary, returned)),
                 purpose="system_under_test",
-                tools=run_tool_specs(),
+                tools=tools,
                 tool_choice="auto",
                 temperature=TEMPERATURE,
             )
@@ -323,6 +340,8 @@ class RunNodes:
                 response = await d.llm.complete(request)
             except LLMError as exc:
                 return await self._fail(ws, run_id, type(exc).__name__)
+            if d.reasoning_cache is not None:  # 평가 전용: 메모리에만 둔다(저장소에는 넣지 않는다)
+                d.reasoning_cache.put(str(run_id), step, response.provider_items)
             assistant = await self._store_assistant(ws, run_id, step, response)
             transcript = await self._transcript(ws, run_id, prior)
 
@@ -413,7 +432,8 @@ class RunNodes:
                 continue
             if llm_id in done:
                 continue
-            if name not in READ_TOOLS and name not in LOCAL_TOOLS:
+            submit = name == SUBMIT_ANSWER and self._d.answer_sink is not None
+            if name not in READ_TOOLS and name not in LOCAL_TOOLS and not submit:
                 await self._store_tool_result(
                     ws, run_id, step, llm_id, name, {"error": "unknown_tool"}, is_error=True
                 )
@@ -434,6 +454,10 @@ class RunNodes:
                 outcome = await self._run_doc_tool(ws, name, call.get("arguments"), tools.workset)
             else:
                 outcome = await tools.execute(name, call.get("arguments"))  # type: ignore[arg-type]
+                if submit and outcome.structured is not None and self._d.answer_sink is not None:
+                    # 제공자 ID가 든 구조화된 답은 메모리로만 넘긴다. 모델과 저장소에는
+                    # `{"status": "submitted"}`만 간다(ADR-0023 §6, ADR-0006).
+                    self._d.answer_sink(outcome.structured)
             if outcome.connector_error is not None:
                 # 결과 저장보다 먼저 남긴다. 저장 직후 중단돼도 재실행이 알림을 다시 만들지 않으면서
                 # 빠뜨리지도 않는다.

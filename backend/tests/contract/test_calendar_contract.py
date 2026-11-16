@@ -1,11 +1,13 @@
 """CalendarConnector 계약 테스트 (ADR-0008 3절). 계약 메서드만 쓰고 Sim 내부 상태는 보지 않는다."""
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from orbit.connectors.contracts import (
     AlreadyExists,
+    CalendarConnector,
     CalendarEvent,
     EventDraft,
     EventPatch,
@@ -276,48 +278,88 @@ async def test_other_account_calendar_is_not_found(
 # ---- 계약 해석 규칙 (종일 일정, 병합 검증, 기간 인자)
 
 
-def _all_day(day: int, days: int = 1) -> EventDraft:
+async def _zone(conn: CalendarConnector, calendar_id: str) -> ZoneInfo:
+    """캘린더의 시간대. 종일 일정의 날짜 경계는 이 시간대의 00:00이다(ADR-0027)."""
+    cal = next(c for c in await conn.list_calendars() if c.id == calendar_id)
+    return ZoneInfo(cal.time_zone)
+
+
+def _midnight(day: date, zone: ZoneInfo) -> datetime:
+    return datetime(day.year, day.month, day.day, tzinfo=zone)
+
+
+def _all_day(zone: ZoneInfo, day: date, days: int = 1) -> EventDraft:
     return EventDraft(
         title="종일 일정",
-        start=datetime(2026, 11, day, tzinfo=UTC),
-        end=datetime(2026, 11, day, tzinfo=UTC) + timedelta(days=days),
+        start=_midnight(day, zone),
+        end=_midnight(day + timedelta(days=days), zone),
         all_day=True,
     )
+
+
+def _set_zone(world: SimWorld, calendar_id: str, name: str) -> None:
+    """시드 캘린더의 시간대를 바꾼다(Sim 월드와 모의 서버가 같은 시드를 쓴다)."""
+    cals = world.account(ALICE).calendars
+    cals[calendar_id] = cals[calendar_id].model_copy(update={"time_zone": name})
 
 
 async def test_create_all_day_event_uses_exclusive_end(
     calendar_factory: CalendarFactory, minimal_world: SimWorld
 ) -> None:
     conn = calendar_factory(minimal_world, ALICE)
-    created = await conn.create_event(MAIN, NEW_ID, _all_day(21))
+    zone = await _zone(conn, MAIN)
+    created = await conn.create_event(MAIN, NEW_ID, _all_day(zone, date(2026, 11, 21)))
     assert created.all_day
-    assert created.end - created.start == timedelta(days=1)
+    assert created.start == _midnight(date(2026, 11, 21), zone)  # 캘린더 시간대 00:00인 순간
+    assert created.end == _midnight(date(2026, 11, 22), zone)  # end는 배타적
+    assert await conn.get_event(MAIN, NEW_ID) == created
+
+
+async def test_all_day_event_is_returned_with_calendar_zone_offset(
+    calendar_factory: CalendarFactory, minimal_world: SimWorld
+) -> None:
+    """돌려주는 종일 일정의 오프셋은 캘린더 시간대 오프셋이다(그래서 `.date()`가 현지 날짜)."""
+    conn = calendar_factory(minimal_world, ALICE)
+    zone = await _zone(conn, MAIN)
+    utc_form = EventDraft(  # UTC 표기로 넣어도 돌려줄 때는 현지 오프셋이다
+        title="종일",
+        start=_midnight(date(2026, 11, 21), zone).astimezone(UTC),
+        end=_midnight(date(2026, 11, 22), zone).astimezone(UTC),
+        all_day=True,
+    )
+    created = await conn.create_event(MAIN, NEW_ID, utc_form)
+    listed = await conn.list_events(MAIN, WIDE_MIN, WIDE_MAX)
+    got = await conn.get_event(MAIN, NEW_ID)
+    for ev in (created, got, next(e for e in listed if e.id == NEW_ID)):
+        expected = _midnight(date(2026, 11, 21), zone).utcoffset()
+        assert ev.start.utcoffset() == expected and ev.end.utcoffset() == expected
+        assert (ev.start.date(), ev.end.date()) == (date(2026, 11, 21), date(2026, 11, 22))
 
 
 async def test_create_all_day_event_rejects_non_midnight_or_empty(
     calendar_factory: CalendarFactory, minimal_world: SimWorld
 ) -> None:
     conn = calendar_factory(minimal_world, ALICE)
-    with pytest.raises(ValueError):
-        await conn.create_event(
-            MAIN,
-            NEW_ID,
-            EventDraft(
-                title="x",
-                start=datetime(2026, 11, 21, 1, tzinfo=UTC),
-                end=datetime(2026, 11, 22, tzinfo=UTC),
-                all_day=True,
-            ),
-        )
+    zone = await _zone(conn, MAIN)
+    day = date(2026, 11, 21)
+    next_midnight = _midnight(day + timedelta(days=1), zone)
+    bad_starts = [datetime(2026, 11, 21, 1, tzinfo=zone)]
+    utc_midnight = datetime(2026, 11, 21, tzinfo=UTC)
+    if utc_midnight.astimezone(zone).time() != time(0, 0):  # UTC가 아닌 캘린더(옛 해석)
+        bad_starts.append(utc_midnight)
+    for bad in bad_starts:
+        with pytest.raises(ValueError):
+            await conn.create_event(
+                MAIN,
+                NEW_ID,
+                EventDraft(title="x", start=bad, end=next_midnight, all_day=True),
+            )
     with pytest.raises(ValueError):  # 배타적 end이므로 start == end는 빈 일정이다
         await conn.create_event(
             MAIN,
             NEW_ID,
             EventDraft(
-                title="x",
-                start=datetime(2026, 11, 21, tzinfo=UTC),
-                end=datetime(2026, 11, 21, tzinfo=UTC),
-                all_day=True,
+                title="x", start=_midnight(day, zone), end=_midnight(day, zone), all_day=True
             ),
         )
     with pytest.raises(NotFound):  # 실패한 생성은 아무것도 남기지 않는다
@@ -328,10 +370,75 @@ async def test_update_to_all_day_requires_midnight(
     calendar_factory: CalendarFactory, minimal_world: SimWorld
 ) -> None:
     conn = calendar_factory(minimal_world, ALICE)
-    before = await conn.get_event(MAIN, EV1)  # 01:00~02:00 UTC
+    before = await conn.get_event(MAIN, EV1)  # 01:00~02:00 UTC = 현지 한낮
     with pytest.raises(ValueError):
         await conn.update_event(MAIN, EV1, EventPatch(all_day=True), if_match=before.version)
     assert await conn.get_event(MAIN, EV1) == before
+
+
+async def test_update_to_all_day_with_local_midnight(
+    calendar_factory: CalendarFactory, minimal_world: SimWorld
+) -> None:
+    conn = calendar_factory(minimal_world, ALICE)
+    zone = await _zone(conn, MAIN)
+    before = await conn.get_event(MAIN, EV1)
+    patch = EventPatch(
+        start=_midnight(date(2026, 11, 12), zone),
+        end=_midnight(date(2026, 11, 13), zone),
+        all_day=True,
+    )
+    updated = await conn.update_event(MAIN, EV1, patch, if_match=before.version)
+    assert updated.all_day
+    assert (updated.start, updated.end) == (patch.start, patch.end)
+
+
+async def test_local_day_query_excludes_previous_day_all_day_event(
+    calendar_factory: CalendarFactory, minimal_world: SimWorld
+) -> None:
+    """현지 하루 범위 조회에 전날·다음 날 종일 일정이 섞이지 않는다(ADR-0027 3번)."""
+    conn = calendar_factory(minimal_world, ALICE)
+    zone = await _zone(conn, MAIN)
+    days = [date(2026, 11, 20), date(2026, 11, 21), date(2026, 11, 22)]
+    ids = {d: f"evnaa0000{i}" for i, d in enumerate(days, start=1)}
+    for d, event_id in ids.items():
+        await conn.create_event(MAIN, event_id, _all_day(zone, d))
+    for d in days:
+        found = await conn.list_events(
+            MAIN, _midnight(d, zone), _midnight(d + timedelta(days=1), zone)
+        )
+        assert [e.id for e in found] == [ids[d]]
+
+
+async def test_all_day_event_on_dst_transition_days(
+    calendar_factory: CalendarFactory, minimal_world: SimWorld
+) -> None:
+    """일광 절약 시간 전환일도 그날 현지 00:00~다음 날 현지 00:00이다."""
+    _set_zone(minimal_world, TEAM, "America/Los_Angeles")
+    conn = calendar_factory(minimal_world, ALICE)
+    zone = await _zone(conn, TEAM)
+    if zone.key != "America/Los_Angeles":
+        pytest.skip("시드 캘린더 시간대를 바꿀 수 없는 구현체")
+    # 2026-11-01은 25시간(PDT -> PST), 2027-03-14는 23시간(PST -> PDT)
+    for index, (day, hours) in enumerate(((date(2026, 11, 1), 25), (date(2027, 3, 14), 23))):
+        event_id = f"evnbb0000{index}"
+        created = await conn.create_event(TEAM, event_id, _all_day(zone, day))
+        assert created.end.astimezone(UTC) - created.start.astimezone(UTC) == timedelta(hours=hours)
+        assert created.start.astimezone(zone).time() == time(0, 0)
+        assert created.end.astimezone(zone).time() == time(0, 0)
+        nxt = day + timedelta(days=1)
+        found = await conn.list_events(
+            TEAM, _midnight(nxt, zone), _midnight(nxt, zone) + timedelta(days=1)
+        )
+        assert event_id not in [e.id for e in found]
+        found = await conn.list_events(TEAM, _midnight(day, zone), _midnight(nxt, zone))
+        assert event_id in [e.id for e in found]
+    with pytest.raises(ValueError):  # 하루를 24시간 더한 값은 전환일에 현지 00:00이 아니다
+        start = _midnight(date(2026, 11, 1), zone).astimezone(UTC)  # UTC로 24시간을 더한다
+        await conn.create_event(
+            TEAM,
+            "evnbb00009",
+            EventDraft(title="x", start=start, end=start + timedelta(hours=24), all_day=True),
+        )
 
 
 async def test_update_rejects_invalid_merged_range_and_keeps_version(

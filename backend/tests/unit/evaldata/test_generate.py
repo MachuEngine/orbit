@@ -105,6 +105,9 @@ def test_task_contract_fields() -> None:
         "gold",
         "difficulty",
         "tags",
+        "approval_policy",  # 선택 필드(ADR-0023 §3). v0 데이터에는 없고 파일에도 쓰지 않는다
+        "time_zone",  # 선택 필드(ADR-0026 §4). 없으면 Asia/Seoul, 파일에도 쓰지 않는다
+        "fault_plan",  # 선택 필드(ADR-0026 §7). 없으면 파일에도 쓰지 않는다
     ]
     assert list(Gold.model_fields) == [
         "answer_facts",
@@ -113,6 +116,7 @@ def test_task_contract_fields() -> None:
         "expected_changes",
         "required_tool_calls",
         "forbidden_tools",
+        "answer_facts_required",  # False면 파일에 쓰지 않는다
     ]
 
 

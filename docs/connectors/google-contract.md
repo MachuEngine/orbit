@@ -67,7 +67,7 @@
 - 존재하지 않는 일정을 `If-Match`와 함께 PATCH하면 404인지(412가 먼저 나올 수 있다).
 - 다른 계정의 캘린더 접근이 404인지 403인지.
 - `sendUpdates=none`이 참석자 있는 일정 생성·수정에서 초대 메일을 막는지.
-- 종일 일정의 `date`와 UTC 00:00 변환, 반환 `start.dateTime`의 시간대 표기.
+- 종일 일정의 `date`와 캘린더 시간대 00:00 변환(ADR-0027), 응답 최상위 `timeZone` 유무, 반환 `start.dateTime`의 시간대 표기.
 - `events.list`가 `timeMin`/`timeMax`를 겹침 기준으로 처리하는지, 길이 0인 일정의 포함 여부.
 - 오류 본문의 `reason` 값(`rateLimitExceeded`, `userRateLimitExceeded`, `insufficientPermissions`)이
   어댑터의 매핑표와 같은지. 한도 초과를 일부러 만들기 어려우면 문서 기준으로만 둔다고 기록한다.

@@ -1,0 +1,395 @@
+# 테스트용 작은 세계 모델(합성). 실제 인물·회사·주소가 아니다. 구조는 eval/worlds/orbit-v1.toml과 같다.
+[meta]
+world_name = "orbit-world-test"
+world_version = "t1"
+
+[window]
+snapshot = 2026-11-10T10:00:00+09:00
+mail_weeks = 8
+event_weeks_before = 8
+event_weeks_after = 4
+asof_start = 2026-11-10
+asof_end = 2026-11-16
+
+[generation]
+families = ["openai", "anthropic", "google"]
+
+[targets]
+mails_per_e2e_user = 140
+mails_tolerance = 10
+docs_per_e2e_user = [10, 24]
+search_docs = 6
+search_sizes = [20, 60, 150]
+background_events_per_user = 12
+background_all_day_per_user = 1
+length_mix = { short = 0.40, medium = 0.40, long = 0.20 }
+
+[targets.scenarios]
+day_agenda = 2
+free_slot = 2
+reschedule = 2
+cancellation = 2
+project_week = 2
+person_next = 2
+cross_midnight = 2
+tz_event = 4
+all_day = 2
+mail_fact = 10
+reply_needed = 2
+meeting_request = 2
+event_change_target = 2
+doc_fact = 6
+doc_version = 2
+deadline = 4
+mismatch = 2
+absent = 8
+ambiguous = 6
+search_topic = 6
+
+[targets.variants]
+"absent.person_no_meeting" = 2
+"absent.no_document" = 2
+"absent.no_amount" = 2
+"absent.project_no_meeting" = 2
+"ambiguous.person_meetings" = 2
+"ambiguous.same_project_notes" = 2
+"ambiguous.homonym_person" = 2
+
+[[users]]
+key = "u1"
+account_id = "acct-u1"
+name = "한가람"
+email = "garam.han@bombit-soft.example.com"
+role = "프로덕트 매니저"
+company = "봄빛소프트"
+time_zone = "Asia/Seoul"
+purpose = "e2e"
+calendars = [{ id = "cal-u1-1", name = "업무", primary = true }, { id = "cal-u1-2", name = "개인", primary = false }]
+
+[[users]]
+key = "u2"
+account_id = "acct-u2"
+name = "오세린"
+email = "serin.oh@solbit.example.net"
+role = "해외 지사 담당"
+company = "솔빛글로벌"
+time_zone = "America/Los_Angeles"
+purpose = "e2e"
+calendars = [{ id = "cal-u2-1", name = "업무", primary = true }, { id = "cal-u2-2", name = "개인", primary = false }]
+
+[[users]]
+key = "s20"
+account_id = "acct-s20"
+name = "정다온"
+email = "daon.jung.s20@example.org"
+role = "운영 매니저"
+company = "마루시스템"
+time_zone = "Asia/Seoul"
+purpose = "search"
+calendars = [{ id = "cal-s20-1", name = "업무", primary = true }]
+
+[[users]]
+key = "s60"
+account_id = "acct-s60"
+name = "정다온"
+email = "daon.jung.s60@example.org"
+role = "운영 매니저"
+company = "마루시스템"
+time_zone = "Asia/Seoul"
+purpose = "search"
+calendars = [{ id = "cal-s60-1", name = "업무", primary = true }]
+
+[[users]]
+key = "s150"
+account_id = "acct-s150"
+name = "정다온"
+email = "daon.jung.s150@example.org"
+role = "운영 매니저"
+company = "마루시스템"
+time_zone = "Asia/Seoul"
+purpose = "search"
+calendars = [{ id = "cal-s150-1", name = "업무", primary = true }]
+
+# 인물
+[[people]]
+key = "h_a1"
+name = "김지민"
+email = "jimin.kim@hanbitlab.example.org"
+company = "한빛랩"
+role = "기획자"
+relation = "customer"
+works_with = ["u1", "u2"]
+
+[[people]]
+key = "h_a2"
+name = "김지민"
+email = "jimin.kim@nuri.example.com"
+company = "누리컴퍼니"
+role = "개발자"
+relation = "vendor"
+works_with = ["u1", "u2"]
+
+[[people]]
+key = "h_b1"
+name = "박서준"
+email = "seojun.park@bluepine.example.com"
+company = "블루파인"
+role = "영업 담당"
+relation = "customer"
+works_with = ["u1", "u2"]
+
+[[people]]
+key = "h_b2"
+name = "박서준"
+email = "seojun.park@datafield.test"
+company = "데이터필드"
+role = "SRE"
+relation = "vendor"
+works_with = ["u1", "u2"]
+
+[[people]]
+key = "c_u1_1"
+name = "이하늘"
+email = "haneul.lee@bombit-soft.example.com"
+company = "봄빛소프트"
+role = "개발자"
+relation = "colleague"
+works_with = ["u1"]
+
+[[people]]
+key = "c_u1_2"
+name = "최은우"
+email = "eunwoo.choi@bombit-soft.example.com"
+company = "봄빛소프트"
+role = "디자이너"
+relation = "colleague"
+works_with = ["u1"]
+
+[[people]]
+key = "c_u1_3"
+name = "정이안"
+email = "ian.jung@bombit-soft.example.com"
+company = "봄빛소프트"
+role = "기획자"
+relation = "colleague"
+works_with = ["u1"]
+
+[[people]]
+key = "c_u2_1"
+name = "윤소율"
+email = "soyul.yoon@solbit.example.net"
+company = "솔빛글로벌"
+role = "마케터"
+relation = "colleague"
+works_with = ["u2"]
+
+[[people]]
+key = "c_u2_2"
+name = "장도하"
+email = "doha.jang@solbit.example.net"
+company = "솔빛글로벌"
+role = "개발자"
+relation = "colleague"
+works_with = ["u2"]
+
+[[people]]
+key = "c_u2_3"
+name = "임나리"
+email = "nari.im@solbit.example.net"
+company = "솔빛글로벌"
+role = "운영 담당"
+relation = "colleague"
+works_with = ["u2"]
+
+[[people]]
+key = "x1"
+name = "강민규"
+email = "mingyu.kang@cloudnest.example.com"
+company = "클라우드네스트"
+role = "프로젝트 매니저"
+relation = "customer"
+works_with = ["u1", "u2", "s20", "s60", "s150"]
+
+[[people]]
+key = "x2"
+name = "조다인"
+email = "dain.jo@moasoft.example.net"
+company = "모아소프트"
+role = "프로젝트 매니저"
+relation = "vendor"
+works_with = ["u1", "u2", "s20", "s60", "s150"]
+
+[[people]]
+key = "x3"
+name = "신해인"
+email = "haein.shin@saebom.example.org"
+company = "새봄디자인"
+role = "프로젝트 매니저"
+relation = "customer"
+works_with = ["u1", "u2", "s20", "s60", "s150"]
+
+[[people]]
+key = "x4"
+name = "권시온"
+email = "sion.kwon@daon.example.com"
+company = "다온파트너스"
+role = "프로젝트 매니저"
+relation = "vendor"
+works_with = ["u1", "u2", "s20", "s60", "s150"]
+
+[[people]]
+key = "x5"
+name = "황라온"
+email = "raon.hwang@byeolbit.example.org"
+company = "별빛미디어"
+role = "프로젝트 매니저"
+relation = "customer"
+works_with = ["u1", "u2"]
+
+[[people]]
+key = "x6"
+name = "안지유"
+email = "jiyu.ahn@sodam.example.net"
+company = "소담재무"
+role = "프로젝트 매니저"
+relation = "vendor"
+works_with = ["u1", "u2"]
+
+[[people]]
+key = "x7"
+name = "송하율"
+email = "hayul.song@ribbon.example.com"
+company = "리본물류"
+role = "프로젝트 매니저"
+relation = "customer"
+works_with = ["u1", "u2"]
+
+[[people]]
+key = "x8"
+name = "류건우"
+email = "geonwoo.ryu@aramu.example.net"
+company = "아라무역"
+role = "프로젝트 매니저"
+relation = "vendor"
+works_with = ["u1", "u2"]
+
+[[people]]
+key = "cs0"
+name = "백서윤"
+email = "seoyun.baek@maru-sys.example.org"
+company = "마루시스템"
+role = "개발자"
+relation = "colleague"
+works_with = ["s20", "s60", "s150"]
+
+[[people]]
+key = "cs1"
+name = "허주원"
+email = "juwon.heo@maru-sys.example.org"
+company = "마루시스템"
+role = "개발자"
+relation = "colleague"
+works_with = ["s20", "s60", "s150"]
+
+[[noise_senders]]
+name = "주간 레터"
+email = "weekly@techdigest.example.com"
+kind = "newsletter"
+
+[[noise_senders]]
+name = "공지 봇"
+email = "notice@notice.example.com"
+kind = "notice"
+
+[[noise_senders]]
+name = "알림 봇"
+email = "no-reply@alerts.example.net"
+kind = "notice"
+
+[[noise_senders]]
+name = "특가 알림"
+email = "deal@promo-mall.example.net"
+kind = "spam"
+
+[[projects]]
+key = "p1"
+name = "하늘길"
+user = "u1"
+members = ["c_u1_1", "x1", "x2", "h_a1"]
+topics = ["일정 조율", "예산 검토", "릴리스 준비"]
+
+[[projects]]
+key = "p2"
+name = "은하수"
+user = "u1"
+members = ["c_u1_2", "x2", "x3", "h_b1"]
+topics = ["일정 조율", "예산 검토", "릴리스 준비"]
+
+[[projects]]
+key = "p3"
+name = "새싹"
+user = "u1"
+members = ["c_u1_3", "x1", "x4", "h_a2"]
+topics = ["일정 조율", "예산 검토", "릴리스 준비"]
+
+[[projects]]
+key = "p4"
+name = "푸른들"
+user = "u2"
+members = ["c_u2_1", "x5", "x6", "h_a1"]
+topics = ["일정 조율", "예산 검토", "릴리스 준비"]
+
+[[projects]]
+key = "p5"
+name = "오로라"
+user = "u2"
+members = ["c_u2_2", "x6", "x7", "h_b2"]
+topics = ["일정 조율", "예산 검토", "릴리스 준비"]
+
+[[projects]]
+key = "p6"
+name = "단풍"
+user = "u2"
+members = ["c_u2_3", "x7", "x8", "h_a2"]
+topics = ["일정 조율", "예산 검토", "릴리스 준비"]
+
+[[projects]]
+key = "p7"
+name = "물결"
+user = "s150"
+members = ["cs0", "x1", "x2"]
+topics = ["일정 조율", "예산 검토", "릴리스 준비"]
+
+[[projects]]
+key = "p8"
+name = "별무리"
+user = "s150"
+members = ["cs1", "x3", "x4"]
+topics = ["일정 조율", "예산 검토", "릴리스 준비"]
+
+[[projects]]
+key = "p9"
+name = "이정표"
+user = "s150"
+members = ["cs0", "x2", "x4"]
+topics = ["일정 조율", "예산 검토", "릴리스 준비"]
+
+[[recurring]]
+user = "u1"
+title = "주간 팀 싱크"
+weekday = 0
+start = "10:00"
+duration_min = 60
+every_weeks = 1
+attendee_count = 1
+location = "회의실 A"
+
+[[recurring]]
+user = "u2"
+title = "주간 팀 싱크"
+weekday = 1
+start = "10:00"
+duration_min = 60
+every_weeks = 1
+attendee_count = 1
+location = "회의실 A"

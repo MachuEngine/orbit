@@ -105,7 +105,6 @@ def test_event_set_format_errors(structured: Any) -> None:
         {"kind": "event_time", "event": E1, "start": 1_700_000_000},
         {"kind": "event_time", "event": "e1", "start": "2026-11-12T01:00:00+00:00"},
         {"kind": "event_time", "event": E1, "start": "2026-11-12T01:00:00+00:00", "x": 1},
-        {"kind": "time_slot", "start": "2026-11-12T01:00:00+00:00"},  # kind 불일치
     ],
 )
 def test_event_time_format_errors(structured: Any) -> None:
