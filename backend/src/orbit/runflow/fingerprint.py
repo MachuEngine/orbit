@@ -21,6 +21,7 @@ from orbit.runflow.eval_variants import (
     REASONING_ROUNDTRIP_VERSION,
 )
 from orbit.runflow.nodes import TEMPERATURE
+from orbit.runflow.patterns import fingerprint_payload
 from orbit.runflow.prompt import PROMPT_VERSION
 from orbit.runflow.write_tools import run_tool_specs
 from orbit.voice.limits import VOICE_CONFIG
@@ -36,6 +37,7 @@ def config_fingerprint(
     answer_extension: bool = False,
     facts_extension: bool = False,
     reasoning_roundtrip: bool = False,
+    agent_pattern: str | None = None,
 ) -> str:
     """`model_id`는 고정 모델 ID(D9-3). 없거나 비어 있으면 "unset"으로 넣는다.
 
@@ -49,6 +51,8 @@ def config_fingerprint(
     `facts_extension`·`reasoning_roundtrip`(평가 전용, ADR-0023 §10)도 켰을 때만 버전과 문단을
     지문에 더한다. `reasoning_roundtrip`이면 `llm.reasoning_items_roundtrip`은 `llm_info`의 실제
     값(추론 강도 none이면 False)이다.
+    `agent_pattern`(평가 전용, ADR-0030)이 `plan_execute`·`fixed_workflow`면 패턴 이름·버전·
+    프롬프트·범주 표를 지문에 더한다. None이나 `react`면 더하지 않는다(현재 runflow와 지문이 같다).
     """
     payload: dict[str, Any] = {
         "pattern": PATTERN,
@@ -77,6 +81,8 @@ def config_fingerprint(
         }
     if reasoning_roundtrip:
         payload["reasoning_roundtrip"] = {"version": REASONING_ROUNDTRIP_VERSION}
+    if agent_pattern is not None and agent_pattern != "react":
+        payload["agent_pattern"] = fingerprint_payload(agent_pattern)
     if llm_info is not None:
         del payload["temperature"]
         # 워커 경로는 provider_items를 저장하지 않아 추론 항목을 되돌리지 않는다. 평가 전용

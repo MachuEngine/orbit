@@ -43,6 +43,7 @@ from orbit.llm.interface import LLM
 from orbit.mailindex.deps import MailIndexDeps
 from orbit.runflow.answer import AnswerSink
 from orbit.runflow.eval_variants import ReasoningCache
+from orbit.runflow.patterns import PATTERNS, REACT, PatternMemory
 
 DEFAULT_MAX_STEPS = 12  # 한 run의 LLM 호출 상한
 DEFAULT_LEASE_SECONDS = 300.0  # 커넥터 호출 타임아웃 x (1 + 재호출 1회)보다 길게(ADR-0012 §3)
@@ -251,3 +252,17 @@ class RunDeps:
     # 평가 전용 원인 확인 변형(ADR-0023 §10). 기본값에서는 프롬프트·요청이 변형이 없던 때와 같다.
     facts_extension: bool = False  # True면 시스템 프롬프트에 [사실 확인] 단락(`facts-v1`)을 더한다
     reasoning_cache: ReasoningCache | None = None  # 있으면 추론 항목을 메모리에만 두고 되돌린다
+    # 평가 전용 Agent 패턴(ADR-0030). None이면 react(현재 runflow). 켜면 계획·분류 문장을
+    # `pattern_memory`(메모리)에만 둔다. 패턴을 켜고 메모리를 안 주면 새로 만든다.
+    pattern: str | None = None
+    pattern_memory: PatternMemory | None = None
+
+    def __post_init__(self) -> None:
+        if self.pattern is None:
+            return
+        if self.pattern not in PATTERNS:
+            raise ValueError(f"지원하지 않는 패턴: {self.pattern!r} (지원: {PATTERNS})")
+        if self.pattern == REACT:
+            self.pattern = None  # react는 변형이 아니다
+        elif self.pattern_memory is None:
+            self.pattern_memory = PatternMemory()
