@@ -40,6 +40,8 @@ uv run --frozen --directory backend python -m orbit.evaldata.v1.tasks \
 
 ## v1 구조 생성기
 
+검색용 질의·관련도 데이터 생성은 아래 "v1 검색 세트"를 참고한다.
+
 ```bash
 cd backend
 uv run python -m orbit.evaldata.v1.build --world ../eval/worlds/orbit-v1.toml \
@@ -76,3 +78,26 @@ uv run python -m orbit.evaldata.v1.realize --skeleton /tmp/orbit-world-v1 --out 
 - 종료 코드: 0 정상, 2 입력·설정 오류, 3 비용 상한 도달(이어서 실행 가능), 4 영구 오류로 중단, 5 조립 불가(`--allow-template-missing`으로 빠진 본문을 템플릿으로 채울 수 있다).
 - `--recheck` 실행 후에는 매니페스트 `prompt_version`이 새 버전으로 바뀌어 일반 이어쓰기의 버전 혼재 거부가 해제된다. recheck 전에 반드시 `--dry-run`으로 실패 건수를 확인한다.
 - 생성기를 고쳐 skeleton이 바뀌었지만 `bodies` 구역(본문 명세)이 같으면, 이미 만든 `bodies.jsonl`로 `world.json`만 다시 조립할 수 있다(LLM 호출 없음). 새 skeleton을 `--skeleton`에 주고 기존 `bodies.jsonl`·`realize-manifest.json`이 있는 디렉터리를 `--out`으로 준 뒤 `--assemble --allow-skeleton-change`를 붙인다. 매니페스트에 `bodies_sha256`이 없으면 `--previous-skeleton <이전 skeleton.json>`도 준다. 본문 명세가 하나라도 다르면 다른 body_id 수를 출력하고 거부한다. 매니페스트에 이전·새 skeleton sha와 bodies 해시가 남는다.
+
+## v1 검색 세트
+
+저장소 루트에서 실행한다. 실제 LLM·임베딩·검색 API는 호출하지 않는다.
+
+```bash
+uv run --frozen --directory backend python -m orbit.evaldata.v1.search_set \
+  --dataset-dir eval/datasets/orbit-eval/v1 --seed 20261116
+# 검토용 임시 출력
+uv run --frozen --directory backend python -m orbit.evaldata.v1.search_set \
+  --dataset-dir eval/datasets/orbit-eval/v1 --seed 20261116 --out /tmp/orbit-search-v1
+```
+
+- 출력은 `search.jsonl`, `search-manifest.json`이다. 기존 `world.json`·`skeleton.json`·`tasks.jsonl`은 읽기만 한다.
+- `query_id` 하나가 메일함 세 크기에 공통으로 쓰인다. 각 행의 `mailboxes`는 크기 문자열 `200`·`1000`·`5000`별 `account_id`와 `relevance`(해당 계정의 메시지/파일 ID → 등급)를 가진다.
+- 질의는 키워드·질문·사람/시점 형태를 섞는다. 정답 금액·날짜의 표기를 질의에 넣지 않으며, 주제 문구가 다른 주제와 겹치면 버린 사유를 기록한다.
+- 필터·중복 제거 후 질의가 2개 미만 남는 주제는 남은 질의도 버리고 `insufficient_forms`로 기록한다. 실제 입력은 모든 주제에서 세 형태가 유지된다.
+- 관련도 2는 정답 근거, 1은 이전 값 등 부분 관련, 0은 명시된 오답 후보다. 작은 메일함에 없는 등급 0 후보는 그 메일함의 맵에서 생략한다. 등급 1·2는 세 크기에 모두 있어야 한다.
+- 부분집합과 근거 공유는 계정별로 다른 ID 대신 `body_id`로 검사한다. 공유 body를 가진 주제와 같은 주제의 질의는 한 묶음으로 합쳐 dev/test로 나눈다.
+- test 목표는 d2와 같은 전체 질의의 7/12이며, 오차는 `max(3개, 전체의 5%)` 이내여야 한다. 묶음을 보존하면서 이 조건과 두 분할의 비어 있지 않음을 만족하지 못하면 생성에 실패한다.
+- `load_search_set(search_jsonl, manifest_path)`로 저장 파일의 형식·중복·공유 근거 연결 요소와 분할, 매니페스트 수량을 확인할 수 있다. 원본 세계의 ID·본문 검사는 생성 단계에서 수행한다.
+- 검색 지표 함수는 `orbit.evalrunner.retrieval_metrics`의 `recall_at_k`(등급 2 또는 1 이상), `mrr`(첫 등급 2), `ndcg_at_k`(기본 10, 선형 gain)다. 결과 ID의 중복은 첫 등장만 남긴 뒤 순위를 계산하며, 관련 항목이 없으면 0을 반환한다.
+- 실제 검색 실행기와 색인 저장·재사용은 이번 단계에 없다. 사람 검수·test 봉인 후 RAG 비교 실험 전에 별도로 정한다. 변형 질의는 독립 표본이 아니므로 정밀도·bootstrap은 묶음 단위를 기준으로 해석해야 한다.
