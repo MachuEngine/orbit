@@ -490,3 +490,33 @@ def test_cli_stats_adds_sections_and_judge_input_export(
     lines = out.read_text(encoding="utf-8").splitlines()
     assert [json.loads(x)["task_id"] for x in lines] == ["a"]
     assert cli_main(["judge-input", str(results), "--out", str(out)]) == 2  # 덮어쓰지 않는다
+
+
+def test_as_of_gives_local_date_only_not_time() -> None:
+    r = row(text="오전 9시 11월 16일", tools_=[])
+    r["task_meta"]["as_of"] = "2026-11-15T23:30:00+00:00"  # 서울 현지로는 11월 16일 08:30
+    r["time_zone"] = "Asia/Seoul"
+    srcs = m.episode_sources(r)
+    assert "2026-11-16" in srcs and not any("08:30" in s or "23:30" in s for s in srcs)
+    out = m.fact_support([r])
+    assert out["by_kind"]["date"]["grounded"] == 1
+    assert out["by_kind"]["time"] == {"facts": 1, "grounded": 0, "rate": 0.0}
+
+
+def test_selection_note_warns_about_lookups_in_write_tasks() -> None:
+    r = row(meta={"type": "write", "refs": {"message": ["m"]}}, tools_=[tool("list_events")])
+    assert "잘못된 영역" in m.tools([r])["selection"]["note"]
+
+
+def test_cli_warns_when_result_schemas_are_mixed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    results = tmp_path / "mixed.jsonl"
+    write_results(results, [row("a"), row("b", old=True)])
+    assert cli_main(["stats", str(results), "--resamples", "50", "--include-incomplete"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert any("result_schema" in w for w in report["warnings"])
+    only_new = tmp_path / "new.jsonl"
+    write_results(only_new, [row("a")])
+    cli_main(["stats", str(only_new), "--resamples", "50", "--include-incomplete"])
+    assert "warnings" not in json.loads(capsys.readouterr().out)

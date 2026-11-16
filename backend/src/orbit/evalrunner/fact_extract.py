@@ -48,7 +48,9 @@ _ISO_DATETIME = re.compile(
 )
 _DATE_YMD_SEP = re.compile(r"(?<!\d)(\d{4})\s*[./]\s*(\d{1,2})\s*[./]\s*(\d{1,2})(?!\d)")
 _DATE_KOREAN = re.compile(r"(?:(\d{4})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일")
-_DATE_SLASH = re.compile(r"(?<![\d/])(\d{1,2})\s*/\s*(\d{1,2})(?![\d/])")
+_DATE_SLASH = re.compile(
+    r"(?<![\d/.])(\d{1,2})\s*/\s*(\d{1,2})(?![\d/.%])(?!\s*(?:분기|분의|배|이상|이하|정도|쯤))"
+)
 _TIME_COLON = re.compile(r"(?<![\d:])(\d{1,2}):(\d{2})(?::\d{2})?(?![\d:])")
 _TIME_KOREAN = re.compile(
     r"(?:(오전|오후|아침|새벽|저녁|밤|낮)\s*)?(\d{1,2})\s*시(?!간)"
@@ -56,10 +58,11 @@ _TIME_KOREAN = re.compile(
 )
 _TIME_WORD = re.compile(r"정오|자정")
 _AMOUNT = re.compile(
-    r"((?:\d[\d,]*(?:\.\d+)?\s*(?:억|천만|백만|만|천|백)\s*)*"
-    r"\d[\d,]*(?:\.\d+)?\s*(?:억|천만|백만|만|천|백)?)\s*원"
+    r"(?<![\d.,])((?:(?:\d[\d,]*(?:\.\d+)?)?\s*[억만천백]\s*)*(?:\d[\d,]*(?:\.\d+)?)?)\s*원"
+    r"(?=$|[^가-힣]|입니다|이다|이에요|이|은|는|을|를|에|의|으로|도|만|까지|부터|씩|짜리|정도|쯤)"
 )
-_AMOUNT_TOKEN = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(억|천만|백만|만|천|백)?")
+_AMOUNT_TOKEN = re.compile(r"(\d[\d,]*(?:\.\d+)?)?\s*([억만천백])")
+_AMOUNT_TAIL = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*$")
 _USD = re.compile(
     r"\$\s*(\d[\d,]*(?:\.\d+)?)|(?<![\d,.])(\d[\d,]*(?:\.\d+)?)\s*(?:달러|USD)", re.IGNORECASE
 )
@@ -73,8 +76,7 @@ _SURNAMES = (
 _TITLES = "님|씨|팀장|과장|차장|부장|대리|사원|매니저|이사|대표|리더|선임|책임|교수|박사"
 _NAME = re.compile(rf"(?<![가-힣])([{_SURNAMES}][가-힣]{{2}})\s?(?:{_TITLES})")
 
-_UNIT = {"억": Decimal(10**8), "천만": Decimal(10**7), "백만": Decimal(10**6)}
-_UNIT |= {"만": Decimal(10**4), "천": Decimal(1000), "백": Decimal(100)}
+_UNIT = {"억": Decimal(10**8), "만": Decimal(10**4), "천": Decimal(1000), "백": Decimal(100)}
 _AM = {"오전", "아침", "새벽"}
 _PM = {"오후", "저녁", "밤", "낮"}
 _FILL = " "
@@ -120,16 +122,31 @@ def _time_possibilities(
 
 
 def _amount_value(segment: str) -> Decimal | None:
-    total = Decimal(0)
-    found = False
-    for number, unit in _AMOUNT_TOKEN.findall(segment):
-        try:
-            value = Decimal(number.replace(",", ""))
-        except InvalidOperation:
-            return None
-        total += value * _UNIT.get(unit, Decimal(1))
-        found = True
-    return total if found else None
+    """`3천5백만`·`1억 2천만`·`300`처럼 단위가 섞인 한국어 금액을 정수로 계산한다.
+
+    천·백은 현재 묶음(만·억 앞)에 더하고, 만·억을 만나면 묶음을 곱해 합계에 넣는다."""
+    if not re.search(r"\d", segment):
+        return None
+    total = section = Decimal(0)
+    pos = 0
+    try:
+        for m in _AMOUNT_TOKEN.finditer(segment):
+            num = Decimal(m.group(1).replace(",", "")) if m.group(1) else None
+            unit = m.group(2)
+            if unit in ("천", "백"):
+                section += (num if num is not None else Decimal(1)) * _UNIT[unit]
+            else:
+                total += (section + (num if num is not None else Decimal(0))) * _UNIT[unit]
+                if num is None and section == 0:
+                    total += _UNIT[unit]  # 단독 `만`은 1만
+                section = Decimal(0)
+            pos = m.end()
+        tail = _AMOUNT_TAIL.search(segment[pos:])
+        if tail:
+            section += Decimal(tail.group(1).replace(",", ""))
+    except InvalidOperation:
+        return None
+    return total + section
 
 
 def _canonical_amount(value: Decimal) -> str:

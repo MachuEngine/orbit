@@ -33,7 +33,8 @@ class CallRecord(BaseModel):
     outcome: Literal["ok", "error"]
     error_type: str | None = None
     result_summary: Any = None
-    # 평가 기록용(ADR-0029). 주입한 장애 규칙("도구:오류")과 호출 시간(ms). 채점에는 쓰지 않는다.
+    # 평가 기록용(ADR-0029). 주입한 장애 규칙("도구:오류")과 호출 시간(ms).
+    # `latency_ms`는 벽시계라 실행마다 다른 비결정 값이다. 채점에는 쓰지 않는다.
     fault: str | None = None
     latency_ms: float | None = None
 

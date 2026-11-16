@@ -176,7 +176,7 @@ uv run python -m orbit.evalrunner run \
 - **결과 행 기록(`result_schema` 2)**: 두 평가 대상 모두 `trace`에 턴별 사용자 발화·답 문장·구조화된 답, 도구 호출마다
   이름·인자·결과 본문(모델에 보여 준 JSON, 호출당 8,000자 상한이고 잘리면 `result_truncated`)·`error_kind`, 마지막 유효
   `submit_answer`의 핸들 -> 아티팩트 ID 대응표(`answer_handles`)를 남긴다. `calls[]`에는 주입된 장애 규칙(`fault`,
-  없으면 null)과 커넥터 호출 시간(`latency_ms`)이, 행에는 `task_meta`(유형·시나리오·근거 태그 ID, 정답 아님),
+  없으면 null)과 커넥터 호출 시간(`latency_ms`, 벽시계 측정이라 실행마다 다른 비결정 필드이므로 같은 설정 재실행 비교에서 뺀다)이, 행에는 `task_meta`(유형·시나리오·근거 태그 ID, 정답 아님),
   `min_tool_calls`(정답 제출 오라클의 호출 수, 하한), `change_fields`(기대 변화별 필드 일치)가 더해진다.
   `result_schema`가 없는 옛 결과는 스키마 1이다. 결과 파일(`runs/`)은 git에서 제외한다.
 - **`stats` 섹션**: 기존 키 뒤에 `accuracy_extra`(쓰기 인자 필드별 일치율, 다중 턴 대화 단위 성공률), `grounding`(사실 근거율,
