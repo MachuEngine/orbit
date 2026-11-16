@@ -140,7 +140,7 @@ class RunflowV0SUT:
         self, *, model_id: str, llm_info: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """결과의 설정 지문에 더할 항목(runflow 지문, 답 제출 확장, 색인 모드)."""
-        return {
+        info: dict[str, Any] = {
             "runflow_fingerprint": config_fingerprint(
                 model_id,
                 llm_info,
@@ -149,13 +149,15 @@ class RunflowV0SUT:
                 reasoning_roundtrip=self._reasoning_rt,
                 agent_pattern=self._pattern,
             ),
-            "pattern": self._pattern,
-            "pattern_version": PATTERN_VERSIONS.get(self._pattern),
             "answer_extension": ANSWER_EXTENSION_VERSION,
             "variants": self.variant_names,
             "index_mode": self._index_mode,
             "max_approvals_per_run": MAX_APPROVALS_PER_RUN,
         }
+        if self._pattern != REACT:  # react는 키를 더하지 않는다(기존 결과와 같게 둔다)
+            info["pattern"] = self._pattern
+            info["pattern_version"] = PATTERN_VERSIONS[self._pattern]
+        return info
 
     async def run(self, episode: Episode) -> EpisodeOutput:
         database = episode.database

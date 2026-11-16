@@ -98,7 +98,11 @@ def test_sut_version_and_config_info_record_pattern() -> None:
         info = sut.config_info(model_id="m", llm_info=dict(INFO))
         assert info["pattern"] == name and info["pattern_version"] == PATTERN_VERSIONS[name]
     react = RunflowV0SUT().config_info(model_id="m", llm_info=dict(INFO))
-    assert react["pattern"] == "react"
+    assert "pattern" not in react and "pattern_version" not in react
+    assert set(react) == {
+        "runflow_fingerprint", "answer_extension", "variants", "index_mode",
+        "max_approvals_per_run",
+    }  # fmt: skip
     assert react["runflow_fingerprint"] == config_fingerprint("m", INFO, answer_extension=True)
     with pytest.raises(ValueError):
         RunflowV0SUT(pattern="nope")

@@ -16,6 +16,7 @@ from integration.test_runflow_eval import only, read_gold, read_script, run, tas
 from orbit.assistant.envelope import boundary_for
 from orbit.evalrunner.suts import create_sut
 from orbit.llm.types import LLMRequest
+from orbit.runflow.answer import ANSWER_PROMPT_PARAGRAPH
 from orbit.runflow.patterns import CATEGORIES, PLAN_PROMPT, PatternMemory
 from orbit.runflow.prompt import build_system_prompt
 from orbit.runflow.write_tools import run_tool_specs
@@ -263,6 +264,42 @@ async def test_fixed_workflow_classifies_once_and_limits_tools(make_harness: Mak
     assert memory.stats.categories == {"일정 조회": 1}
 
 
+async def test_fixed_workflow_submit_answer_works_with_allowed_list(make_harness: Make) -> None:
+    h = await make_harness(
+        [
+            category("일정 조회"),
+            {"tool_calls": [call("list_events", **DAY)]},
+            {
+                "text": "내일은 주간 회의와 점심이 있습니다.",
+                "structured": {"kind": "event_set", "events": ["E1", "E2"]},
+            },
+            {"text": "정리했습니다."},
+        ]
+    )
+    sink: list[dict[str, Any]] = []
+    h.deps.answer_sink = sink.append
+    use(h, "fixed_workflow")
+    run_id = await h.start("내일 일정")
+    await h.work()
+    assert await h.status(run_id) == "succeeded"
+    allowed = CATEGORIES["일정 조회"].tools | {"submit_answer"}
+    for act in h.llm.requests[1:]:
+        assert tool_names(act) == allowed
+    assert len(sink) == 1 and sink[0]["kind"] == "event_set"
+    assert "tool_not_allowed" not in repr(h.llm.requests[3].messages)
+
+
+async def test_plan_execute_answer_prompt_comes_after_plan_paragraph(make_harness: Make) -> None:
+    h = await make_harness([{"text": f"1. 답변 {PLAN_MARK}"}, {"text": "끝"}])
+    h.deps.answer_sink = lambda answer: None
+    use(h, "plan_execute")
+    await h.start("안녕")
+    await h.work()
+    system = system_of(h.llm.requests[1])
+    assert system.index("[작업 계획]") < system.index(ANSWER_PROMPT_PARAGRAPH)
+    assert system.endswith(ANSWER_PROMPT_PARAGRAPH)
+
+
 async def test_fixed_workflow_disallowed_write_does_not_block_allowed_write(
     make_harness: Make,
 ) -> None:
@@ -360,7 +397,7 @@ async def test_runner_default_row_has_no_pattern_fields(app_url: str) -> None:
     summary, _, _ = await run(app_url, [t], {"p-2": read_script()})
     row = only(summary).to_dict()
     assert "pattern_stats" not in row and "llm_calls_by_kind" not in row["usage"]
-    assert row["config"]["sut_config"]["pattern"] == "react"
+    assert "pattern" not in row["config"]["sut_config"]
 
 
 async def test_runner_fixed_workflow_records_parse_failure_rate(app_url: str) -> None:

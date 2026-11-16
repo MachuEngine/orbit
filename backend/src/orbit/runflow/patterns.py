@@ -13,6 +13,10 @@ interrupt, 쓰기 규칙, 답 제출 안내, 예산은 모두 같다.
 (메모리, 에피소드가 끝나면 버린다)에만 둔다(ADR-0006, `eval_variants.ReasoningCache`와 같은 방식).
 계획·분류 요청에는 사용자 발화만 넣는다. 재계획에도 도구 결과 본문은 넣지 않고 서버가 만든 오류
 종류 문구만 넣는다. 그래서 메일·문서 본문이 시스템 프롬프트로 올라가는 경로가 없다(D6-1).
+
+`PatternMemory`는 프로세스 메모리만 쓴다. 평가 전용이며, 프로세스가 바뀌는 재개에서는 계획·분류가
+다시 실행된다. 계획·분류 호출도 에피소드 단계 예산을 쓴다. `fixed_workflow`의 범주별 단계 상한은
+패턴 정의의 일부다.
 """
 
 import json
@@ -304,9 +308,9 @@ class PatternDriver:
             return  # 재계획은 run당 한 번. 같은 step을 다시 실행해도 부르지 않는다
         errors = _error_kinds(transcript.tool_results(step - 1))
         if errors:
-            state.replan_step = step
-            stats.replans += 1
             await self._plan(state, transcript, errors, KIND_REPLAN)
+            state.replan_step = step  # 호출이 성공한 뒤에 기록한다
+            stats.replans += 1
 
     async def _plan(
         self, state: RunPattern, transcript: Transcript, errors: list[str] | None, kind: str
