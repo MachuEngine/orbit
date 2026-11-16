@@ -39,14 +39,24 @@ class Counts(_Model):
 
 
 class Manifest(_Model):
+    """데이터셋 매니페스트. `smoke_task_ids`·`details`는 v1 선택 필드이며 없으면 파일에 쓰지 않는다.
+
+    `created_with`: `templates`는 템플릿 문장만 쓴 v0, `structure+llm`은 구조는 코드가 만들고 본문은
+    LLM이 쓴 세계 v1(ADR-0026 §2)이다.
+    `smoke_task_ids`: 스모크 부분집합(dev 과제, ADR-0026 §5).
+    `details`: 생성 요약(수량·분할·비용 등).
+    """
+
     name: str
     version: str
     generator_git_sha: str
     seed: int
-    created_with: Literal["templates"]
+    created_with: Literal["templates", "structure+llm"]
     split_ratio: SplitRatio
     counts: Counts
     notes: str = ""
+    smoke_task_ids: list[str] | None = None
+    details: dict[str, Any] | None = None
 
 
 class Turn(_Model):

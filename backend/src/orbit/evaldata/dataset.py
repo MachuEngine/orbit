@@ -30,6 +30,8 @@ MANIFEST = "manifest.json"
 WORLD = "world.json"
 TASKS = "tasks.jsonl"
 REVIEW = "review.jsonl"
+# 근거 아티팩트 태그(v1은 문서 `ref_file:`을 더한다)
+EVIDENCE_PREFIXES = ("ref_event:", "ref_message:", "ref_file:")
 
 
 class DatasetError(ValueError):
@@ -45,7 +47,7 @@ class Dataset:
 
 
 def evidence_refs(task: Task) -> set[str]:
-    return {t for t in task.tags if t.startswith(("ref_event:", "ref_message:"))}
+    return {t for t in task.tags if t.startswith(EVIDENCE_PREFIXES)}
 
 
 def evidence_clusters(tasks: list[Task]) -> list[list[Task]]:
@@ -94,7 +96,28 @@ def dumps_jsonl(rows: list[dict[str, Any]]) -> str:
 
 
 def write_manifest(out: Path, manifest: Manifest) -> None:
-    (out / MANIFEST).write_text(dumps_json(manifest.model_dump(mode="json")), encoding="utf-8")
+    data = manifest.model_dump(mode="json")
+    for key in (
+        "smoke_task_ids",
+        "details",
+    ):  # v1 선택 필드는 값이 없으면 쓰지 않는다(v0와 같은 바이트)
+        if data.get(key) is None:
+            data.pop(key, None)
+    (out / MANIFEST).write_text(dumps_json(data), encoding="utf-8")
+
+
+def write_tasks(out: str | Path, tasks: list[Task]) -> None:
+    """tasks.jsonl을 쓴다. 선택 필드는 값이 없으면 쓰지 않는다(v0 파일과 같은 바이트를 유지한다)."""
+    path = Path(out)
+    path.mkdir(parents=True, exist_ok=True)
+    rows = [t.model_dump(mode="json") for t in tasks]
+    for row in rows:
+        for key in ("approval_policy", "time_zone", "fault_plan"):
+            if row.get(key) is None:
+                row.pop(key, None)
+        if row["gold"].get("answer_facts_required") is False:
+            row["gold"].pop("answer_facts_required")
+    (path / TASKS).write_text(dumps_jsonl(rows), encoding="utf-8")
 
 
 def write_dataset(
@@ -104,14 +127,7 @@ def write_dataset(
     path.mkdir(parents=True, exist_ok=True)
     write_manifest(path, manifest)
     (path / WORLD).write_text(dumps_json(world), encoding="utf-8")
-    rows = [t.model_dump(mode="json") for t in tasks]
-    for row in rows:  # 선택 필드는 값이 없으면 쓰지 않는다(v0 파일과 같은 바이트를 유지한다)
-        for key in ("approval_policy", "time_zone", "fault_plan"):
-            if row.get(key) is None:
-                row.pop(key, None)
-        if row["gold"].get("answer_facts_required") is False:
-            row["gold"].pop("answer_facts_required")
-    (path / TASKS).write_text(dumps_jsonl(rows), encoding="utf-8")
+    write_tasks(path, tasks)
 
 
 def _read_text(path: Path) -> str:
@@ -202,6 +218,14 @@ def validate_dataset(
         if len({t.cluster_id for t in group}) > 1:
             names = ", ".join(sorted(t.task_id for t in group))
             problems.append(f"근거를 공유하는 과제가 서로 다른 묶음에 있다: {names}")
+    if manifest.smoke_task_ids is not None:
+        smoke = manifest.smoke_task_ids
+        by_id = {t.task_id: t for t in tasks}
+        if len(smoke) != len(set(smoke)):
+            problems.append("smoke_task_ids에 중복이 있다")
+        for tid in smoke:
+            if tid not in by_id or by_id[tid].split != "dev":
+                problems.append(f"smoke_task_ids의 {tid}는 유효한 dev 과제가 아니다")
     messages = sum(len(a.get("messages", [])) for a in accounts.values())
     events = sum(len(a.get("events", [])) for a in accounts.values())
     expected = (len(accounts), messages, events, len(tasks))

@@ -1,0 +1,293 @@
+{
+  "counts": {
+    "events": 867,
+    "messages": 8000,
+    "tasks": 216,
+    "users": 9
+  },
+  "created_with": "structure+llm",
+  "details": {
+    "clusters": {
+      "dev": 81,
+      "test": 111,
+      "total": 192
+    },
+    "dropped": {
+      "builder": {
+        "day_agenda/mt: 정오에 걸친 일정이 있어 오후 기준이 모호하다": 4,
+        "mail_fact/mt: 첨부 파일 이름은 답장에 쓰기 어색해 다중 턴에서 뺀다": 24,
+        "mismatch/single: 같은 날 같은 제목의 일정이 둘 이상이다": 3,
+        "mismatch/single: 시각이 다르지 않아 시각 질문으로 불일치를 잴 수 없다": 16,
+        "reschedule/single: 원래 날짜에 같은 제목의 일정이 있어 질문이 모호하다": 1
+      },
+      "duplicate_answer_scenarios": 3,
+      "ref_conflict_scenarios": 12
+    },
+    "fault_tasks": {
+      "read": 16,
+      "write": 8
+    },
+    "multi_turn_conversations": 20,
+    "must_not_trimmed_tasks": 0,
+    "originals_by_family": {
+      "anthropic": 65,
+      "google": 62,
+      "openai": 65
+    },
+    "originals_by_family_and_type": {
+      "ambiguous": {
+        "anthropic": 5,
+        "google": 6,
+        "openai": 5
+      },
+      "calendar": {
+        "anthropic": 11,
+        "google": 10,
+        "openai": 11
+      },
+      "document": {
+        "anthropic": 6,
+        "google": 5,
+        "openai": 5
+      },
+      "mail": {
+        "anthropic": 13,
+        "google": 13,
+        "openai": 14
+      },
+      "mismatch": {
+        "anthropic": 6,
+        "google": 5,
+        "openai": 5
+      },
+      "multi_turn": {
+        "anthropic": 6,
+        "google": 7,
+        "openai": 7
+      },
+      "reminder": {
+        "anthropic": 6,
+        "google": 5,
+        "openai": 5
+      },
+      "unanswerable": {
+        "anthropic": 5,
+        "google": 5,
+        "openai": 6
+      },
+      "write": {
+        "anthropic": 7,
+        "google": 6,
+        "openai": 7
+      }
+    },
+    "originals_by_type": {
+      "ambiguous": 16,
+      "calendar": 32,
+      "document": 16,
+      "mail": 40,
+      "mismatch": 16,
+      "multi_turn": 20,
+      "reminder": 16,
+      "unanswerable": 16,
+      "write": 20
+    },
+    "originals_by_user": {
+      "acct-u1": 29,
+      "acct-u2": 33,
+      "acct-u3": 32,
+      "acct-u4": 32,
+      "acct-u5": 32,
+      "acct-u6": 34
+    },
+    "originals_by_user_and_type": {
+      "ambiguous": {
+        "acct-u1": 2,
+        "acct-u2": 2,
+        "acct-u3": 3,
+        "acct-u4": 3,
+        "acct-u5": 3,
+        "acct-u6": 3
+      },
+      "calendar": {
+        "acct-u1": 5,
+        "acct-u2": 5,
+        "acct-u3": 5,
+        "acct-u4": 5,
+        "acct-u5": 6,
+        "acct-u6": 6
+      },
+      "document": {
+        "acct-u1": 2,
+        "acct-u2": 3,
+        "acct-u3": 3,
+        "acct-u4": 3,
+        "acct-u5": 2,
+        "acct-u6": 3
+      },
+      "mail": {
+        "acct-u1": 6,
+        "acct-u2": 7,
+        "acct-u3": 7,
+        "acct-u4": 7,
+        "acct-u5": 7,
+        "acct-u6": 6
+      },
+      "mismatch": {
+        "acct-u1": 2,
+        "acct-u2": 3,
+        "acct-u3": 3,
+        "acct-u4": 3,
+        "acct-u5": 2,
+        "acct-u6": 3
+      },
+      "multi_turn": {
+        "acct-u1": 3,
+        "acct-u2": 4,
+        "acct-u3": 3,
+        "acct-u4": 3,
+        "acct-u5": 3,
+        "acct-u6": 4
+      },
+      "reminder": {
+        "acct-u1": 3,
+        "acct-u2": 2,
+        "acct-u3": 2,
+        "acct-u4": 3,
+        "acct-u5": 3,
+        "acct-u6": 3
+      },
+      "unanswerable": {
+        "acct-u1": 3,
+        "acct-u2": 3,
+        "acct-u3": 3,
+        "acct-u4": 2,
+        "acct-u5": 3,
+        "acct-u6": 2
+      },
+      "write": {
+        "acct-u1": 3,
+        "acct-u2": 4,
+        "acct-u3": 3,
+        "acct-u4": 3,
+        "acct-u5": 3,
+        "acct-u6": 4
+      }
+    },
+    "paraphrase": {
+      "enabled": false,
+      "note": "--skip-paraphrase: 표현 변형 파생 문항 없이 생성했다"
+    },
+    "paraphrase_tasks": 0,
+    "reject_tasks": 4,
+    "scenarios_by_type": {
+      "absent": 16,
+      "all_day": 2,
+      "ambiguous": 16,
+      "cancellation": 4,
+      "cross_midnight": 2,
+      "day_agenda": 8,
+      "deadline": 16,
+      "doc_fact": 8,
+      "doc_version": 8,
+      "event_change_target": 8,
+      "free_slot": 4,
+      "mail_fact": 52,
+      "meeting_request": 6,
+      "mismatch": 16,
+      "person_next": 8,
+      "project_week": 4,
+      "reply_needed": 6,
+      "reschedule": 4,
+      "tz_event": 4
+    },
+    "skeleton_sha256": "a2bd130e86497a6a87286e534ae33df6f887fa84d639d4bfe5e04b1cf7d09f72",
+    "smoke": {
+      "size": 25
+    },
+    "split_search": {
+      "attempts": 40,
+      "cost": 11
+    },
+    "suite_version": "tasks-v1",
+    "tasks_by_type": {
+      "ambiguous": {
+        "dev": 6,
+        "test": 10
+      },
+      "calendar": {
+        "dev": 13,
+        "test": 19
+      },
+      "document": {
+        "dev": 5,
+        "test": 11
+      },
+      "fault": {
+        "dev": 9,
+        "test": 15
+      },
+      "mail": {
+        "dev": 15,
+        "test": 25
+      },
+      "mismatch": {
+        "dev": 9,
+        "test": 7
+      },
+      "multi_turn": {
+        "dev": 9,
+        "test": 11
+      },
+      "reminder": {
+        "dev": 8,
+        "test": 8
+      },
+      "unanswerable": {
+        "dev": 7,
+        "test": 9
+      },
+      "write": {
+        "dev": 9,
+        "test": 11
+      }
+    },
+    "world_sha256": "f873c7f44d770742a63a18b1a7bde99916c1d428242df0bcdece7ca6d41a8835"
+  },
+  "generator_git_sha": "54bb888e43682a1a12f5a10181b5e208d3567eb9",
+  "name": "orbit-eval",
+  "notes": "종단 과제 v1(ADR-0026 §4). 정답은 skeleton.json의 시나리오 기록과 world.json에서 코드가 다시 계산했고 불일치하면 생성이 실패한다. 본문은 LLM이 쓴 합성 데이터라 정답 값이 본문에 있는지만 검사했다(함축된 다른 사실은 사람 검수로 본다, ③). 사용자 질문에서 '메일'은 받은 메일 전체를 가리킨다. mail_fact의 정답 메일은 최신 값이 적힌 메일 하나이며 같은 값을 되풀이하는 다른 메일이 있을 수 있다(검수 항목). 답장·초안 쓰기는 runflow가 `send_mail`(초안 생성 후 발송)만 가지므로 기대 변화를 `draft_sent`로 둔다. test 봉인은 러너의 확인 플래그 수준이고 공개 저장소라 정답은 누구나 읽을 수 있다. 장애 주입 파생은 같은 정답을 기대하고, 표현 변형 파생은 원본과 같은 정답·묶음이다.",
+  "seed": 20261116,
+  "smoke_task_ids": [
+    "mt-mail-fact-0047",
+    "mt-mail-fact-0054",
+    "t-absent-0002",
+    "t-absent-0034",
+    "t-ambiguous-0006",
+    "t-ambiguous-0015",
+    "t-day-agenda-0010-fault",
+    "t-deadline-0029",
+    "t-deadline-0030",
+    "t-doc-fact-0017",
+    "t-event-change-target-0010",
+    "t-event-change-target-0013",
+    "t-free-slot-0008",
+    "t-free-slot-0009",
+    "t-mail-fact-0028",
+    "t-mail-fact-0039",
+    "t-mail-fact-0049",
+    "t-mail-fact-0057",
+    "t-mail-fact-0116-fault",
+    "t-mismatch-0006",
+    "t-mismatch-0019",
+    "t-mismatch-0019-fault",
+    "t-mismatch-0021",
+    "t-person-next-0010",
+    "t-reschedule-0005"
+  ],
+  "split_ratio": {
+    "dev": 0.4167,
+    "test": 0.5833
+  },
+  "version": "v1"
+}

@@ -15,6 +15,7 @@ import json
 import subprocess  # noqa: S404  git SHA 조회에만 쓴다
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +38,7 @@ from orbit.evalrunner.runner import (
     run_experiment,
 )
 from orbit.evalrunner.suts import DATABASE_SUTS, UnknownSutError, create_sut, sut_names
-from orbit.evalrunner.task_source import DatasetError, load_dataset
+from orbit.evalrunner.task_source import Dataset, DatasetError, load_dataset
 from orbit.llm.factory import build_llm, llm_config_info
 
 SEAL_FLAG = "--i-understand-this-uses-the-sealed-test-split"
@@ -94,6 +95,22 @@ def _load_fault_plan(path: str | None) -> FaultPlanSpec:
     return FaultPlanSpec(name=name, plan=FaultPlan.from_dict(data))
 
 
+def _smoke_subset(dataset: Dataset) -> Dataset:
+    """manifest의 `smoke_task_ids`에 있는 과제만 남긴다. 목록이 없거나 어긋나면 `DatasetError`."""
+    ids = dataset.manifest.get("smoke_task_ids")
+    if not ids:
+        raise DatasetError("manifest에 smoke_task_ids가 없다(스모크 목록이 없는 데이터셋)")
+    by_id = {t.task_id: t for t in dataset.tasks}
+    missing = sorted(set(ids) - set(by_id))
+    if missing:
+        raise DatasetError(f"smoke_task_ids에 데이터셋에 없는 과제가 있다: {missing[:5]}")
+    chosen = set(ids)
+    tasks = tuple(t for t in dataset.tasks if t.task_id in chosen)
+    if any(t.split != "dev" for t in tasks):
+        raise DatasetError("스모크 목록에 dev가 아닌 과제가 있다(test 봉인 규칙 위반)")
+    return replace(dataset, tasks=tasks)
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m orbit.evalrunner")
     sub = p.add_subparsers(dest="command", required=True)
@@ -101,6 +118,12 @@ def _parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="평가를 실행한다")
     run.add_argument("--dataset", required=True)
     run.add_argument("--split", required=True, choices=["dev", "test"])
+    run.add_argument(
+        "--subset", choices=["smoke"], default=None,
+        help="smoke: manifest의 smoke_task_ids만 실행한다(dev 분할만, "
+        "ADR-0026 §5). CI 회귀 확인용이며 "
+        "비교 실험의 판단 근거로 쓰지 않는다",
+    )  # fmt: skip
     run.add_argument("--sut", required=True, help=f"등록된 이름: {', '.join(sut_names())}")
     run.add_argument(
         "--index", choices=["off"], default="off",
@@ -186,6 +209,11 @@ def _run(args: argparse.Namespace) -> int:
     if args.split == "test" and not args.allow_test:
         raise SealedSplitError("test 분할 봉인")  # 출력 파일을 만들기 전에 거부한다
     dataset = load_dataset(args.dataset)
+    if args.subset == "smoke":
+        if args.split != "dev":
+            print("--subset smoke는 dev 분할에서만 쓴다", file=sys.stderr)
+            return 2
+        dataset = _smoke_subset(dataset)
     out = Path(args.out)
     sink_path = out.with_name(out.stem + ".estimate.jsonl") if args.estimate is not None else out
     if sink_path.exists():
