@@ -274,6 +274,8 @@ def comparable(summary: ExperimentSummary) -> list[dict[str, Any]]:
     for r in summary.results:
         row = r.to_dict()
         del row["latency_ms"]  # 시각·지연은 비교에서 뺀다
+        for c in row["calls"]:
+            del c["latency_ms"]  # 커넥터 호출 시간(벽시계)
         rows.append(row)
     return rows
 
@@ -829,7 +831,7 @@ async def test_message_set_clarify_and_calls_are_scored_end_to_end(app_url: str)
     rows = {r.task_id: r.to_dict() for r in summary.results}
     (entry,) = rows["v-mail"]["calls"]
     assert entry["tool"] == "search_messages" and entry["args"]["query"] == "from:bob@example.org"
-    assert set(entry) == {"tool", "args", "outcome", "error_type"}
+    assert set(entry) == {"tool", "args", "outcome", "error_type", "fault", "latency_ms"}
     assert rows["v-clarify"]["calls"] == [] and rows["v-clarify"]["expected_kind"] == "clarify"
 
 

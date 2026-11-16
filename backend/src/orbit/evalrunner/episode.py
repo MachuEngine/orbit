@@ -8,7 +8,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
@@ -17,6 +17,7 @@ from orbit.connectors.sim.calls import CallLog
 from orbit.core.clock import Clock
 from orbit.core.ids import Uuid7Generator
 from orbit.db.session import AsyncDatabase
+from orbit.evalrunner.trace import EpisodeTrace
 from orbit.llm.interface import LLM, RecordingLLM, UsageRecord, UsageRecorder
 from orbit.llm.types import LLMRequest, LLMResponse
 
@@ -215,6 +216,8 @@ class Episode:
     budget: Budget
     steps: StepCounter
     database: EpisodeDatabase | None = None  # DB를 쓰는 평가 대상(`runflow_v0`)에만 있다
+    # 실행 기록 수집기(ADR-0029). 채점에는 쓰지 않는다. 평가 대상이 도구 호출·답을 여기에 남긴다.
+    trace: EpisodeTrace = field(default_factory=EpisodeTrace)
 
 
 @dataclass(frozen=True)

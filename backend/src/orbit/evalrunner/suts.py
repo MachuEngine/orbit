@@ -79,6 +79,7 @@ class ScriptedToolSUT:
                 if call.name == SUBMIT_ANSWER:  # 커넥터 호출이 아니다. 마지막 제출이 유효하다
                     structured = dict(call.arguments)
                     submitted = True
+                    episode.trace.record_tool(call.name, call.arguments, "ok", is_error=False)
                     messages.append(Message(role="tool", content="ok", tool_call_id=call.id))
                     continue
                 episode.steps.consume()
@@ -88,6 +89,10 @@ class ScriptedToolSUT:
                     if not self._catch_errors and isinstance(exc, ConnectorError):
                         raise
                     content = json.dumps({"error": type(exc).__name__})
+                    episode.trace.record_tool(call.name, call.arguments, content, is_error=True)
+                    messages.append(Message(role="tool", content=content, tool_call_id=call.id))
+                    continue
+                episode.trace.record_tool(call.name, call.arguments, content, is_error=False)
                 messages.append(Message(role="tool", content=content, tool_call_id=call.id))
             if submitted:  # 답 제출이 끝이다
                 return EpisodeOutput(final_text=response.text or "", structured=structured)
@@ -119,6 +124,10 @@ class AssistantV0SUT:
             has_step_room=episode.steps.has_room,
             max_turns=self._max_turns,
             metadata={"task_id": episode.task.task_id},
+            on_tool=lambda name, args, outcome: episode.trace.record_tool(
+                name, args, outcome.content, is_error=outcome.is_error
+            ),
+            on_workset=episode.trace.record_handles,
         )
         text, structured = await assistant.run(
             [t.content for t in episode.task.turns if t.role == "user"]

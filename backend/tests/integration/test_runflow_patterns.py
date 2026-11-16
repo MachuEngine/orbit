@@ -390,6 +390,13 @@ async def test_runner_records_pattern_usage_and_stats(app_url: str) -> None:
     assert row["pattern_stats"]["plan_calls"] == 1 and row["pattern_stats"]["replans"] == 0
     seen = [q.metadata.get("step_kind") for q in factory.made["p-1"].requests]
     assert seen == ["plan", "act", "act", "act"]
+    # 단계 종류와 계획 문장은 결과 파일 trace에만 남는다(ADR-0029 §1)
+    steps = row["trace"]["pattern_steps"]
+    assert [x["kind"] for x in steps] == ["plan", "act", "act", "act"]
+    assert steps[0]["text"] == "1. list_events\n2. 답변" and steps[1]["text"] is None
+    from orbit.evalrunner import metrics_v1
+
+    assert metrics_v1.extra_metrics([row])["tools"]["argument_validity"]["available"] is True
 
 
 async def test_runner_default_row_has_no_pattern_fields(app_url: str) -> None:
@@ -398,6 +405,7 @@ async def test_runner_default_row_has_no_pattern_fields(app_url: str) -> None:
     row = only(summary).to_dict()
     assert "pattern_stats" not in row and "llm_calls_by_kind" not in row["usage"]
     assert "pattern" not in row["config"]["sut_config"]
+    assert [x["kind"] for x in row["trace"]["pattern_steps"]] == []
 
 
 async def test_runner_fixed_workflow_records_parse_failure_rate(app_url: str) -> None:
@@ -414,3 +422,5 @@ async def test_runner_fixed_workflow_records_parse_failure_rate(app_url: str) ->
     assert stats["classify_total"] == 1 and stats["classify_parse_failed"] == 1
     assert stats["categories"] == {"기타": 1}
     assert row["usage"]["llm_calls_by_kind"] == {"act": 3, "classify": 1}
+    assert [x["kind"] for x in row["trace"]["pattern_steps"]][0] == "classify"
+    assert row["trace"]["pattern_steps"][0]["text"] == "분류 못함"

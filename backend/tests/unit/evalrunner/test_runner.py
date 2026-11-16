@@ -343,6 +343,8 @@ def _normalized(summary: Any) -> list[dict[str, Any]]:
     for r in summary.results:
         row = r.to_dict()
         row.pop("latency_ms")  # 벽시계 측정값. 실행마다 다르다
+        for c in row["calls"]:
+            c.pop("latency_ms")  # 커넥터 호출 시간(벽시계)
         rows.append(row)
     return rows
 
@@ -386,14 +388,18 @@ async def test_result_schema(dataset: Dataset) -> None:
     assert cfg["budget"] == Budget().to_dict()
 
 
-async def test_results_do_not_store_prompt_or_response_text(dataset: Dataset) -> None:
+async def test_prompt_and_response_text_only_appear_in_trace(dataset: Dataset) -> None:
+    """ADR-0029 §1: 발화·답 문장은 `trace`에만 남기고 그 밖의 항목에는 넣지 않는다."""
     summary = await run(dataset, repeats=2)
-    blob = "\n".join(r.to_json_line() for r in summary.results)
+    rows = [r.to_dict() for r in summary.results]
+    outside = "\n".join(json.dumps({**r, "trace": None}, ensure_ascii=False) for r in rows)
     for t in dataset.tasks:
         for turn in t.turns:
-            assert turn.content not in blob
+            assert turn.content not in outside
     for marker in ("질문문장", "주간 회의와 점심이 있습니다", "팀 회고가 있습니다", "안녕하세요"):
-        assert marker not in blob
+        assert marker not in outside
+    inside = "\n".join(json.dumps(r["trace"], ensure_ascii=False) for r in rows)
+    assert "질문문장" in inside and "주간 회의와 점심이 있습니다" in inside
 
 
 # ---------------------------------------------------------------- 봉인·누적 상한·추정

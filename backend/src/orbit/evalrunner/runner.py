@@ -5,7 +5,9 @@
 사용량 수집 -> 채점 -> 결과 한 줄. 궤적·상태·사용량은 SUT가 보고한 값이 아니라
 Sim과 `UsageRecorder`에서 읽는다.
 
-결과에는 프롬프트·응답·과제 질문 원문을 남기지 않는다(ADR-0006 취지). 디버그 옵션도 v0에는 없다.
+결과에는 지표를 나중에 더할 수 있도록 턴별 발화·답 문장·도구 호출 결과 본문을 남긴다(ADR-0029 §1,
+`trace`). 평가 데이터는 합성이고 결과 파일(`runs/`)은 git에서 제외한다. 실사용 DB·그래프 상태 규칙
+(ADR-0006)과는 무관하다. 결과 스키마 버전은 `result_schema`다(1은 이 항목이 없던 v0 결과).
 """
 
 import asyncio
@@ -38,6 +40,8 @@ from orbit.evalrunner.episode import (
     SutTurn,
     SystemUnderTest,
 )
+from orbit.evalrunner.metrics_v1 import task_meta
+from orbit.evalrunner.oracle import min_tool_calls
 from orbit.evalrunner.runflow_env import (
     DbObservation,
     RunflowEnvironment,
@@ -46,6 +50,7 @@ from orbit.evalrunner.runflow_env import (
 from orbit.evalrunner.scoring import FailureType, score_episode
 from orbit.evalrunner.structured import answer_ids
 from orbit.evalrunner.task_source import SPLITS, Dataset, DatasetError, TaskView
+from orbit.evalrunner.trace import RESULT_SCHEMA_VERSION, EpisodeTrace, build_trace
 from orbit.llm.interface import LLM, UsageRecorder
 from orbit.llm.model_id import is_declared_model
 
@@ -197,6 +202,12 @@ class EpisodeResult:
     # 기대 변화별(기대 순서) 일치 여부. `expected_changes`가 비어 있지 않은 과제에서만 값이 있다
     # (값 원문 대신 일치 여부만 남긴다).
     change_matches: tuple[bool, ...] | None = None
+    # 아래는 ADR-0029에서 더한 기록이다. 채점에는 쓰지 않는다.
+    change_fields: tuple[Mapping[str, Any], ...] | None = None  # 기대 변화별 필드 일치(보조 지표)
+    trace: Mapping[str, Any] | None = None  # 턴별 발화·답 문장·도구 호출 결과·핸들 대응표
+    task_meta: Mapping[str, Any] | None = None  # 과제 유형·시나리오·근거 태그 ID(정답 아님)
+    min_tool_calls: int | None = None  # 정답 제출 오라클의 도구 호출 수(하한)
+    result_schema: int = RESULT_SCHEMA_VERSION
     # 단계 종류별 LLM 호출 수(평가 전용 Agent 패턴, ADR-0030). 종류가 붙은 호출이 없으면 None.
     llm_calls_by_kind: Mapping[str, int] | None = None
     # 패턴의 계획·분류 합계(분류 파싱 실패 수 등). 패턴이 없으면 None. 오류로 끝난 에피소드는 None.
@@ -239,6 +250,13 @@ class EpisodeResult:
             "time_zone": self.time_zone,
             "task_fault": None if self.task_fault_rules is None else list(self.task_fault_rules),
             "change_matches": None if self.change_matches is None else list(self.change_matches),
+            "change_fields": (
+                None if self.change_fields is None else [dict(c) for c in self.change_fields]
+            ),
+            "result_schema": self.result_schema,
+            "task_meta": None if self.task_meta is None else dict(self.task_meta),
+            "min_tool_calls": self.min_tool_calls,
+            "trace": None if self.trace is None else dict(self.trace),
             "matched_reading": self.matched_reading,
             "trajectory": list(self.trajectory),
             "calls": [dict(c) for c in self.calls],
@@ -283,6 +301,7 @@ async def run_episode(
     declared_model_id: str = UNSPECIFIED_MODEL,
     monotonic: Callable[[], float] = time.perf_counter,
     database_env: RunflowEnvironment | None = None,
+    min_calls: int | None = None,
 ) -> EpisodeResult:
     clock = FixedClock(task.as_of_time)  # 에피소드마다 자기 시계(D1-5)
     world = base_world.fork(episode_seed(seed, task.task_id, repeat), clock=clock)
@@ -298,6 +317,7 @@ async def run_episode(
     recording_llm = EpisodeRecordingLLM(llm, recorder)
     account = task.account_id
     step_counter = StepCounter(budget, recorder, connectors.calls, monotonic=monotonic)
+    collector = EpisodeTrace()
     # 평가 DB 워크스페이스는 러너가 준비하고 정리한다. 평가 대상은 이 핸들만 쓴다(ADR-0023 §2).
     database: EpisodeDatabase | None = None
     error_type: FailureType | None = None
@@ -332,6 +352,7 @@ async def run_episode(
             budget=budget,
             steps=step_counter,
             database=database,
+            trace=collector,
         )
         started = monotonic()
         try:
@@ -450,6 +471,8 @@ async def run_episode(
                 "args": c.args,
                 "outcome": c.outcome,
                 "error_type": c.error_type,
+                "fault": c.fault,  # 주입된 장애 규칙("도구:오류"). 없으면 None
+                "latency_ms": c.latency_ms,  # 커넥터 호출 시간(Sim 내부)
             }
             for c in calls
         ),
@@ -478,6 +501,20 @@ async def run_episode(
             tuple(f"{r.tool}:{r.error}" for r in task_plan.rules) if task_plan is not None else None
         ),
         change_matches=score.change_matches,
+        change_fields=score.change_fields,
+        trace=build_trace(
+            user_turns=[t.content for t in task.turns if t.role == "user"],
+            final_text=output.final_text if output is not None else None,
+            structured=output.structured if output is not None else None,
+            collector=collector,
+            transcript=(
+                observation.transcript
+                if observation is not None and observation.transcript
+                else None
+            ),
+        ),
+        task_meta=task_meta(task),
+        min_tool_calls=min_calls,
         llm_calls_by_kind=_calls_by_kind(recorder),
         pattern_stats=output.pattern_stats if output is not None else None,
     )
@@ -575,6 +612,8 @@ async def run_experiment(
         if plan is not None:
             build_sim_connectors(base_world.fork(0), [t.account_id], plan)
 
+    floors = await _min_tool_calls(tasks, base_world, dataset.world_snapshot)
+
     # LLM 인스턴스를 따로 만들지 않고 팩토리 메타데이터(`is_scripted`)로 판별한다.
     if model_id == UNSPECIFIED_MODEL and not getattr(llm_factory, "is_scripted", False):
         raise ValueError("ScriptedLLM이 아닌 LLM에는 --model-id(고정 모델 ID)를 지정해야 한다")
@@ -621,6 +660,7 @@ async def run_experiment(
                     declared_model_id=model_id,
                     monotonic=monotonic,
                     database_env=database_env,
+                    min_calls=floors.get(task.task_id),
                 )
                 summary.results.append(result)
                 if sink is not None:
@@ -638,6 +678,29 @@ async def run_experiment(
     finally:
         if database_env is not None:
             await database_env.aclose()
+
+
+async def _min_tool_calls(
+    tasks: Sequence[TaskView], base_world: SimWorld, snapshot: Mapping[str, Any]
+) -> dict[str, int]:
+    """과제별 최소 도구 호출 수(정답 제출 오라클의 호출 수, ADR-0029 §2). 계산하지 못한 과제는 뺀다.
+
+    오라클은 정답을 만드는 과제 유형만 지원한다. 계정이나 정답 대상이 세계에 없으면 건너뛴다."""
+    out: dict[str, int] = {}
+    accounts = snapshot.get("accounts", {})
+    # 오라클은 조회 도구만 불러 세계를 바꾸지 않는다. 깊은 복사가 비싸서 복사본 하나를 공유한다.
+    world = base_world.fork(0, clock=FixedClock(tasks[0].as_of_time)) if tasks else None
+    for task in tasks:
+        account = accounts.get(task.account_id)
+        if account is None or world is None:
+            continue
+        try:
+            out[task.task_id] = await min_tool_calls(world, account, task)
+        except Exception as exc:  # 계산 실패는 해당 지표만 비운다
+            logger.info(
+                "최소 호출 수를 계산하지 못했다: task=%s error=%s", task.task_id, type(exc).__name__
+            )
+    return out
 
 
 def _stop_reason(summary: ExperimentSummary, cap: ExperimentBudget) -> str | None:

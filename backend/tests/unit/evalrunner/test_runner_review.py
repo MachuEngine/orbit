@@ -68,8 +68,15 @@ async def test_sut_receives_task_without_gold(dataset: Dataset) -> None:
 async def test_sut_authority_is_narrow(dataset: Dataset) -> None:
     ep = (await _capture(dataset))[0]
     assert {f.name for f in fields(Episode)} == {
-        "task", "connectors", "clock", "llm", "budget", "steps", "database",
+        "task", "connectors", "clock", "llm", "budget", "steps", "database", "trace",
     }  # fmt: skip
+    # `trace`는 평가 대상이 기록을 쓰기만 하는 수집기다. 정답·호출 기록·장애 계획을 담지 않는다
+    assert {f.name for f in fields(type(ep.trace))} == {
+        "tool_calls",
+        "handles",
+        "turn_structured",
+        "pattern_steps",
+    }
     assert ep.database is None  # DB 핸들은 러너가 `runflow_v0`용으로만 준비한다(ADR-0023 §2)
     assert {f.name for f in fields(EpisodeConnectors)} == {"mail", "calendar", "drive"}
     for attr in ("runtime", "calls", "fault_plan", "faults", "world"):

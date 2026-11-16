@@ -139,7 +139,8 @@ async def test_result_rows_carry_calls_with_summarized_args(tmp_path: Path) -> N
     row = next(r.to_dict() for r in summary.results if r.task_id == "v-mail")
     assert row["trajectory"] == ["search_messages"]  # 호환용 기존 필드
     (entry,) = row["calls"]
-    assert set(entry) == {"tool", "args", "outcome", "error_type"}  # result_summary는 없다
+    assert set(entry) == {"tool", "args", "outcome", "error_type", "fault", "latency_ms"}
+    assert entry["fault"] is None and entry["latency_ms"] >= 0  # result_summary는 없다
     assert entry["tool"] == "search_messages" and entry["outcome"] == "ok"
     assert entry["error_type"] is None
     assert entry["args"]["query"] == "from:bob@example.org"
@@ -153,7 +154,9 @@ async def test_calls_args_are_length_marked_for_long_strings(tmp_path: Path) -> 
     summary = await run(make_dataset(tmp_path), scr, sut="assistant_v0", repeats=1)
     row = next(r.to_dict() for r in summary.results if r.task_id == "v-mail")
     assert row["calls"][0]["args"]["query"] == "<str len=100>"
-    assert long_query not in json.dumps(row, ensure_ascii=False)
+    assert long_query not in json.dumps(row["calls"], ensure_ascii=False)  # 요약 기록은 길이만
+    # 모델이 낸 원래 인자는 `trace`에 있다(ADR-0029 §1)
+    assert row["trace"]["tool_calls"][0]["arguments"]["query"] == long_query
 
 
 async def test_report_rates_and_reading_counts(tmp_path: Path) -> None:

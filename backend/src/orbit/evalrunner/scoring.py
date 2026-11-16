@@ -59,7 +59,12 @@ from typing import TYPE_CHECKING, Any, Literal
 from orbit.connectors.sim.calls import CallRecord
 from orbit.connectors.sim.world import WorldDiff
 from orbit.evaldata.schema import ClarifyAnswer
-from orbit.evalrunner.state_changes import ActualChange, actual_changes, match_changes
+from orbit.evalrunner.state_changes import (
+    ActualChange,
+    actual_changes,
+    change_field_results,
+    match_changes,
+)
 from orbit.evalrunner.structured import grade_structured
 from orbit.evalrunner.task_source import GoldView
 
@@ -220,6 +225,8 @@ class Score:
     matched_reading: int | None = None
     # 기대 변화별(기대 순서) 일치 여부. `expected_changes`가 비어 있지 않을 때만 값이 있다
     change_matches: tuple[bool, ...] | None = None
+    # 기대 변화별 필드 일치(ADR-0029, 보조 지표). 성공 판정에는 쓰지 않는다.
+    change_fields: tuple[dict[str, Any], ...] | None = None
 
 
 def text_fact_recall(gold: GoldView, final_text: str) -> float | None:
@@ -247,6 +254,7 @@ def score_episode(
     state_diff: bool | None  # 남는 실제 변화가 없는가
     state_changes: bool | None = None  # 기대 변화가 모두 일치했는가
     change_matches: tuple[bool, ...] | None = None
+    change_fields: tuple[dict[str, Any], ...] | None = None
     if expected is None:
         state_match = state_diff = None
     elif len(expected) == 0:
@@ -257,6 +265,7 @@ def score_episode(
         )
         result = match_changes(expected, actual, contains)
         change_matches = result.matched
+        change_fields = change_field_results(expected, actual, contains)
         state_diff = result.leftover == 0
         state_changes = result.all_matched
         state_match = state_diff and state_changes
@@ -305,4 +314,5 @@ def score_episode(
         text_fact_recall=recall,
         matched_reading=matched,
         change_matches=change_matches,
+        change_fields=change_fields,
     )

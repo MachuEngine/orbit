@@ -36,10 +36,14 @@ async def test_noop_sut_runs_every_dev_task_and_fails_with_answer_format() -> No
     assert all(r.success is False and r.trajectory == () for r in summary.results)
     assert all(r.cluster_id.startswith("c-") for r in summary.results)
     assert all(r.state_diff_match is True for r in summary.results)  # 쓰기가 없다
-    # 결과 행에 질문·정답 원문이 없다
-    blob = "\n".join(r.to_json_line() for r in summary.results)
+    # 질문 원문은 `trace`에만 있고 정답 원문은 결과 행 어디에도 없다(ADR-0029 §1)
+    rows = [r.to_dict() for r in summary.results]
+    outside = "\n".join(json.dumps({**r, "trace": None}, ensure_ascii=False) for r in rows)
     for task in dev[:10]:
-        assert task.turns[0].content not in blob
+        assert task.turns[0].content not in outside
+    by_id = {r["task_id"]: r for r in rows}
+    for task in dev[:10]:
+        assert by_id[task.task_id]["trace"]["turns"][0]["user"] == task.turns[0].content
 
 
 async def test_test_split_is_sealed_without_flag() -> None:

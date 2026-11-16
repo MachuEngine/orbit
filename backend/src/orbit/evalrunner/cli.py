@@ -3,6 +3,7 @@
     python -m orbit.evalrunner run --dataset <dir> --split dev --sut <이름> \
         --repeats 3 --out <jsonl>
     python -m orbit.evalrunner stats <jsonl> [--compare <jsonl>]
+    python -m orbit.evalrunner judge-input <jsonl> --out <jsonl>
 
 종료 코드: 0 정상, 2 사용 오류(봉인된 test 분할, 파일 충돌, 잘못된 입력), 3 누적 상한으로 중단.
 기본은 실제 LLM을 부르지 않는다. `--llm-script`가 없으면 LLM 호출은 모두 실패한다.
@@ -25,7 +26,7 @@ from sqlalchemy.engine import make_url
 from orbit.connectors.sim.faults import FaultPlan
 from orbit.core.config import get_llm_settings
 from orbit.evaldata.dataset import read_review
-from orbit.evalrunner import stats
+from orbit.evalrunner import metrics_v1, stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
 from orbit.evalrunner.runflow_env import EvalDatabaseSettings, RunflowEnvironment
@@ -189,6 +190,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     st.add_argument("--resamples", type=int, default=stats.DEFAULT_RESAMPLES)
     st.add_argument("--seed", type=int, default=stats.DEFAULT_SEED)
+
+    ji = sub.add_parser(
+        "judge-input",
+        help="서술형 근거성 Judge용 입력(답 문장·도구 결과 본문·과제 ID)을 JSONL로 내보낸다. "
+        "Judge 호출은 하지 않는다(ADR-0029 §3)",
+    )
+    ji.add_argument("results")
+    ji.add_argument("--out", required=True)
     return p
 
 
@@ -347,13 +356,19 @@ def _stats(args: argparse.Namespace) -> int:
         "model_mismatch_episodes": stats.model_mismatch_count(records),
         "response_models": stats.response_model_set(records),
     }
+    report.update(metrics_v1.extra_metrics(records))  # 보조 지표 섹션(ADR-0029 §2)
+    schemas = sorted({int(r.get("result_schema", 1)) for r in records})
+    if len(schemas) > 1:
+        msg = f"결과 행의 result_schema가 섞여 있다({schemas}). 기록이 없는 행의 보조 지표는 빠진다"
+        report.setdefault("warnings", []).append(msg)
+        print(f"경고: {msg}", file=sys.stderr)
     by_reading = stats.ambiguity_ignored_by_reading(records)
     if by_reading is not None:
         report["ambiguity_ignored_by_reading"] = by_reading
     if not report["response_models"]["single"]:
-        report["warnings"] = [
+        report.setdefault("warnings", []).append(
             "실행 전체의 응답 모델이 하나가 아니다. 결과를 같은 모델로 해석하지 않는다"
-        ]
+        )
         print("경고: 실행 전체의 응답 모델이 하나가 아니다", file=sys.stderr)
     if args.compare:
         other = stats.load_results(args.compare, reject_model_mismatch=reject)
@@ -364,10 +379,29 @@ def _stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _judge_input(args: argparse.Namespace) -> int:
+    records = stats.load_results(args.results)
+    out = Path(args.out)
+    if out.exists():
+        print(f"이미 있는 파일에는 쓰지 않는다: {out}", file=sys.stderr)
+        return 2
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rows = 0
+    with out.open("x", encoding="utf-8") as fh:
+        for row in metrics_v1.judge_inputs(records):
+            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+            fh.write("\n")
+            rows += 1
+    print(f"judge 입력 {rows}건을 {out}에 썼다")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        return _run(args) if args.command == "run" else _stats(args)
+        if args.command == "run":
+            return _run(args)
+        return _judge_input(args) if args.command == "judge-input" else _stats(args)
     except SealedSplitError:
         print(f"test 분할은 봉인돼 있다. 실행하려면 {SEAL_FLAG}를 명시한다.", file=sys.stderr)
         return 2

@@ -25,6 +25,7 @@ from orbit.evalrunner.episode import (
     SutTurn,
 )
 from orbit.evalrunner.runflow_env import EpisodeResolver
+from orbit.evalrunner.trace import EpisodeTrace
 from orbit.llm.interface import LLM
 from orbit.llm.types import LLMRequest, LLMResponse
 from orbit.records.approvals import decide_approval
@@ -79,6 +80,21 @@ class _StepGuardLLM:
     async def complete(self, request: LLMRequest) -> LLMResponse:
         self._consume()
         return await self._inner.complete(request)
+
+
+class _TraceLLM:
+    """단계 종류(`metadata["step_kind"]`)가 붙은 호출을 실행 기록에 남긴다(ADR-0030)."""
+
+    def __init__(self, inner: LLM, trace: EpisodeTrace) -> None:
+        self._inner = inner
+        self._trace = trace
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        response = await self._inner.complete(request)
+        kind = request.metadata.get("step_kind")
+        if kind:
+            self._trace.record_pattern_step(str(kind), response.text)
+        return response
 
 
 class _Submission:
@@ -175,7 +191,7 @@ class RunflowV0SUT:
             db=database.db,
             clock=clock,
             ids=database.ids,
-            llm=_StepGuardLLM(episode.llm, episode.steps.consume),
+            llm=_TraceLLM(_StepGuardLLM(episode.llm, episode.steps.consume), episode.trace),
             resolver=resolver,
             tz=ZoneInfo(episode.task.time_zone),
             checkpoint_conninfo=database.checkpoint_conninfo,
@@ -195,12 +211,15 @@ class RunflowV0SUT:
         )
         decisions = 0  # 에피소드 전체의 승인 결정 수(정책 순번)
         last_run: uuid.UUID | None = None
-        for turn in (t for t in episode.task.turns if t.role == "user"):
+        for index, turn in enumerate(t for t in episode.task.turns if t.role == "user"):
             submission.answer = None  # 성공 판정은 마지막 run의 제출이다
-            last_run = await _start_run(deps, database, turn, fingerprint)
-            decisions = await _drive(
-                deps, database, last_run, episode.task.approval_policy, decisions
-            )
+            try:
+                last_run = await _start_run(deps, database, turn, fingerprint)
+                decisions = await _drive(
+                    deps, database, last_run, episode.task.approval_policy, decisions
+                )
+            finally:  # 턴별 구조화된 답 기록(ADR-0029). 실패한 턴에도 남긴다
+                episode.trace.record_turn_structured(index, submission.answer)
         text = await _assistant_text(deps, database, last_run) if last_run is not None else ""
         return EpisodeOutput(
             final_text=text,

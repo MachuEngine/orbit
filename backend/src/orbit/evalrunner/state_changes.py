@@ -231,3 +231,129 @@ def match_changes(
         matched=tuple(i in paired for i in range(len(expected))),
         leftover=len(actual) - len(owner),
     )
+
+
+# ---------------------------------------------------------------- 필드별 일치(ADR-0029, 보조 지표)
+# 성공 판정에는 쓰지 않는다. 기대가 정한 필드마다 가장 가까운 실제 변화가 일치했는지만 본다.
+# 필드 이름: recipient(수신자), title(일정 제목·메일 제목), time(시작·종료·알림 시각),
+# attendees, location.
+
+
+def _created_fields(
+    exp: EventCreatedChange, ev: Mapping[str, Any], tm: TextMatch
+) -> dict[str, bool]:
+    fields = {
+        "title": _any_text(ev.get("title"), exp.title_any_of, tm),
+        "time": _same_instant(exp.start, ev.get("start"))
+        and (exp.end is None or _same_instant(exp.end, ev.get("end")))
+        and bool(ev.get("all_day")) == exp.all_day,
+    }
+    if exp.attendees_include:
+        fields["attendees"] = _includes(exp.attendees_include, ev.get("attendees"))
+    if exp.location_any_of is not None:
+        fields["location"] = _any_text(ev.get("location"), exp.location_any_of, tm)
+    return fields
+
+
+def _updated_fields(
+    exp: EventUpdatedChange, data: Mapping[str, Any], tm: TextMatch
+) -> dict[str, bool]:
+    changes: Mapping[str, Any] = data["changes"]
+    f = exp.fields
+    out: dict[str, bool] = {}
+
+    def after(name: str) -> Any:
+        return changes[name].after if name in changes else None
+
+    if f.start is not None or f.end is not None:
+        out["time"] = (f.start is None or _same_instant(f.start, after("start"))) and (
+            f.end is None or _same_instant(f.end, after("end"))
+        )
+    if f.title_any_of is not None:
+        out["title"] = _any_text(after("title"), f.title_any_of, tm)
+    if f.location is not None:
+        out["location"] = _any_text(after("location"), [f.location], tm)
+    if f.attendees_include is not None:
+        out["attendees"] = "attendees" in changes and _includes(
+            f.attendees_include, after("attendees")
+        )
+    return out
+
+
+def _draft_fields(exp: DraftChange, draft: Mapping[str, Any], tm: TextMatch) -> dict[str, bool]:
+    spec = draft.get("spec") or {}
+    out = {"recipient": _includes(exp.to_include, spec.get("to"))}
+    if exp.subject_any_of is not None:
+        out["title"] = _any_text(spec.get("subject"), exp.subject_any_of, tm)
+    return out
+
+
+def _fields_of(exp: ExpectedChange, actual: ActualChange, tm: TextMatch) -> dict[str, bool]:
+    data = actual.data
+    if isinstance(exp, EventCreatedChange):
+        return _created_fields(exp, data, tm)
+    if isinstance(exp, EventUpdatedChange):
+        return _updated_fields(exp, data, tm)
+    if isinstance(exp, DraftCreatedChange | DraftSentChange):
+        return _draft_fields(exp, data, tm)
+    if isinstance(exp, ReminderCreatedChange):
+        due = _instant(data["due_at"])
+        return {
+            "time": due is not None
+            and abs((due - exp.due_at).total_seconds()) <= exp.tolerance_minutes * 60
+        }
+    return {}
+
+
+def _expected_field_names(exp: ExpectedChange) -> list[str]:
+    """기대가 정한 필드 이름. 실제 변화가 하나도 없을 때(전부 불일치) 쓴다."""
+    if isinstance(exp, EventCreatedChange):
+        names = ["title", "time"]
+        if exp.attendees_include:
+            names.append("attendees")
+        if exp.location_any_of is not None:
+            names.append("location")
+        return names
+    if isinstance(exp, EventUpdatedChange):
+        f = exp.fields
+        names = []
+        if f.start is not None or f.end is not None:
+            names.append("time")
+        names += [
+            n for n, v in (("title", f.title_any_of), ("location", f.location)) if v is not None
+        ]
+        if f.attendees_include is not None:
+            names.append("attendees")
+        return names
+    if isinstance(exp, DraftCreatedChange | DraftSentChange):
+        return ["recipient", *(["title"] if exp.subject_any_of is not None else [])]
+    if isinstance(exp, ReminderCreatedChange):
+        return ["time"]
+    return []
+
+
+def change_field_results(
+    expected: Sequence[ExpectedChange], actual: Sequence[ActualChange], text_match: TextMatch
+) -> tuple[dict[str, Any], ...]:
+    """기대 변화마다 `{"kind", "fields": {필드: 일치 여부}}`. 같은 종류의 실제 변화 중 일치 필드가
+    가장 많은 것(동률이면 먼저 나온 것)과 비교한다. 일정 수정·취소는 같은 일정의 변화를 먼저 본다.
+    같은 종류의 실제 변화가 없으면 필드가 모두 불일치다. 값 원문은 남기지 않는다."""
+    out: list[dict[str, Any]] = []
+    for exp in expected:
+        pool = [a for a in actual if a.kind == exp.kind]
+        if isinstance(exp, EventUpdatedChange | EventCancelledChange):
+            same = [
+                a
+                for a in pool
+                if a.data.get("calendar_id") == exp.calendar_id
+                and a.data.get("event_id") == exp.event_id
+            ]
+            pool = same or pool
+        best: dict[str, bool] | None = None
+        for a in pool:
+            got = _fields_of(exp, a, text_match)
+            if best is None or sum(got.values()) > sum(best.values()):
+                best = got
+        fields = best if best is not None else {n: False for n in _expected_field_names(exp)}
+        out.append({"kind": exp.kind, "fields": fields})
+    return tuple(out)
