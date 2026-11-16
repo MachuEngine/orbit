@@ -214,3 +214,36 @@ def test_source_strings_skip_keys_and_non_json_is_raw() -> None:
 def test_is_grounded_rejects_unknown_kind() -> None:
     with pytest.raises(ValueError, match="알 수 없는"):
         is_grounded(Fact("color", "red", "red"), build_source_index([]))
+
+
+# ------------------------------------------------------------------ 금액·날짜 경계 (리뷰 보완)
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("3천5백만원", "35000000"),
+        ("3천5백만 원", "35000000"),
+        ("1억 2천만 원", "120000000"),
+        ("2천원", "2000"),
+        ("5백원", "500"),
+        ("30만원입니다", "300000"),
+        ("1억원", "100000000"),
+        ("12,000원이", "12000"),
+    ],
+)
+def test_compound_korean_amounts(text: str, value: str) -> None:
+    assert keys(text, "amount") == [("KRW", value)]
+
+
+def test_won_followed_by_hangul_word_is_not_an_amount() -> None:
+    assert keys("5원칙을 지킨다", "amount") == []
+    assert keys("동그란 원", "amount") == []
+
+
+def test_slash_dates_need_valid_range_and_non_fraction_context() -> None:
+    assert keys("12/3 마감", "date") == [(12, 3)]
+    assert keys("13/5", "date") == []
+    assert keys("3/4 분기 실적", "date") == []
+    assert keys("진행률 1/2 정도", "date") == []
+    assert keys("비율 3/4%", "date") == []

@@ -359,13 +359,18 @@ def _stats(args: argparse.Namespace) -> int:
         "response_models": stats.response_model_set(records),
     }
     report.update(metrics_v1.extra_metrics(records))  # 보조 지표 섹션(ADR-0029 §2)
+    schemas = sorted({int(r.get("result_schema", 1)) for r in records})
+    if len(schemas) > 1:
+        msg = f"결과 행의 result_schema가 섞여 있다({schemas}). 기록이 없는 행의 보조 지표는 빠진다"
+        report.setdefault("warnings", []).append(msg)
+        print(f"경고: {msg}", file=sys.stderr)
     by_reading = stats.ambiguity_ignored_by_reading(records)
     if by_reading is not None:
         report["ambiguity_ignored_by_reading"] = by_reading
     if not report["response_models"]["single"]:
-        report["warnings"] = [
+        report.setdefault("warnings", []).append(
             "실행 전체의 응답 모델이 하나가 아니다. 결과를 같은 모델로 해석하지 않는다"
-        ]
+        )
         print("경고: 실행 전체의 응답 모델이 하나가 아니다", file=sys.stderr)
     if args.compare:
         other = stats.load_results(args.compare, reject_model_mismatch=reject)

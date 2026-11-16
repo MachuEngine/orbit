@@ -21,7 +21,9 @@
 import math
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from orbit.evalrunner.fact_extract import (
     Fact,
@@ -253,7 +255,12 @@ def episode_sources(r: Record) -> list[str]:
     texts += [str(t.get("user", "")) for t in trace.get("turns", []) if isinstance(t, Mapping)]
     meta = _meta(r)
     if meta and isinstance(meta.get("as_of"), str):
-        texts.append(meta["as_of"])
+        # 기준 시각은 사용자 시간대의 현지 날짜만 근거로 쓴다(시각은 근거가 아니다)
+        try:
+            tz = ZoneInfo(str(r.get("time_zone") or "Asia/Seoul"))
+            texts.append(datetime.fromisoformat(meta["as_of"]).astimezone(tz).date().isoformat())
+        except (ValueError, KeyError):
+            pass
     return texts
 
 
@@ -486,7 +493,9 @@ def _tool_selection(rows: Sequence[Record]) -> dict[str, Any]:
         },
         "wrong_area_call_rate": _rate(wrong, calls),
         "calls_counted": calls,
-        "note": "기대 영역은 과제 근거 태그와 유형·시나리오 표에서 정한다(`TOOL_AREA` 등)",
+        "note": "기대 영역은 과제 근거 태그와 유형·시나리오 표에서 정한다(`TOOL_AREA` 등). "
+        "쓰기 과제는 대상을 찾으려 일정·메일을 조회하는데, 기대 영역에 그 데이터 영역이 "
+        "없으면 이 조회가 잘못된 영역 호출로 센다. 해석에 주의한다",
     }
 
 
