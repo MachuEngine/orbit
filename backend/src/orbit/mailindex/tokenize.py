@@ -41,3 +41,18 @@ def tokenize(text: str) -> list[str]:
             if normalized:
                 out.append(normalized)
     return out
+
+
+def tokenizer_config() -> dict[str, object]:
+    """토큰화 설정 요약(품사 규칙·정규화 규칙·Kiwi 버전). 평가용 색인 지문에 들어간다."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        kiwi_version = version("kiwipiepy")
+    except PackageNotFoundError:
+        kiwi_version = "unknown"
+    return {
+        "kiwipiepy": kiwi_version,
+        "content_tags": sorted(_CONTENT_TAGS),
+        "non_alnum": _NON_ALNUM.pattern,
+    }

@@ -77,8 +77,12 @@ async def sync_connection(
     connection_id: uuid.UUID,
     *,
     incremental_only: bool = False,
+    first_sync_max: int = FIRST_SYNC_MAX_MAILS,
 ) -> SyncResult:
     """연결 하나를 동기화한다. 연결이 없거나 해제됐으면 아무것도 하지 않는다.
+
+    `first_sync_max`는 범위 하나의 전체(첫) 동기화에서 읽는 최근 메일 수 상한이다. 기본값은 운영
+    값(`FIRST_SYNC_MAX_MAILS`)이고, 평가 실행기만 덮어쓴다(ADR-0028 §1).
 
     `incremental_only`(질의 직전 동기화)이면 첫 동기화·새 범위 읽기·전체 동기화는 하지 않고
     `skipped`로 끝낸다. 커넥터·임베딩 오류는 상태에 `error`로 기록하고 `error` 결과로 돌려준다.
@@ -97,7 +101,9 @@ async def sync_connection(
         ).scalar_one()
         if not locked:
             return SyncResult("busy")
-        return await _locked(mi, mail, workspace_id, connection_id, incremental_only)
+        return await _locked(
+            mi, mail, workspace_id, connection_id, incremental_only, first_sync_max
+        )
 
 
 async def _locked(
@@ -106,6 +112,7 @@ async def _locked(
     ws: uuid.UUID,
     cid: uuid.UUID,
     incremental_only: bool,
+    first_sync_max: int,
 ) -> SyncResult:
     async with mi.db.workspace_session(ws) as s:
         status = await store.connection_status(s, ws, cid)
@@ -116,7 +123,7 @@ async def _locked(
     if not scopes:
         return SyncResult("no_scopes")
 
-    run = _Run(mi, mail, ws, cid, scopes)
+    run = _Run(mi, mail, ws, cid, scopes, first_sync_max)
     try:
         return await _drive(mi, mail, ws, cid, run, scopes, state, incremental_only)
     except _ConnectionGone:
@@ -209,7 +216,9 @@ class _Run:
         ws: uuid.UUID,
         cid: uuid.UUID,
         scopes: list[ScopeRow],
+        first_sync_max: int = FIRST_SYNC_MAX_MAILS,
     ) -> None:
+        self._first_sync_max = first_sync_max
         self._mi = mi
         self._mail = mail
         self._ws = ws
@@ -226,7 +235,7 @@ class _Run:
             after = now - timedelta(days=scope.period_days)
             listed: list[str] = []
             token: str | None = None
-            while len(listed) < FIRST_SYNC_MAX_MAILS:
+            while len(listed) < self._first_sync_max:
                 page = await self._mail.list_message_ids(
                     scope.label_id, after=after, page_token=token
                 )
@@ -234,7 +243,7 @@ class _Run:
                 token = page.next_page_token
                 if token is None:
                     break
-            ids.update(dict.fromkeys(listed[:FIRST_SYNC_MAX_MAILS]))
+            ids.update(dict.fromkeys(listed[: self._first_sync_max]))
         kept: list[str] = []
         for message_id in ids:
             if await self._fetch_and_index(message_id):

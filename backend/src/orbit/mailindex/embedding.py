@@ -103,6 +103,8 @@ class OpenAIEmbedder:
         self._url = base_url.rstrip("/") + "/embeddings"
         self._timeout = timeout_s
         self._transport = transport
+        self.api_calls = 0  # 성공한 요청 수(평가 실행기의 비용 기록용)
+        self.usage_tokens = 0  # 응답 `usage.total_tokens` 누적. 응답에 없으면 더하지 않는다
 
     @property
     def model_id(self) -> str:
@@ -133,7 +135,18 @@ class OpenAIEmbedder:
             raise EmbeddingError("transient", f"임베딩 호출 실패: HTTP {resp.status_code}")
         if resp.status_code != 200:
             raise EmbeddingError("request", f"임베딩 호출 실패: HTTP {resp.status_code}")
-        return _parse(resp, len(batch))
+        vectors = _parse(resp, len(batch))
+        self.api_calls += 1
+        self.usage_tokens += _usage_tokens(resp)
+        return vectors
+
+
+def _usage_tokens(resp: httpx.Response) -> int:
+    try:
+        value = resp.json()["usage"]["total_tokens"]
+        return int(value) if isinstance(value, int) and value >= 0 else 0
+    except (ValueError, KeyError, TypeError):
+        return 0
 
 
 def _parse(resp: httpx.Response, expected: int) -> list[list[float]]:
