@@ -18,10 +18,10 @@
 
 import time
 import uuid
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import timedelta
-from typing import Any, cast
+from datetime import datetime, timedelta
+from typing import Any, Protocol, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +31,7 @@ from orbit.core.clock import Clock, FixedClock
 from orbit.core.ids import Uuid7Generator
 from orbit.db.session import AsyncDatabase
 from orbit.evalrunner.retrieval import worldmail
-from orbit.evalrunner.retrieval.embed_cache import CachingEmbedder
+from orbit.evalrunner.retrieval.embed_cache import BudgetExceeded, CachingEmbedder
 from orbit.evalrunner.retrieval.indexer import EvalIndexer, IndexHandle
 from orbit.mailindex.deps import MailIndexDeps
 from orbit.mailindex.embedding import Embedder
@@ -42,6 +42,14 @@ NEVER_STALE = timedelta(days=36_500)
 
 class IndexNotBuilt(RuntimeError):  # noqa: N818  도메인 용어
     """과제 계정의 평가용 색인이 만들어지지 않았다."""
+
+
+class UnsupportedSessionUse(AttributeError):
+    """색인 검색 세션에서 지원하지 않는 기능을 썼다."""
+
+
+class AsOfBeforeIndexedMail(RuntimeError):  # noqa: N818  도메인 용어
+    """과제 기준 시각이 그 계정 색인의 최신 메일보다 이르다(미래 메일이 검색될 수 있다)."""
 
 
 class WrongWorkspace(RuntimeError):  # noqa: N818  도메인 용어
@@ -62,15 +70,21 @@ class _RemappedSession:
         self._episode_ws = episode_ws
         self._index_ws = index_ws
 
-    async def execute(
-        self, statement: Any, params: Mapping[str, Any] | None = None, **kw: Any
-    ) -> Any:
-        if params is not None:
-            params = {k: self._index_ws if v == self._episode_ws else v for k, v in params.items()}
-        return await self._inner.execute(statement, params, **kw)
+    async def execute(self, statement: Any, params: Any = None, **kw: Any) -> Any:
+        if params is None:
+            return await self._inner.execute(statement, None, **kw)
+        if isinstance(params, Mapping):
+            return await self._inner.execute(statement, self._remap(params), **kw)
+        if isinstance(params, list | tuple) and all(isinstance(p, Mapping) for p in params):
+            return await self._inner.execute(statement, [self._remap(p) for p in params], **kw)
+        raise TypeError("색인 검색 세션은 딕셔너리(또는 그 목록) 인자만 지원한다")
+
+    def _remap(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        return {k: self._index_ws if v == self._episode_ws else v for k, v in params.items()}
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
+        # `execute` 밖의 세션 기능은 인자 바꿈을 거치지 않으므로 쓰지 못하게 크게 실패한다.
+        raise UnsupportedSessionUse(f"색인 검색 세션은 execute만 지원한다: {name}")
 
 
 class PinnedWorkspaceDatabase(AsyncDatabase):
@@ -96,12 +110,33 @@ class PinnedWorkspaceDatabase(AsyncDatabase):
             yield cast(AsyncSession, _RemappedSession(session, self._episode_ws, self._index_ws))
 
 
+class _BudgetWatchEmbedder:
+    """임베딩 비용 상한 초과를 기록하고 다시 던진다. 도구가 오류로 삼켜도 SUT가 알 수 있다."""
+
+    def __init__(self, inner: Embedder, owner: "EvalIndexProvider") -> None:
+        self._inner = inner
+        self._owner = owner
+
+    @property
+    def model_id(self) -> str:
+        return self._inner.model_id
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        try:
+            return await self._inner.embed(texts)
+        except BudgetExceeded as exc:
+            self._owner.budget_error = exc
+            raise
+
+
 class EvalIndexProvider:
     """과제 계정 -> 평가용 색인 핸들. 에피소드마다 그 계정 색인에 고정된 의존성을 만든다."""
 
     def __init__(self, handles: Mapping[str, IndexHandle], embedder: Embedder) -> None:
         self._handles = dict(handles)
         self._embedder = embedder
+        self.budget_error: BudgetExceeded | None = None  # 질의 임베딩 비용 상한 초과
+        self.zero_hit_searches = 0  # 색인 메일이 있는데 결과가 0건이었던 검색 수(경고용)
 
     @property
     def handles(self) -> Mapping[str, IndexHandle]:
@@ -125,7 +160,7 @@ class EvalIndexProvider:
             ),
             clock=clock,
             ids=ids,
-            embedder=self._embedder,
+            embedder=_BudgetWatchEmbedder(self._embedder, self),
             query_stale=NEVER_STALE,  # 질의 직전 동기화 끔(고정 시점 스냅샷)
         )
 
@@ -140,8 +175,44 @@ class EvalIndexProvider:
             "sync_before_query": False,
         }
 
+    def has_mails(self, account_id: str) -> bool:
+        handle = self._handles.get(account_id)
+        return handle is not None and handle.indexed_mails > 0
+
     def report(self) -> dict[str, Any]:
         return {a: h.to_dict() for a, h in sorted(self._handles.items())}
+
+
+class _TaskLike(Protocol):
+    @property
+    def task_id(self) -> str: ...
+
+    @property
+    def account_id(self) -> str: ...
+
+    @property
+    def as_of_time(self) -> datetime: ...
+
+
+def check_as_of(world: SimWorld, tasks: Iterable[_TaskLike]) -> None:
+    """과제 기준 시각이 그 계정 색인의 최신 메일 `sent_at` 이상인지 검사한다.
+
+    아니면 `AsOfBeforeIndexedMail`이다. 색인은 고정 스냅샷이라 기준 시각 뒤에 온 메일도 들어 있어
+    검색 결과가 미래 메일을 보여 줄 수 있기 때문이다.
+    """
+    latest: dict[str, datetime | None] = {}
+    bad: list[str] = []
+    for t in tasks:
+        if t.account_id not in latest:
+            sent = [m.sent_at for m in worldmail.mailbox_messages(world, t.account_id)]
+            latest[t.account_id] = max(sent) if sent else None
+        newest = latest[t.account_id]
+        if newest is not None and t.as_of_time < newest:
+            bad.append(t.task_id)
+    if bad:
+        raise AsOfBeforeIndexedMail(
+            f"기준 시각이 색인의 최신 메일보다 이른 과제 {len(bad)}개: {sorted(bad)[:5]}"
+        )
 
 
 async def build_eval_indexes(

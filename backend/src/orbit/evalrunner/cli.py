@@ -37,7 +37,12 @@ from orbit.evalrunner.retrieval.embed_cache import BudgetExceeded as EmbedBudget
 from orbit.evalrunner.retrieval.embed_cache import CachingEmbedder
 from orbit.evalrunner.retrieval.indexer import IndexBuildError
 from orbit.evalrunner.runflow_env import EvalDatabaseSettings, RunflowEnvironment
-from orbit.evalrunner.runflow_index import EvalIndexProvider, build_eval_indexes
+from orbit.evalrunner.runflow_index import (
+    AsOfBeforeIndexedMail,
+    EvalIndexProvider,
+    build_eval_indexes,
+    check_as_of,
+)
 from orbit.evalrunner.runflow_sut import VARIANTS
 from orbit.evalrunner.runner import (
     ExperimentBudget,
@@ -170,7 +175,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--index-dry-run", action="store_true",
-        help="--index on의 색인 비용만 추정해 출력하고 끝낸다(임베딩 호출·DB 접근 없음)",
+        help="--index on의 색인 비용만 추정해 출력하고 끝낸다(임베딩 호출·DB 접근 없음). "
+        "에피소드 중 모델이 보내는 검색 질의의 임베딩 비용은 추정에 포함하지 않는다",
     )  # fmt: skip
     run.add_argument(
         "--runflow-variant", action="append", default=[], choices=sorted(VARIANTS),
@@ -314,6 +320,8 @@ def _index_setup(args: argparse.Namespace, dataset: Dataset) -> _IndexSetup | No
     sample = args.estimate if args.estimate is not None else args.sample
     tasks = select_tasks(dataset.tasks_for(args.split), sample, args.seed)
     accounts = sorted({t.account_id for t in tasks})
+    # 색인은 고정 스냅샷이므로 기준 시각 뒤의 메일이 색인에 있으면 실행하지 않는다
+    check_as_of(SimWorld.load(dict(dataset.world_snapshot), FixedClock(worldmail.INDEX_NOW)), tasks)
     world_path = Path(args.dataset) / "world.json"
     model_id, fake, embed_settings = retrieval_cli._embedder_parts(args.embedder)
     setup = _IndexSetup(
@@ -480,6 +488,12 @@ def _run(args: argparse.Namespace) -> int:
         f"experiment_id={summary.experiment_id} episodes={done}/{summary.episodes_planned} "
         f"tokens={summary.total_tokens} cost_usd={summary.total_cost_usd:.6f}{note}"
     )
+    if provider is not None and provider.zero_hit_searches:
+        print(
+            f"경고: 색인 메일이 있는데 search_indexed_mail이 0건을 돌려준 검색 "
+            f"{provider.zero_hit_searches}회",
+            file=sys.stderr,
+        )
     if summary.stopped_reason is not None:
         print(f"누적 상한으로 중단했다: {summary.stopped_reason}", file=sys.stderr)
         return 3
@@ -558,7 +572,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except EmbedBudgetExceeded as exc:
         print(f"임베딩 비용 상한으로 중단했다: {exc}", file=sys.stderr)
         return 3
-    except (IndexBuildError, DatasetError, stats.ResultsError, UnknownSutError) as exc:
+    except (
+        AsOfBeforeIndexedMail,
+        IndexBuildError,
+        DatasetError,
+        stats.ResultsError,
+        UnknownSutError,
+    ) as exc:
         # 이 예외들의 메시지는 위치·이름만 담도록 직접 만든 것이다.
         print(f"오류: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2

@@ -30,6 +30,7 @@ from orbit.evalrunner.runflow_index import (
     EvalIndexProvider,
     IndexNotBuilt,
     PinnedWorkspaceDatabase,
+    UnsupportedSessionUse,
     WrongWorkspace,
     build_eval_indexes,
 )
@@ -361,6 +362,41 @@ async def test_query_does_not_sync_or_change_the_index(ix: Env) -> None:
     await ix.run([task("t-1")], {"t-1": search_script("견적서 납기")}, provider, world)
     assert await state() == before
     assert before[0] == worldmail.INDEX_NOW
+
+
+async def test_remapped_session_reads_only_the_pinned_index_rows(ix: Env) -> None:
+    provider = await ix.build(make_world(), ["acct-alice", "acct-bob"])
+    alice, bob = provider.handles["acct-alice"], provider.handles["acct-bob"]
+    episode_ws = uuid.uuid4()
+    pinned = PinnedWorkspaceDatabase(
+        ix.db, episode_workspace=episode_ws, index_workspace=alice.workspace_id
+    )
+    count = "SELECT count(*) FROM source_item WHERE workspace_id = :ws"
+    async with pinned.workspace_session(episode_ws) as s:
+        mine = (await s.execute(text(count), {"ws": episode_ws})).scalar_one()  # 인자가 바뀐다
+        theirs = (await s.execute(text(count), {"ws": bob.workspace_id})).scalar_one()
+        everything = (await s.execute(text("SELECT count(*) FROM source_item"))).scalar_one()
+        with pytest.raises(UnsupportedSessionUse):
+            await s.commit()  # execute 밖의 기능은 크게 실패한다
+        with pytest.raises(TypeError):
+            await s.execute(text("SELECT 1"), 5)  # type: ignore[call-overload]
+    assert mine == alice.indexed_mails
+    assert theirs == 0  # 다른 계정 워크스페이스 행은 RLS로 읽히지 않는다
+    assert everything == alice.indexed_mails
+
+
+async def test_query_embedding_budget_stops_the_experiment(ix: Env) -> None:
+    world = make_world()
+    provider = await ix.build(world, ["acct-alice"])
+    capped = CachingEmbedder(
+        CountingEmbedder(), ix.tmp / "capped", max_cost_usd=1e-9, price_per_mtok=1000.0
+    )
+    limited = EvalIndexProvider(provider.handles, capped)
+    script = {"t-1": search_script("새 질의문 견적"), "t-2": search_script("새 질의문 점심")}
+    summary, _ = await ix.run([task("t-1"), task("t-2")], script, limited, world)
+    assert summary.stopped_reason == "embedding_cost"
+    assert summary.results == []  # 에피소드 실패(sut_error)로 섞이지 않는다
+    assert limited.budget_error is not None
 
 
 def _payload(tool_text: str) -> str:

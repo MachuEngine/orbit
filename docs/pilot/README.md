@@ -136,8 +136,13 @@ uv run python -m orbit.evalrunner run \
   ```
   고정 시점 스냅샷이다. 질의 직전 동기화는 끄고 `indexed_as_of`는 색인 시각(2026-11-16)으로 고정한다. 에피소드 중
   Sim 쓰기(발송 등)는 색인에 반영하지 않는다. 결과 `config.sut_config`에 `index_mode: on`, 계정별 색인 지문, 임베딩
-  모델이 들어가 off 결과와 다른 실험으로 구분된다. `--max-embed-cost-usd`는 색인과 질의 임베딩의 누적 상한이다
-  (초과하면 종료 코드 3).
+  모델이 들어가 off 결과와 다른 실험으로 구분된다. `--max-embed-cost-usd`는 색인과 질의 임베딩의 누적 상한이다.
+  에피소드 중 질의 임베딩이 상한을 넘으면 그 에피소드는 결과에 넣지 않고 실험을 중단한다(`stopped_reason`
+  `embedding_cost`, 종료 코드 3). `--index-dry-run` 추정에는 모델이 보내는 검색 질의의 임베딩 비용이 들어 있지
+  않으므로 상한에 여유를 둔다.
+- `--index on`은 시작 때 모든 과제의 `as_of`가 그 계정 색인의 최신 메일 `sent_at` 이상인지 검사하고, 아니면 오류
+  (종료 코드 2)로 거부한다(색인이 고정 스냅샷이라 기준 시각 뒤의 메일이 검색될 수 있다). 색인 메일이 있는데
+  `search_indexed_mail`이 0건을 돌려준 검색은 실행 끝에 경고 횟수로 낸다.
 - 결과 행에는 `assistant_v0` 행의 필드에 더해 `approval_violations`(DB `execution`·`approval`과 Sim 호출 기록으로
   러너가 계산), `turns`(턴별 run 상태·승인 수·오류 종류), `reminders_created`가 있다. 설정 지문의
   `config.sut_config`에 runflow 설정 지문, 답 제출 확장 버전(`eval-answer-v2`), 색인 모드가 들어간다.

@@ -42,6 +42,7 @@ from orbit.evalrunner.episode import (
 )
 from orbit.evalrunner.metrics_v1 import task_meta
 from orbit.evalrunner.oracle import min_tool_calls
+from orbit.evalrunner.retrieval.embed_cache import BudgetExceeded as EmbedBudgetExceeded
 from orbit.evalrunner.runflow_env import (
     DbObservation,
     RunflowEnvironment,
@@ -369,6 +370,8 @@ async def run_episode(
                 error_type, detail = "budget_exceeded", "time"
             else:
                 error_type, detail = "sut_error", type(exc).__name__
+        except EmbedBudgetExceeded:
+            raise  # 에피소드 실패가 아니라 실험 중단이다(`run_experiment`가 받는다)
         except ConnectorError as exc:
             error_type, detail = "connector_error_unhandled", type(exc).__name__
         except Exception as exc:  # SUT의 어떤 오류도 에피소드 실패로 기록한다
@@ -645,23 +648,28 @@ async def run_experiment(
         random.Random(f"order:{seed}").shuffle(ordered)  # noqa: S311
         for repeat in range(1, repeats + 1):
             for task in ordered:
-                result = await run_episode(
-                    task=task,
-                    base_world=base_world,
-                    sut=sut_factory(),
-                    llm=llm_factory(task, repeat),
-                    budget=budget,
-                    fault=fault,
-                    seed=seed,
-                    repeat=repeat,
-                    experiment_id=exp_id,
-                    config=config,
-                    fingerprint=fingerprint,
-                    declared_model_id=model_id,
-                    monotonic=monotonic,
-                    database_env=database_env,
-                    min_calls=floors.get(task.task_id),
-                )
+                try:
+                    result = await run_episode(
+                        task=task,
+                        base_world=base_world,
+                        sut=sut_factory(),
+                        llm=llm_factory(task, repeat),
+                        budget=budget,
+                        fault=fault,
+                        seed=seed,
+                        repeat=repeat,
+                        experiment_id=exp_id,
+                        config=config,
+                        fingerprint=fingerprint,
+                        declared_model_id=model_id,
+                        monotonic=monotonic,
+                        database_env=database_env,
+                        min_calls=floors.get(task.task_id),
+                    )
+                except EmbedBudgetExceeded:
+                    # 질의 임베딩 비용 상한. 이 에피소드는 결과에 넣지 않는다.
+                    summary.stopped_reason = "embedding_cost"
+                    return summary
                 summary.results.append(result)
                 if sink is not None:
                     sink(result)

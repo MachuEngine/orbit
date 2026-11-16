@@ -12,6 +12,7 @@
 `UsageRecorder`에서 직접 읽는다(ADR-0009 §3).
 """
 
+import logging
 import uuid
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -50,6 +51,8 @@ from orbit.runflow.graph import advance_run
 from orbit.runflow.patterns import PATTERN_VERSIONS, PATTERNS, REACT, PatternMemory
 from orbit.runflow.prompt import PROMPT_VERSION
 from orbit.runflow.repo import latest_approval_for_run, lock_run
+
+logger = logging.getLogger(__name__)
 
 MAX_APPROVALS_PER_RUN = (
     5  # run 하나의 승인 왕복 상한(그래프 `max_steps`와 별개로 무한 반복을 막는다)
@@ -97,6 +100,35 @@ class _TraceLLM:
         if kind:
             self._trace.record_pattern_step(str(kind), response.text)
         return response
+
+
+class _IndexWatchLLM:
+    """`--index on`에서 색인 메일이 있는데 검색이 0건이었던 횟수를 센다(경고용, 채점에 안 쓴다).
+
+    모델에 들어가는 도구 결과(데이터 봉투)를 호출 ID별로 한 번씩만 본다.
+    """
+
+    def __init__(self, inner: LLM, index: EvalIndexProvider, account_id: str) -> None:
+        self._inner = inner
+        self._index = index
+        self._account = account_id
+        self._seen: set[str] = set()
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        for m in request.messages:
+            if m.role != "tool" or m.tool_call_id in self._seen:
+                continue
+            self._seen.add(str(m.tool_call_id))
+            body = m.content or ""
+            if (
+                'source="search_indexed_mail"' in body
+                and '"results": []' in body
+                and "index_empty" not in body
+                and self._index.has_mails(self._account)
+            ):
+                self._index.zero_hit_searches += 1
+                logger.warning("색인 메일이 있는데 검색 결과가 0건이다: account=%s", self._account)
+        return await self._inner.complete(request)
 
 
 class _Submission:
@@ -203,7 +235,10 @@ class RunflowV0SUT:
             db=database.db,
             clock=clock,
             ids=database.ids,
-            llm=_TraceLLM(_StepGuardLLM(episode.llm, episode.steps.consume), episode.trace),
+            llm=self._watch(
+                _TraceLLM(_StepGuardLLM(episode.llm, episode.steps.consume), episode.trace),
+                episode,
+            ),
             resolver=resolver,
             tz=ZoneInfo(episode.task.time_zone),
             checkpoint_conninfo=database.checkpoint_conninfo,
@@ -223,21 +258,36 @@ class RunflowV0SUT:
         )
         decisions = 0  # 에피소드 전체의 승인 결정 수(정책 순번)
         last_run: uuid.UUID | None = None
-        for index, turn in enumerate(t for t in episode.task.turns if t.role == "user"):
-            submission.answer = None  # 성공 판정은 마지막 run의 제출이다
-            try:
-                last_run = await _start_run(deps, database, turn, fingerprint)
-                decisions = await _drive(
-                    deps, database, last_run, episode.task.approval_policy, decisions
-                )
-            finally:  # 턴별 구조화된 답 기록(ADR-0029). 실패한 턴에도 남긴다
-                episode.trace.record_turn_structured(index, submission.answer)
-        text = await _assistant_text(deps, database, last_run) if last_run is not None else ""
+        try:
+            for index, turn in enumerate(t for t in episode.task.turns if t.role == "user"):
+                submission.answer = None  # 성공 판정은 마지막 run의 제출이다
+                try:
+                    last_run = await _start_run(deps, database, turn, fingerprint)
+                    decisions = await _drive(
+                        deps, database, last_run, episode.task.approval_policy, decisions
+                    )
+                finally:  # 턴별 구조화된 답 기록(ADR-0029). 실패한 턴에도 남긴다
+                    episode.trace.record_turn_structured(index, submission.answer)
+            text = await _assistant_text(deps, database, last_run) if last_run is not None else ""
+        except Exception:
+            self._raise_budget_error()  # 도구가 삼킨 질의 임베딩 상한 초과를 우선한다
+            raise
+        self._raise_budget_error()
         return EpisodeOutput(
             final_text=text,
             structured=submission.answer,
             pattern_stats=memory.stats.to_dict() if memory is not None else None,
         )
+
+    def _raise_budget_error(self) -> None:
+        """질의 임베딩이 비용 상한을 넘었으면 에피소드 실패가 아니라 실험 중단으로 알린다."""
+        if self._index is not None and self._index.budget_error is not None:
+            raise self._index.budget_error
+
+    def _watch(self, llm: LLM, episode: Episode) -> LLM:
+        if self._index is None:
+            return llm
+        return _IndexWatchLLM(llm, self._index, episode.task.account_id)
 
     def _mail_index(
         self, episode: Episode, database: EpisodeDatabase, clock: FixedClock
