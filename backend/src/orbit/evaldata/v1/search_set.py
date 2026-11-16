@@ -8,6 +8,8 @@ import hashlib
 import json
 import math
 import random
+import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -17,9 +19,100 @@ from orbit.evaldata.v1 import search_templates
 from orbit.evaldata.v1.facts import norm as normalize
 from orbit.evaldata.v1.skeleton import SearchTopicTruth
 from orbit.evaldata.v1.task_world import TaskWorldError, load_task_world
+from orbit.evaldata.v1.templates import SEARCH_NOUNS
 
-FORMS = ("keyword", "question", "person_time")
+FORMS = ("keyword", "paraphrase_question", "person_time")
 SIZES = ("200", "1000", "5000")
+FROZEN_CONTRACT_SHA256 = "a5c503aa720557e7dd4e595dd5c55d0584b162539020088ff649e8da05dcd801"
+BASELINE_SPLIT_SEED = 20261116
+
+
+def _tokens(text: str) -> list[str]:
+    """Split NFC/casefolded text on non-word characters, retaining Korean word boundaries."""
+    return re.findall(r"[^\W_]+", unicodedata.normalize("NFC", text).casefold(), re.UNICODE)
+
+
+def _overlap(query: str, phrase: str) -> float:
+    query_tokens = _tokens(query)
+    topic_tokens = set(_tokens(phrase))
+    return (
+        sum(token in topic_tokens for token in query_tokens) / len(query_tokens)
+        if query_tokens
+        else 0.0
+    )
+
+
+def _lexical_overlap_by_form(
+    rows: list[dict[str, Any]], contexts: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, float | int]]:
+    values: dict[str, list[float]] = {form: [] for form in FORMS}
+    for row in rows:
+        truth = contexts[row["scenario_id"]]["truth"]
+        values[row["form"]].append(_overlap(row["query"], truth.topic_phrase))
+    return {
+        form: {
+            "count": len(scores),
+            "mean": round(sum(scores) / len(scores), 8) if scores else 0.0,
+            "max": round(max(scores), 8) if scores else 0.0,
+        }
+        for form, scores in sorted(values.items())
+    }
+
+
+def _outside_project(query: str, project: str) -> str:
+    return normalize(query).replace(normalize(project), "")
+
+
+def _assert_no_topic_noun(query: str, project: str, noun: str, phrase: str) -> None:
+    normalized = normalize(query)
+    if normalize(phrase) in normalized:
+        raise SearchSetError("paraphrase form contains original topic phrase")
+    outside = _outside_project(query, project)
+    noun_tokens = [normalize(token) for token in noun.split()]
+    if any(token and token in outside for token in noun_tokens):
+        raise SearchSetError("paraphrase form contains original topic noun token")
+
+
+def _unique_time_precision(context: dict[str, Any], contexts: list[dict[str, Any]]) -> str | None:
+    """Find the coarsest source-time precision unique within project/person/fact-kind contexts."""
+    when = context["when"]
+    format_by_precision = {
+        "month": "%Y-%m",
+        "date": "%Y-%m-%d",
+        "minute": "%Y-%m-%dT%H:%M",
+        "second": "%Y-%m-%dT%H:%M:%S",
+    }
+    for precision, fmt in format_by_precision.items():
+        key = when.strftime(fmt)
+        matches = sum(
+            other["project"] == context["project"]
+            and other["author"] == context["author"]
+            and other["truth"].fact.kind == context["truth"].fact.kind
+            and other["when"].strftime(fmt) == key
+            for other in contexts
+        )
+        if matches == 1:
+            return precision
+    return None
+
+
+def _alias_identifies_topic(
+    noun: str, alias: str, context: dict[str, Any], contexts: list[dict[str, Any]]
+) -> bool:
+    normalized_alias = normalize(alias)
+    for other in contexts:
+        other_noun = other["noun"]
+        if (
+            other_noun == noun
+            or other["project"] != context["project"]
+            or other["truth"].fact.kind != context["truth"].fact.kind
+        ):
+            continue
+        for other_alias in search_templates.NOUN_SYNONYMS[other_noun]:
+            normalized_other = normalize(other_alias)
+            if normalized_alias in normalized_other or normalized_other in normalized_alias:
+                return False
+    return True
 
 
 class SearchSetError(ValueError):
@@ -182,7 +275,7 @@ def generate(
                     )
     search_bodies = set().union(*bodies_by_topic.values())
     d2_overlap = sorted(search_bodies.intersection(d2_bodies))
-    # Drop every candidate in a colliding phrase group, so selection order cannot decide ownership.
+    # Suppress ambiguous keyword slots for colliding full phrases; paraphrases can disambiguate.
     collisions: set[str] = set()
     for i, (sid, phrase) in enumerate(phrase_rows):
         for other_sid, other in phrase_rows[i + 1 :]:
@@ -209,50 +302,143 @@ def generate(
         sid: "search-" + hashlib.sha256(find(sid).encode()).hexdigest()[:12]
         for sid, _ in phrase_rows
     }
+    if set(search_templates.NOUN_SYNONYMS) != set(SEARCH_NOUNS):
+        raise SearchSetError("topic noun synonym table does not cover SEARCH_NOUNS exactly")
+    for noun, aliases in search_templates.NOUN_SYNONYMS.items():
+        if any(not isinstance(alias, str) or not normalize(alias) for alias in aliases):
+            raise SearchSetError(f"topic noun {noun!r} has an empty or invalid synonym")
+        distinct_aliases = {
+            normalize(alias) for alias in aliases if isinstance(alias, str) and alias
+        }
+        if len(distinct_aliases) < 2:
+            raise SearchSetError(f"topic noun {noun!r} needs at least two synonyms")
+        original_tokens = [normalize(token) for token in noun.split()]
+        if any(
+            token and token in normalize(alias) for alias in aliases for token in original_tokens
+        ):
+            raise SearchSetError(f"synonym for {noun!r} repeats an original noun token")
+
+    contexts: dict[str, dict[str, Any]] = {}
     for scenario in topics:
         truth = SearchTopicTruth.model_validate(scenario.truth)
-        if scenario.scenario_id in collisions:
-            dropped["ambiguous_topic_phrase"] += len(FORMS)
-            continue
+        source = max(truth.relevance_by_body, key=lambda bid: truth.relevance_by_body[bid])
+        kind = truth.artifact_by_body[source]
+        body_spec = sk.bodies.get(source)
+        project = body_spec.context.project if body_spec is not None else None
+        if not project or not truth.topic_phrase.startswith(project + " "):
+            raise SearchSetError(
+                f"{scenario.scenario_id}: topic phrase has no exact project prefix"
+            )
+        noun = truth.topic_phrase[len(project) + 1 :]
+        if not noun.strip() or noun not in SEARCH_NOUNS:
+            raise SearchSetError(
+                f"{scenario.scenario_id}: topic phrase has no meaningful noun split"
+            )
+        sizebox = box_by_size["5000"]
+        source_id = (sizebox.message_by_body if kind == "mail" else sizebox.file_by_body)[source]
+        source_account = tw.accounts[next(k for k, b in boxes.items() if b is sizebox)]
+        source_item = (source_account.messages if kind == "mail" else source_account.files)[
+            source_id
+        ]
+        if kind == "mail":
+            sender = source_item.get("from", {})
+            author = str(sender.get("name", "")) if isinstance(sender, dict) else ""
+            when_raw = source_item.get("sent_at")
+        else:
+            author = str((source_item.get("owners") or [{"name": ""}])[0].get("name", ""))
+            when_raw = source_item.get("modified_at")
+        if not author or not when_raw:
+            raise SearchSetError(f"{scenario.scenario_id}: source person or time is missing")
+        when = dt.datetime.fromisoformat(str(when_raw).replace("Z", "+00:00")).astimezone(
+            source_account.tz
+        )
+        contexts[scenario.scenario_id] = {
+            "scenario_id": scenario.scenario_id,
+            "truth": truth,
+            "project": project,
+            "noun": noun,
+            "kind": kind,
+            "author": author,
+            "when": when,
+        }
+    precision_counts: Counter[str] = Counter()
+    topic_drop_counts: Counter[str] = Counter()
+    split_slots = [
+        {"query_id": f"{scenario.scenario_id}-{form}", "cluster_id": clusters[scenario.scenario_id]}
+        for scenario in topics
+        for form in FORMS
+    ]
+    assign_splits(split_slots, BASELINE_SPLIT_SEED)
+    split_by_id = {row["query_id"]: row["split"] for row in split_slots}
+    for scenario in topics:
+        context = contexts[scenario.scenario_id]
+        truth = context["truth"]
         for form in FORMS:
             rng = random.Random(f"{seed}:{scenario.scenario_id}:{form}")  # noqa: S311
-            source = max(truth.relevance_by_body, key=lambda bid: truth.relevance_by_body[bid])
-            kind = truth.artifact_by_body[source]
-            sizebox = box_by_size["5000"]
-            source_id = (sizebox.message_by_body if kind == "mail" else sizebox.file_by_body)[
-                source
-            ]
-            source_account = tw.accounts[next(k for k, b in boxes.items() if b is sizebox)]
-            source_item = (source_account.messages if kind == "mail" else source_account.files)[
-                source_id
-            ]
-            author = ""
-            if kind == "mail":
-                sender = source_item.get("from", {})
-                author = str(sender.get("name", "")) if isinstance(sender, dict) else ""
-            when_raw = source_item.get("sent_at", source_item.get("modified_at"))
-            when = dt.datetime.fromisoformat(str(when_raw).replace("Z", "+00:00")).astimezone(
-                source_account.tz
-            )
-            if not author:
-                author = str((source_item.get("owners") or [{"name": ""}])[0].get("name", ""))
+            project, noun = context["project"], context["noun"]
+            author, when, kind = context["author"], context["when"], context["kind"]
+            synonym: str | None = None
+            precision = "month"
+            if form == "keyword" and scenario.scenario_id in collisions:
+                dropped["ambiguous_topic_phrase"] += 1
+                topic_drop_counts[scenario.scenario_id] += 1
+                continue
+            if form == "paraphrase_question":
+                alias_candidates = list(search_templates.NOUN_SYNONYMS[noun])
+                rng.shuffle(alias_candidates)
+                for alias in alias_candidates:
+                    # Only competing topics in this project and fact kind make an alias ambiguous.
+                    if _alias_identifies_topic(noun, alias, context, list(contexts.values())):
+                        synonym = alias
+                        break
+                if synonym is None:
+                    dropped["ambiguous_synonym"] += 1
+                    topic_drop_counts[scenario.scenario_id] += 1
+                    continue
+            if form == "person_time":
+                selected_precision = _unique_time_precision(context, list(contexts.values()))
+                if selected_precision is None:
+                    dropped["ambiguous_person_time"] += 1
+                    topic_drop_counts[scenario.scenario_id] += 1
+                    continue
+                precision = selected_precision
+                precision_counts[precision] += 1
             query = search_templates.render(
-                truth.topic_phrase, form, author or "담당자", when, kind, truth.fact.kind, rng
+                truth.topic_phrase,
+                form,
+                author,
+                when,
+                kind,
+                truth.fact.kind,
+                rng,
+                project=project,
+                noun=noun,
+                synonym=synonym,
+                time_precision=precision,
             )
             if any(normalize(surface) in normalize(query) for surface in truth.fact.surface_forms):
-                dropped["answer_fact_leakage"] += 1
-                continue
-            if (
-                sum(
-                    1
-                    for s in topics
-                    if normalize(SearchTopicTruth.model_validate(s.truth).topic_phrase)
-                    in normalize(query)
+                raise SearchSetError(
+                    f"{scenario.scenario_id}: answer fact leaked into {form} query"
                 )
-                != 1
-            ):
-                dropped["nonunique_topic_phrase"] += 1
-                continue
+            missing_field = search_templates.missing_required_field(
+                query,
+                form,
+                project,
+                truth.topic_phrase,
+                truth.fact.kind,
+                synonym=synonym,
+                author=author,
+                when=when,
+                time_precision=precision,
+            )
+            if missing_field is not None:
+                raise SearchSetError(
+                    f"{scenario.scenario_id}: {form} query is missing required {missing_field}"
+                )
+            if form != "keyword":
+                _assert_no_topic_noun(query, project, noun, truth.topic_phrase)
+                if form == "paraphrase_question" and synonym is None:
+                    raise SearchSetError("question query has no topic synonym")
             relevance: dict[str, dict[str, Any]] = {}
             for size, box in box_by_size.items():
                 account_id = next(k for k, b in boxes.items() if b is box)
@@ -271,7 +457,7 @@ def generate(
                     "query_id": f"{scenario.scenario_id}-{form}",
                     "query": query,
                     "scenario_id": scenario.scenario_id,
-                    "split": "",
+                    "split": split_by_id[f"{scenario.scenario_id}-{form}"],
                     "cluster_id": clusters[scenario.scenario_id],
                     "as_of": scenario.as_of.isoformat(),
                     "form": form,
@@ -279,32 +465,18 @@ def generate(
                     "body_refs": dict(sorted(truth.relevance_by_body.items())),
                 }
             )
-    query_keys: set[str] = set()
-    deduplicated: list[dict[str, Any]] = []
-    for row in candidates:
-        key = normalize(row["query"])
-        if key in query_keys:
-            dropped["duplicate_query"] += 1
-            continue
-        query_keys.add(key)
-        deduplicated.append(row)
-    candidates = deduplicated
-    retained_by_topic = Counter(row["scenario_id"] for row in candidates)
-    insufficient = {scenario_id for scenario_id, count in retained_by_topic.items() if count < 2}
-    if insufficient:
-        dropped["insufficient_forms"] += sum(
-            retained_by_topic[scenario_id] for scenario_id in insufficient
-        )
-        candidates = [row for row in candidates if row["scenario_id"] not in insufficient]
+    candidates = _deduplicate_queries(candidates, dropped, topic_drop_counts)
+    if over_dropped := {sid: count for sid, count in topic_drop_counts.items() if count > 1}:
+        raise SearchSetError(f"more than one query dropped for a topic: {over_dropped}")
     if not 150 <= len(candidates) <= 200:
         raise SearchSetError(f"generated query count outside 150..200: {len(candidates)}")
-    assign_splits(candidates, seed)
     counts = Counter((r["split"], r["form"]) for r in candidates)
     test_clusters = len({r["cluster_id"] for r in candidates if r["split"] == "test"})
     rough_half_width = 1.96 * 0.5 / math.sqrt(test_clusters) * 100
     manifest = {
         "schema_version": "search-v1",
         "seed": seed,
+        "split_seed": BASELINE_SPLIT_SEED,
         "generator_git_sha": git_sha or current_git_sha(),
         "world_sha256": tw.world_sha256,
         "skeleton_sha256": tw.skeleton_sha256,
@@ -317,6 +489,14 @@ def generate(
         },
         "counts_by_split_form": {f"{s}:{f}": n for (s, f), n in sorted(counts.items())},
         "dropped": dict(sorted(dropped.items())),
+        "dropped_by_topic": dict(sorted(topic_drop_counts.items())),
+        "synonym_noun_count": len(search_templates.NOUN_SYNONYMS),
+        "synonym_variant_count": sum(
+            len({normalize(alias) for alias in aliases})
+            for aliases in search_templates.NOUN_SYNONYMS.values()
+        ),
+        "person_time_precision_counts": dict(sorted(precision_counts.items())),
+        "lexical_overlap_by_form": _lexical_overlap_by_form(candidates, contexts),
         "missing_grade1_topics": missing_grade1,
         "d2_evidence_body_overlap_count": len(d2_overlap),
         "d2_evidence_body_overlap": d2_overlap,
@@ -333,6 +513,22 @@ def generate(
         "artifacts": ["search.jsonl", "search-manifest.json"],
     }
     return candidates, manifest
+
+
+def _deduplicate_queries(
+    rows: list[dict[str, Any]], dropped: Counter[str], per_topic: Counter[str]
+) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for row in rows:
+        key = normalize(row["query"])
+        if key in seen:
+            dropped["duplicate_query"] += 1
+            per_topic[row["scenario_id"]] += 1
+            continue
+        seen.add(key)
+        unique.append(row)
+    return unique
 
 
 def assign_splits(rows: list[dict[str, Any]], seed: int) -> None:
@@ -485,6 +681,29 @@ def load_search_set(path: Path, manifest_path: Path | None = None) -> list[dict[
             raise SearchSetError("manifest cluster_count mismatch")
         if manifest.get("clusters_by_split") != cluster_counts:
             raise SearchSetError("manifest clusters_by_split mismatch")
+        if manifest.get("split_seed") != BASELINE_SPLIT_SEED:
+            raise SearchSetError("manifest split_seed mismatch")
+        if manifest.get("synonym_noun_count", 0) < len(SEARCH_NOUNS) or manifest.get(
+            "synonym_variant_count", 0
+        ) < 2 * len(SEARCH_NOUNS):
+            raise SearchSetError("manifest synonym metadata is incomplete")
+        if not isinstance(manifest.get("dropped_by_topic"), dict) or any(
+            not isinstance(count, int) or count < 0 or count > 1
+            for count in manifest["dropped_by_topic"].values()
+        ):
+            raise SearchSetError("manifest dropped_by_topic is invalid")
+        overlap = manifest.get("lexical_overlap_by_form")
+        if not isinstance(overlap, dict) or set(overlap) != set(FORMS):
+            raise SearchSetError("manifest lexical_overlap_by_form is invalid")
+        for form, stats in overlap.items():
+            if (
+                not isinstance(stats, dict)
+                or stats.get("count") != counts[("dev", form)] + counts[("test", form)]
+                or not isinstance(stats.get("mean"), (int, float))
+                or not isinstance(stats.get("max"), (int, float))
+                or not 0 <= stats["mean"] <= stats["max"] <= 1
+            ):
+                raise SearchSetError("manifest lexical overlap statistics mismatch")
     return rows
 
 

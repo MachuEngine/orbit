@@ -1,8 +1,13 @@
+import datetime as dt
 import hashlib
 import json
+import re
 import subprocess
 import sys
+import unicodedata
+from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -11,12 +16,17 @@ from orbit.evaldata.generate import git_sha as current_git_sha
 from orbit.evaldata.v1 import search_templates
 from orbit.evaldata.v1.facts import norm as normalize
 from orbit.evaldata.v1.search_set import (
+    BASELINE_SPLIT_SEED,
+    FROZEN_CONTRACT_SHA256,
     SearchSetError,
+    _deduplicate_queries,
+    _unique_time_precision,
     assign_splits,
     generate,
     load_search_set,
 )
 from orbit.evaldata.v1.skeleton import SearchTopicTruth, Skeleton
+from orbit.evaldata.v1.templates import SEARCH_NOUNS
 
 ROOT = Path(__file__).resolve().parents[5]
 DATA = ROOT / "eval" / "datasets" / "orbit-eval" / "v1"
@@ -50,7 +60,7 @@ def _synthetic_rows() -> list[dict[str, Any]]:
                 "split": "dev" if index < 75 else "test",
                 "cluster_id": f"cluster-{index}",
                 "as_of": "2026-11-01T00:00:00Z",
-                "form": ("keyword", "question", "person_time")[index % 3],
+                "form": ("keyword", "paraphrase_question", "person_time")[index % 3],
                 "mailboxes": {
                     size: {"account_id": f"account-{size}", "relevance": {f"id-{index}": 2}}
                     for size in ("200", "1000", "5000")
@@ -70,7 +80,7 @@ def test_actual_world_generates_180_queries_and_complete_qrels() -> None:
     assert len(rows) == 180
     assert manifest["scenario_count"] == 60
     assert manifest["missing_grade1_topics"] == 0
-    assert set(r["form"] for r in rows) == {"keyword", "question", "person_time"}
+    assert set(r["form"] for r in rows) == {"keyword", "paraphrase_question", "person_time"}
     assert all(set(r["mailboxes"]) == {"200", "1000", "5000"} for r in rows)
     assert all(2 in box["relevance"].values() for r in rows for box in r["mailboxes"].values())
     assert any(0 in box["relevance"].values() for r in rows for box in r["mailboxes"].values())
@@ -85,14 +95,161 @@ def test_actual_world_generates_180_queries_and_complete_qrels() -> None:
     }
     for row in rows:
         truth = truths[row["scenario_id"]]
-        assert normalize(truth.topic_phrase) in normalize(row["query"])
-        assert (
-            sum(normalize(t.topic_phrase) in normalize(row["query"]) for t in truths.values()) == 1
-        )
+        if row["form"] == "keyword":
+            assert normalize(truth.topic_phrase) in normalize(row["query"])
+        else:
+            assert normalize(truth.topic_phrase) not in normalize(row["query"])
+            noun = truth.topic_phrase.split(" ", 1)[1]
+            outside_project = normalize(row["query"]).replace(
+                normalize(truth.topic_phrase.split(" ", 1)[0]), ""
+            )
+            assert all(normalize(token) not in outside_project for token in noun.split())
         assert all(
             normalize(surface) not in normalize(row["query"])
             for surface in truth.fact.surface_forms
         )
+
+
+def test_frozen_contract_hash_and_partition_ignore_wording_seed() -> None:
+    contract_hashes = []
+    splits = []
+    for seed in (20261116, 1001):
+        rows, manifest = generate(DATA, seed, "test-sha")
+        contract: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            value = {
+                key: row[key] for key in ("split", "cluster_id", "mailboxes", "body_refs", "as_of")
+            }
+            if row["scenario_id"] in contract:
+                assert contract[row["scenario_id"]] == value
+            else:
+                contract[row["scenario_id"]] = value
+        encoded = json.dumps(
+            contract, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        contract_hashes.append(hashlib.sha256(encoded).hexdigest())
+        splits.append({sid: values["split"] for sid, values in contract.items()})
+        assert manifest["split_seed"] == BASELINE_SPLIT_SEED
+    assert contract_hashes == [FROZEN_CONTRACT_SHA256, FROZEN_CONTRACT_SHA256]
+    assert splits[0] == splits[1]
+
+
+def test_synonym_coverage_and_actual_person_time_refinement() -> None:
+    rows, manifest = generate(DATA, 20261116, "test-sha")
+    assert manifest["synonym_noun_count"] == 20
+    assert manifest["synonym_variant_count"] >= 40
+    assert manifest["person_time_precision_counts"] == {"date": 19, "month": 41}
+    assert len(rows) == 180
+    assert set(search_templates.NOUN_SYNONYMS) == set(SEARCH_NOUNS)
+    for noun, aliases in search_templates.NOUN_SYNONYMS.items():
+        assert len({normalize(alias) for alias in aliases}) >= 2
+        assert all(
+            normalize(token) not in normalize(alias) for token in noun.split() for alias in aliases
+        )
+
+
+def test_keyword_queries_match_lexical_baseline() -> None:
+    baseline = [
+        json.loads(line)
+        for line in (DATA / "search.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    rows, _ = generate(DATA, 20261116, "test-sha")
+    old_keywords = {
+        row["scenario_id"]: row["query"] for row in baseline if row["form"] == "keyword"
+    }
+    new_keywords = {row["scenario_id"]: row["query"] for row in rows if row["form"] == "keyword"}
+    assert old_keywords == new_keywords
+
+
+def test_lexical_overlap_statistics_are_hand_calculable() -> None:
+    rows, manifest = generate(DATA, 20261116, "test-sha")
+    assert _test_overlap("달빛정원, 달빛정원! x", "달빛정원 B") == 2 / 3
+    phrases = {
+        scenario.scenario_id: SearchTopicTruth.model_validate(scenario.truth).topic_phrase
+        for scenario in Skeleton.model_validate_json(
+            (DATA / "skeleton.json").read_bytes()
+        ).scenarios
+        if scenario.type == "search_topic"
+    }
+    for form in ("keyword", "paraphrase_question", "person_time"):
+        form_rows = [row for row in rows if row["form"] == form]
+        values = [_test_overlap(row["query"], phrases[row["scenario_id"]]) for row in form_rows]
+        assert manifest["lexical_overlap_by_form"][form] == {
+            "count": len(values),
+            "mean": round(sum(values) / len(values), 8),
+            "max": round(max(values), 8),
+        }
+
+
+def _test_overlap(query: str, phrase: str) -> float:
+    """Independent hand oracle: NFC/casefold then Unicode word tokens, punctuation split."""
+    query_tokens = re.findall(r"[^\W_]+", unicodedata.normalize("NFC", query).casefold())
+    topic_tokens = set(re.findall(r"[^\W_]+", unicodedata.normalize("NFC", phrase).casefold()))
+    return sum(token in topic_tokens for token in query_tokens) / len(query_tokens)
+
+
+def test_time_uniqueness_uses_source_conditions_not_wording() -> None:
+    fact = SimpleNamespace(kind="amount")
+    first = {
+        "project": "달빛정원",
+        "author": "전준혁",
+        "truth": SimpleNamespace(fact=fact),
+        "when": dt.datetime(2026, 10, 14, 14, 15, tzinfo=dt.UTC),
+        "wording": "최신 안내 자료",
+    }
+    same_month = {**first, "when": dt.datetime(2026, 10, 29, 14, 40, tzinfo=dt.UTC)}
+    assert _unique_time_precision(first, [first, same_month]) == "date"
+    same_date = {**first, "when": dt.datetime(2026, 10, 14, 19, 55, tzinfo=dt.UTC)}
+    assert _unique_time_precision(first, [first, same_date]) == "minute"
+    same_minute = {**first}
+    assert _unique_time_precision(first, [first, same_minute]) is None
+
+
+def test_ambiguity_drop_limit_is_one_per_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import orbit.evaldata.v1.search_set as search_set
+
+    target = "sc-search-topic-0001"
+    original = search_set._unique_time_precision
+
+    def ambiguous_one(context: dict[str, Any], contexts: list[dict[str, Any]]) -> str | None:
+        return None if context["scenario_id"] == target else original(context, contexts)
+
+    monkeypatch.setattr(search_set, "_unique_time_precision", ambiguous_one)
+    rows, manifest = generate(DATA, 20261116, "test-sha")
+    assert len(rows) == 179
+    assert manifest["dropped"]["ambiguous_person_time"] == 1
+    assert manifest["dropped_by_topic"] == {target: 1}
+
+    skeleton = Skeleton.model_validate_json((DATA / "skeleton.json").read_bytes())
+    scenario = next(s for s in skeleton.scenarios if s.scenario_id == target)
+    noun = SearchTopicTruth.model_validate(scenario.truth).topic_phrase.split(" ", 1)[1]
+    aliases = ("unique phrase alpha", "unique phrase beta")
+    synonyms = dict(search_templates.NOUN_SYNONYMS)
+    synonyms[noun] = aliases
+    synonyms["계약 갱신"] = (*synonyms["계약 갱신"], aliases[0])
+    monkeypatch.setattr(search_templates, "NOUN_SYNONYMS", synonyms)
+    monkeypatch.setattr(search_set, "_unique_time_precision", original)
+    rows, manifest = generate(DATA, 20261116, "test-sha")
+    assert len(rows) == 180
+    assert "ambiguous_synonym" not in manifest["dropped"]
+
+    synonyms = dict(search_templates.NOUN_SYNONYMS)
+    synonyms[noun] = aliases
+    synonyms["출시 일정"] = (*synonyms["출시 일정"], *aliases)
+    monkeypatch.setattr(search_templates, "NOUN_SYNONYMS", synonyms)
+    monkeypatch.setattr(search_set, "_unique_time_precision", ambiguous_one)
+    with pytest.raises(SearchSetError, match="more than one query dropped"):
+        generate(DATA, 20261116, "test-sha")
+
+
+def test_duplicate_normalized_synonyms_fail_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    synonyms = dict(search_templates.NOUN_SYNONYMS)
+    synonyms["견적"] = ("같은 표현", "같은 표현")
+    monkeypatch.setattr(search_templates, "NOUN_SYNONYMS", synonyms)
+    with pytest.raises(SearchSetError, match="at least two synonyms"):
+        generate(DATA, 20261116, "test-sha")
 
 
 def test_search_generation_and_saved_loader_are_deterministic(tmp_path: Path) -> None:
@@ -260,6 +417,14 @@ def test_loader_checks_manifest_cluster_counts(tmp_path: Path) -> None:
         "counts_by_split_form": form_counts,
         "cluster_count": 150,
         "clusters_by_split": {"dev": 75, "test": 75},
+        "split_seed": BASELINE_SPLIT_SEED,
+        "synonym_noun_count": 20,
+        "synonym_variant_count": 40,
+        "dropped_by_topic": {},
+        "lexical_overlap_by_form": {
+            form: {"count": 50, "mean": 0.5, "max": 0.5}
+            for form in ("keyword", "paraphrase_question", "person_time")
+        },
     }
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -297,12 +462,11 @@ def test_colliding_full_topic_phrases_are_dropped_with_reason(tmp_path: Path) ->
     topics = [s for s in skeleton["scenarios"] if s["type"] == "search_topic"]
     topics[1]["truth"]["topic_phrase"] = topics[0]["truth"]["topic_phrase"]
     _save_dataset(root, skeleton, world)
-    rows, manifest = generate(root, 20261116, "test-sha")
-    assert len(rows) == 174
-    assert manifest["dropped"]["ambiguous_topic_phrase"] == 6
+    with pytest.raises(SearchSetError, match="exact project prefix"):
+        generate(root, 20261116, "test-sha")
 
 
-def test_answer_leakage_and_normalized_query_duplicates_are_counted(
+def test_answer_leakage_and_duplicate_queries_are_counted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = "sc-search-topic-0001"
@@ -314,36 +478,92 @@ def test_answer_leakage_and_normalized_query_duplicates_are_counted(
     target_fact = target_truth.fact.surface_forms[0]
 
     def leak(
-        phrase: str, form: str, author: str, when: Any, kind: str, fact_kind: str, rng: Any
+        phrase: str,
+        form: str,
+        author: str,
+        when: Any,
+        kind: str,
+        fact_kind: str,
+        rng: Any,
+        **kwargs: Any,
     ) -> str:
         if phrase == target_phrase:
-            return original(phrase, form, author, when, kind, fact_kind, rng) + " " + target_fact
-        return original(phrase, form, author, when, kind, fact_kind, rng)
+            return (
+                original(phrase, form, author, when, kind, fact_kind, rng, **kwargs)
+                + " "
+                + target_fact
+            )
+        return original(phrase, form, author, when, kind, fact_kind, rng, **kwargs)
 
     monkeypatch.setattr(search_templates, "render", leak)
-    rows, manifest = generate(DATA, 20261116, "test-sha")
-    assert len(rows) == 177
-    assert manifest["dropped"]["answer_fact_leakage"] == 3
+    with pytest.raises(SearchSetError, match="answer fact leaked"):
+        generate(DATA, 20261116, "test-sha")
     monkeypatch.setattr(search_templates, "render", original)
 
-    phrase = target_phrase
+    duplicate_rows = [
+        {"query": "Alpha   beta", "scenario_id": "first"},
+        {"query": "alpha beta", "scenario_id": "second"},
+    ]
+    dropped: Counter[str] = Counter()
+    per_topic: Counter[str] = Counter()
+    unique = _deduplicate_queries(duplicate_rows, dropped, per_topic)
+    assert unique == duplicate_rows[:1]
+    assert dropped["duplicate_query"] == 1
+    assert per_topic["second"] == 1
 
-    def duplicate(
-        topic_phrase: str, form: str, author: str, when: Any, kind: str, fact_kind: str, rng: Any
+
+@pytest.mark.parametrize(
+    ("form", "field", "scenario_id"),
+    [
+        ("keyword", "topic_phrase", "sc-search-topic-0001"),
+        ("paraphrase_question", "project", "sc-search-topic-0001"),
+        ("paraphrase_question", "synonym", "sc-search-topic-0001"),
+        ("paraphrase_question", "fact_kind", "sc-search-topic-0001"),
+        ("person_time", "project", "sc-search-topic-0001"),
+        ("person_time", "author", "sc-search-topic-0001"),
+        ("person_time", "source_time", "sc-search-topic-0001"),
+        ("person_time", "fact_kind", "sc-search-topic-0001"),
+        ("person_time", "source_time", "sc-search-topic-0005"),
+    ],
+)
+def test_renderer_cannot_omit_required_form_fields(
+    monkeypatch: pytest.MonkeyPatch, form: str, field: str, scenario_id: str
+) -> None:
+    original = search_templates.render
+    skeleton_model = Skeleton.model_validate_json((DATA / "skeleton.json").read_bytes())
+    target_scenario = next(
+        scenario for scenario in skeleton_model.scenarios if scenario.scenario_id == scenario_id
+    )
+    target_phrase = SearchTopicTruth.model_validate(target_scenario.truth).topic_phrase
+
+    def omit(
+        phrase: str,
+        current_form: str,
+        author: str,
+        when: Any,
+        artifact_kind: str,
+        fact_kind: str,
+        rng: Any,
+        **kwargs: Any,
     ) -> str:
-        if topic_phrase == phrase:
-            return f"{topic_phrase} 최종 금액"
-        return original(topic_phrase, form, author, when, kind, fact_kind, rng)
+        query = original(
+            phrase, current_form, author, when, artifact_kind, fact_kind, rng, **kwargs
+        )
+        if current_form != form or phrase != target_phrase:
+            return query
+        required = {
+            "topic_phrase": phrase,
+            "project": kwargs["project"],
+            "synonym": kwargs["synonym"],
+            "fact_kind": search_templates.fact_cue(fact_kind),
+            "author": author,
+            "source_time": search_templates.format_source_time(when, kwargs["time_precision"]),
+        }[field]
+        return query.replace(required, "", 1)
 
-    monkeypatch.setattr(search_templates, "render", duplicate)
-    rows, manifest = generate(DATA, 20261116, "test-sha")
-    assert len(rows) == 177
-    assert manifest["dropped"]["duplicate_query"] == 2
-    assert manifest["dropped"]["insufficient_forms"] == 1
-    retained: dict[str, int] = {}
-    for row in rows:
-        retained[row["scenario_id"]] = retained.get(row["scenario_id"], 0) + 1
-    assert all(2 <= count <= 4 for count in retained.values())
+    monkeypatch.setattr(search_templates, "render", omit)
+    with pytest.raises(SearchSetError, match=f"{form} query is missing required {field}"):
+        generate(DATA, 20261116, "test-sha")
 
 
 @pytest.mark.parametrize("raw_row", ["[]", "null", '"text"'])
