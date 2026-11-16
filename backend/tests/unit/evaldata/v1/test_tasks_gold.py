@@ -300,7 +300,14 @@ def test_write_expected_changes_have_the_right_shape() -> None:
         (c,) = d.gold.expected_changes  # type: ignore[misc]
         assert isinstance(c, EventCreatedChange)
         assert c.calendar_id == acct_of(d).primary_calendar_id
-        assert c.start.utcoffset() is not None and c.end > c.start and c.attendees_include
+        assert c.start.utcoffset() is not None and c.end is None
+        truth = d.scenario.truth
+        assert c.attendees_include == [truth.requester_email]  # type: ignore[union-attr]
+        assert truth.requester_name in d.turns[0] and "참석자로" in d.turns[0]  # type: ignore[union-attr]
+        body = norm(str(acct_of(d).message_of(truth.message).get("body_text", "")))  # type: ignore[union-attr]
+        assert any(norm(f) in body for f in tt.local_time_forms(c.start, acct_of(d).tz))
+        if c.location_any_of:
+            assert norm(c.location_any_of[0]) in body
         kinds.add(c.kind)
     for d in drafts("event_change_target"):
         (c,) = d.gold.expected_changes  # type: ignore[misc]
@@ -449,3 +456,106 @@ def test_builders_are_deterministic_for_a_seed() -> None:
     b = build_day_agenda(Ctx(tw, 7), sc, "single")
     assert isinstance(a, Draft) and isinstance(b, Draft)
     assert a.turns == b.turns and a.gold == b.gold
+
+
+# ------------------------------------------------------------ 자동 검수에서 드러난 결함 규칙 (③)
+
+
+def test_mismatch_question_asks_for_the_calendar_value() -> None:
+    for d in drafts("mismatch"):
+        assert "캘린더" in d.turns[0], d.turns[0]
+
+
+def test_mail_fact_question_names_only_facts_that_the_body_contains() -> None:
+    from orbit.evaldata.v1.task_gold import _message_text
+
+    checked = 0
+    for d in drafts("mail_fact", "single"):
+        t = d.scenario.truth
+        assert isinstance(t, MailFactTruth)
+        names = tt.FACT_NAMES.get(t.fact_kind)
+        if not names:
+            continue
+        body = norm(_message_text(acct_of(d), t.latest_message))
+        question = norm(d.turns[0])
+        used = [n for n in names if norm(n) in question]
+        assert used, d.turns[0]
+        assert all(norm(n) in body for n in used), (d.turns[0], used)
+        checked += 1
+    assert checked >= 10
+
+
+def test_fact_name_prefers_the_specific_name_then_neutral_then_none() -> None:
+    from orbit.evaldata.v1.task_gold import _fact_name
+
+    assert _fact_name("place", "논의 장소는 5층입니다") == "논의 장소"
+    assert _fact_name("place", "비치 장소는 5층입니다") == "장소"
+    assert _fact_name("deadline", "발송 예정일은 11월 3일") is None
+    assert _fact_name("deadline", "제출 마감일은 11월 3일") == "제출 마감일"
+    assert _fact_name("decision", "무엇이든") == ""  # 이름을 쓰지 않는 종류
+
+
+def test_doc_fact_date_question_names_the_fact_and_the_body_has_it() -> None:
+    from orbit.evaldata.v1.task_gold import _file_text
+
+    found = 0
+    for d in drafts("doc_fact"):
+        t = d.scenario.truth
+        if t.fact.kind not in ("deadline", "date"):  # type: ignore[union-attr]
+            continue
+        spec = tt.DOC_DATE_NAMES[t.fact.fact_id]  # type: ignore[union-attr]
+        assert spec[0] in d.turns[0], d.turns[0]
+        assert norm(spec[1]) in norm(_file_text(acct_of(d), t.file))  # type: ignore[union-attr]
+        found += 1
+    assert found >= 1
+
+
+def test_doc_amount_question_uses_a_name_the_document_contains() -> None:
+    from orbit.evaldata.v1.task_gold import _file_text
+
+    for d in drafts("doc_fact"):
+        t = d.scenario.truth
+        if t.fact.kind != "amount":  # type: ignore[union-attr]
+            continue
+        text = norm(_file_text(acct_of(d), t.file))  # type: ignore[union-attr]
+        used = [n for n in tt.FACT_NAMES["amount"] if norm(n) in norm(d.turns[0])]
+        assert used and all(norm(n) in text for n in used), d.turns[0]
+
+
+def test_multi_turn_afternoon_turn_states_the_boundary_and_includes_noon_starts() -> None:
+    assert all("낮 12시" in t for t in tt.MT_DAY_FOLLOWUP)
+    assert not any("오후" in t for t in tt.MT_DAY_FOLLOWUP)
+    tw, _ = real_task_world()
+    ctx = Ctx(tw, 1)
+    noon_starts = 0
+    for sc in tw.skeleton.scenarios:
+        if sc.type != "day_agenda":
+            continue
+        truth = sc.truth
+        assert isinstance(truth, DayAgendaTruth)
+        acct = tw.account(sc.account_id)
+        at_noon = [
+            e
+            for e in acct.events_on_day(truth.day)
+            if not e.all_day and e.start.astimezone(acct.tz).time() == time(12, 0)
+        ]
+        result = build_day_agenda(ctx, sc, "mt")
+        if at_noon and isinstance(result, Draft):
+            noon_starts += 1
+            ids = {e.event_id for e in result.gold.expected_answer.events}  # type: ignore[union-attr]
+            assert all(e.id in ids for e in at_noon)  # 12:00 정각 시작은 정답에 들어간다
+    assert noon_starts >= 1
+    assert drafts("day_agenda", "mt")
+
+
+def test_scenarios_whose_evidence_has_a_foreign_year_make_no_tasks() -> None:
+    from orbit.evaldata.v1.tasks import FOREIGN_YEAR_REASON, _evidence_foreign_years
+
+    tw, _ = real_task_world()
+    cands = real_candidates()
+    year = tw.skeleton.snapshot_time.year
+    assert year == 2026
+    assert any(FOREIGN_YEAR_REASON in key for key in cands.dropped)
+    for d in cands.drafts.values():
+        acct = tw.account(d.scenario.account_id)
+        assert not _evidence_foreign_years(acct, d.scenario.evidence, year), d.scenario.scenario_id

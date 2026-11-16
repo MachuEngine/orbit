@@ -1,0 +1,240 @@
+{"decision": "approve", "note": "human", "task_id": "mt-day-agenda-0001"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-day-agenda-0003"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-day-agenda-0006"}
+{"decision": "exclude", "note": "human", "task_id": "mt-day-agenda-0011"}
+{"decision": "approve", "note": "human", "task_id": "mt-mail-fact-0006"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0029"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0032"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0034"}
+{"decision": "exclude", "note": "human", "task_id": "mt-mail-fact-0043"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0047"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0062"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0081"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0082"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0083"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0096"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-mail-fact-0099"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-person-next-0001"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-person-next-0002"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "mt-person-next-0004"}
+{"decision": "approve", "note": "human", "task_id": "mt-person-next-0008"}
+{"decision": "approve", "note": "human", "task_id": "t-absent-0002"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0003"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0007"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0012"}
+{"decision": "approve", "note": "human", "task_id": "t-absent-0013"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0020"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0027"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0029"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0031"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0034"}
+{"decision": "approve", "note": "human", "task_id": "t-absent-0035"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0038"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0040"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0045"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "task_id": "t-absent-0047"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-absent-0048"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-all-day-0001"}
+{"decision": "approve", "note": "inherited from t-all-day-0001", "task_id": "t-all-day-0001-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-all-day-0003"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-all-day-0003-para"}
+{"decision": "exclude", "note": "human", "task_id": "t-ambiguous-0003"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-ambiguous-0006"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-ambiguous-0008"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-ambiguous-0011"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-ambiguous-0015"}
+{"decision": "approve", "note": "human", "task_id": "t-ambiguous-0016"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-ambiguous-0019"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-ambiguous-0023"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-ambiguous-0026"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-ambiguous-0028"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-ambiguous-0030"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "task_id": "t-ambiguous-0033"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "task_id": "t-ambiguous-0034"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "task_id": "t-ambiguous-0037"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "task_id": "t-ambiguous-0041"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "task_id": "t-ambiguous-0042"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-cancellation-0002"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-cancellation-0002-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-cancellation-0004"}
+{"decision": "approve", "note": "inherited from t-cancellation-0004", "task_id": "t-cancellation-0004-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-cancellation-0011"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-cancellation-0012"}
+{"decision": "approve", "note": "human", "task_id": "t-cross-midnight-0004"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-cross-midnight-0004-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-cross-midnight-0006"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-day-agenda-0002"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-day-agenda-0005"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-day-agenda-0009"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-day-agenda-0009-para"}
+{"decision": "exclude", "note": "human", "task_id": "t-day-agenda-0010"}
+{"decision": "exclude", "note": "inherited from t-day-agenda-0010", "task_id": "t-day-agenda-0010-fault"}
+{"decision": "approve", "note": "human", "task_id": "t-deadline-0001"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0005"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0008"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0018"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0024"}
+{"decision": "approve", "note": "human", "task_id": "t-deadline-0025"}
+{"decision": "exclude", "note": "human", "task_id": "t-deadline-0026"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0028"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0029"}
+{"decision": "exclude", "note": "human", "task_id": "t-deadline-0030"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0034"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0035"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0037"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0039"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0040"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-deadline-0045"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-fact-0006"}
+{"decision": "exclude", "note": "human", "task_id": "t-doc-fact-0007"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-fact-0011"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-fact-0016"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-doc-fact-0016-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-fact-0020"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-fact-0021"}
+{"decision": "approve", "note": "human", "task_id": "t-doc-fact-0022"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-fact-0024"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-version-0002"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-doc-version-0002-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-version-0005"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-doc-version-0005-para"}
+{"decision": "approve", "note": "human", "task_id": "t-doc-version-0007"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-version-0009"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-version-0010"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-version-0018"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-version-0019"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-doc-version-0021"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-event-change-target-0002"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-event-change-target-0006"}
+{"decision": "exclude", "note": "human", "task_id": "t-event-change-target-0007"}
+{"decision": "exclude", "note": "inherited from t-event-change-target-0007", "task_id": "t-event-change-target-0007-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-event-change-target-0008"}
+{"decision": "approve", "note": "inherited from t-event-change-target-0008", "task_id": "t-event-change-target-0008-fault"}
+{"decision": "exclude", "note": "human", "task_id": "t-event-change-target-0009"}
+{"decision": "exclude", "note": "inherited from t-event-change-target-0009", "task_id": "t-event-change-target-0009-fault"}
+{"decision": "exclude", "note": "human", "task_id": "t-event-change-target-0011"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-event-change-target-0015"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-event-change-target-0016"}
+{"decision": "approve", "note": "inherited from t-event-change-target-0016", "task_id": "t-event-change-target-0016-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-free-slot-0001"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-free-slot-0001-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-free-slot-0006"}
+{"decision": "approve", "note": "inherited from t-free-slot-0006", "task_id": "t-free-slot-0006-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-free-slot-0008"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-free-slot-0009"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0002"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0003"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "task_id": "t-mail-fact-0005"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-mail-fact-0005-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0007"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0009"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-mail-fact-0009-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0012"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0013"}
+{"decision": "approve", "note": "human", "task_id": "t-mail-fact-0016"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0026"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-mail-fact-0026-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0030"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-mail-fact-0030-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0038"}
+{"decision": "approve", "note": "inherited from t-mail-fact-0038", "task_id": "t-mail-fact-0038-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0044"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0045"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0051"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0055"}
+{"decision": "approve", "note": "inherited from t-mail-fact-0055", "task_id": "t-mail-fact-0055-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0059"}
+{"decision": "approve", "note": "inherited from t-mail-fact-0059", "task_id": "t-mail-fact-0059-fault"}
+{"decision": "exclude", "note": "human", "task_id": "t-mail-fact-0060"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0061"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0063"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0064"}
+{"decision": "exclude", "note": "human", "task_id": "t-mail-fact-0065"}
+{"decision": "exclude", "note": "excluded with t-mail-fact-0065", "task_id": "t-mail-fact-0065-para"}
+{"decision": "exclude", "note": "human", "task_id": "t-mail-fact-0066"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0069"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0073"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-mail-fact-0073-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0076"}
+{"decision": "approve", "note": "inherited from t-mail-fact-0076", "task_id": "t-mail-fact-0076-fault"}
+{"decision": "approve", "note": "human", "task_id": "t-mail-fact-0079"}
+{"decision": "exclude", "note": "human", "task_id": "t-mail-fact-0085"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0087"}
+{"decision": "approve", "note": "inherited from t-mail-fact-0087", "task_id": "t-mail-fact-0087-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0088"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-mail-fact-0088-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0092"}
+{"decision": "approve", "note": "human", "task_id": "t-mail-fact-0095"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0098"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0102"}
+{"decision": "exclude", "note": "human", "task_id": "t-mail-fact-0106"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0107"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-mail-fact-0107-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0112"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0113"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0114"}
+{"decision": "approve", "note": "inherited from t-mail-fact-0114", "task_id": "t-mail-fact-0114-fault"}
+{"decision": "exclude", "note": "human", "task_id": "t-mail-fact-0116"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mail-fact-0119"}
+{"decision": "approve", "note": "human (정답 수정 후 재검수 승인)", "task_id": "t-meeting-request-0005"}
+{"decision": "approve", "note": "inherited from t-meeting-request-0005", "task_id": "t-meeting-request-0005-fault"}
+{"decision": "approve", "note": "human (정답 수정 후 재검수 승인)", "task_id": "t-meeting-request-0006"}
+{"decision": "approve", "note": "human (정답 수정 후 재검수 승인)", "task_id": "t-meeting-request-0010"}
+{"decision": "approve", "note": "human (정답 수정 후 재검수 승인)", "task_id": "t-meeting-request-0012"}
+{"decision": "approve", "note": "inherited from t-meeting-request-0012", "task_id": "t-meeting-request-0012-fault"}
+{"decision": "approve", "note": "human (정답 수정 후 재검수 승인)", "task_id": "t-meeting-request-0013"}
+{"decision": "approve", "note": "human (정답 수정 후 재검수 승인)", "task_id": "t-meeting-request-0014"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0002"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0003"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0004"}
+{"decision": "approve", "note": "inherited from t-mismatch-0004", "task_id": "t-mismatch-0004-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0006"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0011"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0012"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-mismatch-0012-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0016"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0019"}
+{"decision": "approve", "note": "inherited from t-mismatch-0019", "task_id": "t-mismatch-0019-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0021"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0032"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0036"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0037"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0038"}
+{"decision": "approve", "note": "human", "task_id": "t-mismatch-0039"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-mismatch-0046"}
+{"decision": "approve", "note": "human", "task_id": "t-mismatch-0047"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-mismatch-0047-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-person-next-0003"}
+{"decision": "approve", "note": "inherited from t-person-next-0003", "task_id": "t-person-next-0003-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-person-next-0007"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-person-next-0010"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-person-next-0010-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-person-next-0012"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-project-week-0003"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-project-week-0004"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-project-week-0004-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-project-week-0007"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-project-week-0007-para"}
+{"decision": "exclude", "note": "human", "task_id": "t-project-week-0011"}
+{"decision": "exclude", "note": "inherited from t-project-week-0011", "task_id": "t-project-week-0011-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-reply-needed-0005"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-reply-needed-0008"}
+{"decision": "approve", "note": "inherited from t-reply-needed-0008", "task_id": "t-reply-needed-0008-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-reply-needed-0010"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-reply-needed-0012"}
+{"decision": "approve", "note": "inherited from t-reply-needed-0012", "task_id": "t-reply-needed-0012-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-reply-needed-0013"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-reply-needed-0021"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-reschedule-0001"}
+{"decision": "approve", "note": "inherited from t-reschedule-0001", "task_id": "t-reschedule-0001-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-reschedule-0002"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-reschedule-0002-para"}
+{"decision": "approve", "note": "human", "task_id": "t-reschedule-0005"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-reschedule-0012"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-tz-event-0003"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-tz-event-0006"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-tz-event-0006-para"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-tz-event-0008"}
+{"decision": "approve", "note": "inherited from t-tz-event-0008", "task_id": "t-tz-event-0008-fault"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "task_id": "t-tz-event-0011"}
+{"decision": "approve", "note": "human: paraphrase meaning check", "task_id": "t-tz-event-0011-para"}

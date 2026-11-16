@@ -878,3 +878,42 @@ def test_query_wording_change_keeps_counts_and_contract() -> None:
     ]
     keys = ("query_id", "split", "cluster_id", "mailboxes", "body_refs", "as_of", "scenario_id")
     assert [{k: r[k] for k in keys} for r in rows] == [{k: r[k] for k in keys} for r in saved]
+
+
+def test_date_queries_use_a_neutral_date_name_that_fits_every_grade_two_body() -> None:
+    assert search_templates.fact_cue("amount") == "최종 금액"
+    assert search_templates.fact_cue("deadline") == "확정 날짜"
+    rows, _ = generate(DATA, 20261116, "test-sha")
+    skeleton = Skeleton.model_validate_json((DATA / "skeleton.json").read_bytes())
+    kinds = {
+        s.scenario_id: SearchTopicTruth.model_validate(s.truth).fact.kind
+        for s in skeleton.scenarios
+        if s.type == "search_topic"
+    }
+    checked = 0
+    for row in rows:
+        if kinds[row["scenario_id"]] == "amount":
+            continue
+        # 등급 2 본문은 전달 기한·배송일·교육 일정 등 여러 이름을 쓰므로 "마감"으로 부르지 않는다
+        assert "마감" not in row["query"], row["query"]
+        if row["form"] != "keyword":
+            assert "확정 날짜" in row["query"], row["query"]
+        checked += 1
+    assert checked >= 30
+
+
+def test_manifest_lists_body_defect_topics_as_exclusion_candidates_without_dropping_rows() -> None:
+    rows, manifest = generate(DATA, 20261116, "test-sha")
+    candidates = manifest["exclusion_candidates"]
+    assert len(rows) == 180
+    assert manifest["exclusion_candidate_count"] == len(candidates) >= 10
+    assert set(candidates.values()) <= {
+        "foreign_year",
+        "grade1_confirmed_other_value",
+        "grade2_estimate",
+        "grade2_placeholder",
+    }
+    assert candidates["sc-search-topic-0042"] == "grade2_estimate"
+    assert candidates["sc-search-topic-0050"] == "grade2_placeholder"
+    assert candidates["sc-search-topic-0031"] == "foreign_year"
+    assert sum(manifest["exclusion_candidates_by_reason"].values()) == len(candidates)

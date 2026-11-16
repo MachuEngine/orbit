@@ -45,6 +45,7 @@ from orbit.evaldata import dataset as ds
 from orbit.evaldata.generate import git_sha
 from orbit.evaldata.schema import Counts, Manifest, SplitRatio, Task, Turn
 from orbit.evaldata.v1 import paraphrase as pp
+from orbit.evaldata.v1.body_checks import foreign_years
 from orbit.evaldata.v1.realize_models import (
     FamilyModel,
     LLMFactory,
@@ -159,6 +160,23 @@ class Candidates:
     dropped: Counter[str] = field(default_factory=Counter)  # "유형/형태: 사유"
 
 
+FOREIGN_YEAR_REASON = "근거 본문에 세계 기준 연도가 아닌 연도 표기가 있다"
+
+
+def _evidence_foreign_years(account: Any, evidence: Sequence[Any], world_year: int) -> list[str]:
+    """근거 메일·문서 본문에 `world_year`가 아닌 연도 표기가 있으면 그 연도들."""
+    found: list[str] = []
+    for ref in evidence:
+        if ref.kind == "message":
+            text = str(account.message_of(ref).get("body_text", ""))
+        elif ref.kind == "file":
+            text = str(account.file_of(ref).get("text", ""))
+        else:
+            continue
+        found += [y for y in foreign_years(text, world_year) if y not in found]
+    return found
+
+
 def build_candidates(ctx: Ctx) -> Candidates:
     """모든 시나리오·형태의 설계도를 만든다. 세계와 어긋나면 `TaskGenError`다."""
     out = Candidates()
@@ -174,6 +192,11 @@ def build_candidates(ctx: Ctx) -> Candidates:
                 account.message_of(ref)
             else:
                 account.file_of(ref)
+        world_year = ctx.tw.skeleton.snapshot_time.year
+        if _evidence_foreign_years(account, sc.evidence, world_year):
+            for form in forms_of(sc.type):
+                out.dropped[f"{sc.type}/{form}: {FOREIGN_YEAR_REASON}"] += 1
+            continue
         for form in forms_of(sc.type):
             result = builder(ctx, sc, form)
             if isinstance(result, str):

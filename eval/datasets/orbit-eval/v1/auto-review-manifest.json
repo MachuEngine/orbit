@@ -1,0 +1,98 @@
+{
+  "by_kind": {
+    "search": {
+      "flagged": 25,
+      "pass": 155
+    },
+    "task": {
+      "flagged": 29,
+      "pass": 163
+    }
+  },
+  "families": {
+    "anthropic": {
+      "calls": 400,
+      "cost_usd": 0.206356,
+      "input_tokens": 732775,
+      "model_config": {
+        "family": "anthropic",
+        "max_output_tokens": 6000,
+        "model_id": "anthropic/claude-haiku-5.5",
+        "price_cached_input_per_mtok": 0.01,
+        "price_input_per_mtok": 0.1,
+        "price_output_per_mtok": 0.5,
+        "price_source": "기본값(예시). 실행 전에 공급자 가격표로 확인해야 한다",
+        "provider_order": [
+          "Anthropic"
+        ],
+        "reasoning_effort": null,
+        "reasoning_effort_sent": false,
+        "route": "openrouter",
+        "temperature": null,
+        "temperature_sent": false,
+        "timeout_seconds": 120.0
+      },
+      "output_tokens": 266158
+    },
+    "google": {
+      "calls": 398,
+      "cost_usd": 0.050902,
+      "input_tokens": 439768,
+      "model_config": {
+        "family": "google",
+        "max_output_tokens": 6000,
+        "model_id": "google/gemini-2.5-flash-lite",
+        "price_cached_input_per_mtok": 0.01,
+        "price_input_per_mtok": 0.1,
+        "price_output_per_mtok": 0.4,
+        "price_source": "기본값(예시). 실행 전에 공급자 가격표로 확인해야 한다",
+        "provider_order": [
+          "Google AI Studio"
+        ],
+        "reasoning_effort": null,
+        "reasoning_effort_sent": false,
+        "route": "openrouter",
+        "temperature": 0,
+        "temperature_sent": true,
+        "timeout_seconds": 120.0
+      },
+      "output_tokens": 17314
+    },
+    "openai": {
+      "calls": 400,
+      "cost_usd": 0.075562,
+      "input_tokens": 464274,
+      "model_config": {
+        "family": "openai",
+        "max_output_tokens": 6000,
+        "model_id": "openai/gpt-6-luna",
+        "price_cached_input_per_mtok": 0.01,
+        "price_input_per_mtok": 0.1,
+        "price_output_per_mtok": 0.5,
+        "price_source": "기본값(예시). 실행 전에 공급자 가격표로 확인해야 한다",
+        "provider_order": [
+          "OpenAI"
+        ],
+        "reasoning_effort": "low",
+        "reasoning_effort_sent": true,
+        "route": "openai",
+        "temperature": 0.7,
+        "temperature_sent": false,
+        "timeout_seconds": 120.0
+      },
+      "output_tokens": 58523
+    }
+  },
+  "flagged": 54,
+  "incomplete": 0,
+  "items": 372,
+  "parse_failed_rows": 0,
+  "passed": 318,
+  "price_source": {
+    "anthropic": "기본값(예시). 실행 전에 공급자 가격표로 확인해야 한다",
+    "google": "기본값(예시). 실행 전에 공급자 가격표로 확인해야 한다",
+    "openai": "기본값(예시). 실행 전에 공급자 가격표로 확인해야 한다"
+  },
+  "prompt_version": "review-v1",
+  "spent_usd": 0.332821
+}

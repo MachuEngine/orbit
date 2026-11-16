@@ -16,6 +16,7 @@ from typing import Any
 
 from orbit.evaldata.generate import git_sha as current_git_sha
 from orbit.evaldata.v1 import search_templates
+from orbit.evaldata.v1.body_checks import topic_body_defect
 from orbit.evaldata.v1.facts import norm as normalize
 from orbit.evaldata.v1.skeleton import SearchTopicTruth
 from orbit.evaldata.v1.task_world import TaskWorldError, load_task_world
@@ -25,6 +26,8 @@ FORMS = ("keyword", "paraphrase_question", "person_time")
 SIZES = ("200", "1000", "5000")
 FROZEN_CONTRACT_SHA256 = "a5c503aa720557e7dd4e595dd5c55d0584b162539020088ff649e8da05dcd801"
 BASELINE_SPLIT_SEED = 20261116
+MIN_QUERIES = 150
+MAX_QUERIES = 200
 
 
 def _tokens(text: str) -> list[str]:
@@ -441,6 +444,20 @@ def generate(
             "when": when,
             "grade1_by_size": grade1_by_size,
         }
+    # 본문 결함이 있는 주제는 제외 후보로 매니페스트에 적는다. 질의 행과 qrel 계약(분할 포함)은
+    # 바꾸지 않는다. 실제 제외는 `search-review.jsonl`의 exclude 결정으로 한다.
+    exclusion_candidates: dict[str, str] = {}
+    world_year = sk.snapshot_time.year
+    for scenario in topics:
+        truth = SearchTopicTruth.model_validate(scenario.truth)
+        defect = topic_body_defect(
+            {b: (g, next(iter(body_text[b].values()))) for b, g in truth.relevance_by_body.items()},
+            truth.fact.kind,
+            truth.fact.surface_forms,
+            world_year,
+        )
+        if defect is not None:
+            exclusion_candidates[scenario.scenario_id] = defect
     person_time_choice: dict[str, tuple[str, bool]] = {}
     topic_drop_counts: Counter[str] = Counter()
     split_slots = [
@@ -556,8 +573,10 @@ def generate(
     candidates = _deduplicate_queries(candidates, dropped, topic_drop_counts)
     if over_dropped := {sid: count for sid, count in topic_drop_counts.items() if count > 1}:
         raise SearchSetError(f"more than one query dropped for a topic: {over_dropped}")
-    if not 150 <= len(candidates) <= 200:
-        raise SearchSetError(f"generated query count outside 150..200: {len(candidates)}")
+    if not MIN_QUERIES <= len(candidates) <= MAX_QUERIES:
+        raise SearchSetError(
+            f"generated query count outside {MIN_QUERIES}..{MAX_QUERIES}: {len(candidates)}"
+        )
     precision_counts = Counter(
         person_time_choice[r["query_id"]][0] for r in candidates if r["form"] == "person_time"
     )
@@ -584,6 +603,11 @@ def generate(
         "counts_by_split_form": {f"{s}:{f}": n for (s, f), n in sorted(counts.items())},
         "dropped": dict(sorted(dropped.items())),
         "dropped_by_topic": dict(sorted(topic_drop_counts.items())),
+        "exclusion_candidates": dict(sorted(exclusion_candidates.items())),
+        "exclusion_candidate_count": len(exclusion_candidates),
+        "exclusion_candidates_by_reason": dict(
+            sorted(Counter(exclusion_candidates.values()).items())
+        ),
         "synonym_noun_count": len(search_templates.NOUN_SYNONYMS),
         "synonym_variant_count": sum(
             len({normalize(alias) for alias in aliases})
@@ -648,7 +672,39 @@ def assign_splits(rows: list[dict[str, Any]], seed: int) -> None:
         row["split"] = "test" if row["cluster_id"] in test else "dev"
 
 
-def load_search_set(path: Path, manifest_path: Path | None = None) -> list[dict[str, Any]]:
+SEARCH_REVIEW_FILE = "search-review.jsonl"
+
+
+def read_search_review(directory: Path) -> dict[str, dict[str, str]]:
+    """`search-review.jsonl`(질의 단위 검수 결정)을 읽는다. 같은 query_id는 마지막 줄이 이긴다.
+
+    각 값은 `{"decision": "approve|fix|exclude", "note": "..."}`다. 파일이 없으면 빈 dict다.
+    """
+    file = directory / SEARCH_REVIEW_FILE
+    if not file.exists():
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for line in file.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if (
+            not isinstance(row, dict)
+            or not isinstance(row.get("query_id"), str)
+            or row.get("decision") not in ("approve", "fix", "exclude")
+        ):
+            raise SearchSetError("invalid search-review row")
+        out[row["query_id"]] = {"decision": row["decision"], "note": str(row.get("note", ""))}
+    return out
+
+
+def load_search_set(
+    path: Path, manifest_path: Path | None = None, *, include_excluded: bool = False
+) -> list[dict[str, Any]]:
+    """검색 세트를 읽고 검증한다. 같은 폴더의 `search-review.jsonl`에서 제외된 질의는 기본으로 뺀다.
+
+    검증(개수·분할·매니페스트 일치)은 제외 전 전체 행에 건다.
+    """
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
     ids: set[str] = set()
     splits: dict[str, str] = {}
@@ -743,8 +799,8 @@ def load_search_set(path: Path, manifest_path: Path | None = None) -> list[dict[
                 owner_map[key] = index
             else:
                 union(index, previous)
-    if not 150 <= len(rows) <= 200:
-        raise SearchSetError("saved search set must contain 150..200 queries")
+    if not MIN_QUERIES <= len(rows) <= MAX_QUERIES:
+        raise SearchSetError(f"saved search set must contain {MIN_QUERIES}..{MAX_QUERIES} queries")
     components: dict[int, list[int]] = {}
     for index in range(len(rows)):
         components.setdefault(find(index), []).append(index)
@@ -799,6 +855,9 @@ def load_search_set(path: Path, manifest_path: Path | None = None) -> list[dict[
                 or not 0 <= stats["mean"] <= stats["max"] <= 1
             ):
                 raise SearchSetError("manifest lexical overlap statistics mismatch")
+    if not include_excluded:
+        review = read_search_review(path.parent)
+        rows = [r for r in rows if review.get(r["query_id"], {}).get("decision") != "exclude"]
     return rows
 
 

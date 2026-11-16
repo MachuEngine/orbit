@@ -130,7 +130,7 @@ def _event_created(exp: EventCreatedChange, ev: Mapping[str, Any], tm: TextMatch
     return (
         ev.get("calendar_id") == exp.calendar_id
         and _same_instant(exp.start, ev.get("start"))
-        and _same_instant(exp.end, ev.get("end"))
+        and (exp.end is None or _same_instant(exp.end, ev.get("end")))
         and bool(ev.get("all_day")) == exp.all_day
         and _any_text(ev.get("title"), exp.title_any_of, tm)
         and _includes(exp.attendees_include, ev.get("attendees"))

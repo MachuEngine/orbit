@@ -222,7 +222,7 @@ class Oracle:
             args: dict[str, Any] = {
                 "title": change.title_any_of[0],
                 "start": iso(change.start, tz),
-                "end": iso(change.end, tz),
+                "end": iso(change.end or change.start + timedelta(hours=1), tz),
                 "attendees": list(change.attendees_include),
             }
             if change.location_any_of:
