@@ -137,6 +137,7 @@ class UsageRecord:
     model_id_missing: bool = False  # 응답에 모델 ID가 없었다
     finish_reason: str | None = None  # 응답이 있을 때만
     reasoning_tokens: int = 0  # output_tokens의 부분집합
+    step_kind: str | None = None  # 요청 metadata의 단계 종류(평가 전용 Agent 패턴, ADR-0030)
 
 
 class UsageRecorder:
@@ -202,6 +203,7 @@ class RecordingLLM:
                     retries=exc.retries,
                     error_type=type(exc).__name__,
                     cost_incomplete=exc.cost_incomplete or exc.cost_usd is None,
+                    step_kind=request.metadata.get("step_kind"),
                 )
             )
             raise
@@ -220,6 +222,7 @@ class RecordingLLM:
                 cost_incomplete=response.cost_incomplete,
                 model_id_missing=response.model_id is None,
                 finish_reason=response.finish_reason,
+                step_kind=request.metadata.get("step_kind"),
             )
         )
         return response

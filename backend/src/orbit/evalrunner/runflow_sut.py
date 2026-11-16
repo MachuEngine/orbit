@@ -44,6 +44,7 @@ from orbit.runflow.eval_variants import (
 )
 from orbit.runflow.fingerprint import PATTERN, config_fingerprint
 from orbit.runflow.graph import advance_run
+from orbit.runflow.patterns import PATTERN_VERSIONS, PATTERNS, REACT, PatternMemory
 from orbit.runflow.prompt import PROMPT_VERSION
 from orbit.runflow.repo import latest_approval_for_run, lock_run
 
@@ -98,13 +99,18 @@ def decision_for(policy: tuple[str, ...], index: int) -> bool:
 class RunflowV0SUT:
     name = "runflow_v0"
 
-    def __init__(self, *, index_mode: str = "off", variants: Iterable[str] = ()) -> None:
+    def __init__(
+        self, *, index_mode: str = "off", variants: Iterable[str] = (), pattern: str = REACT
+    ) -> None:
         if index_mode not in INDEX_MODES:
             raise ValueError(f"지원하지 않는 색인 모드: {index_mode!r} (지원: {INDEX_MODES})")
         chosen = set(variants)
         unknown = chosen - set(VARIANTS)
         if unknown:
             raise ValueError(f"지원하지 않는 변형: {sorted(unknown)} (지원: {sorted(VARIANTS)})")
+        if pattern not in PATTERNS:
+            raise ValueError(f"지원하지 않는 패턴: {pattern!r} (지원: {PATTERNS})")
+        self._pattern = pattern
         self._index_mode = index_mode
         self._facts = "facts" in chosen
         self._reasoning_rt = "reasoning-rt" in chosen
@@ -127,31 +133,38 @@ class RunflowV0SUT:
             for n in (FACTS_EXTENSION_VERSION, REASONING_ROUNDTRIP_VERSION)
             if n in self.variant_names
         ]
-        return "".join([base, *(f"+{n}" for n in ordered)])
+        extra = [] if self._pattern == REACT else [PATTERN_VERSIONS[self._pattern]]
+        return "".join([base, *(f"+{n}" for n in ordered), *(f"+{n}" for n in extra)])
 
     def config_info(
         self, *, model_id: str, llm_info: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """결과의 설정 지문에 더할 항목(runflow 지문, 답 제출 확장, 색인 모드)."""
-        return {
+        info: dict[str, Any] = {
             "runflow_fingerprint": config_fingerprint(
                 model_id,
                 llm_info,
                 answer_extension=True,
                 facts_extension=self._facts,
                 reasoning_roundtrip=self._reasoning_rt,
+                agent_pattern=self._pattern,
             ),
             "answer_extension": ANSWER_EXTENSION_VERSION,
             "variants": self.variant_names,
             "index_mode": self._index_mode,
             "max_approvals_per_run": MAX_APPROVALS_PER_RUN,
         }
+        if self._pattern != REACT:  # react는 키를 더하지 않는다(기존 결과와 같게 둔다)
+            info["pattern"] = self._pattern
+            info["pattern_version"] = PATTERN_VERSIONS[self._pattern]
+        return info
 
     async def run(self, episode: Episode) -> EpisodeOutput:
         database = episode.database
         if database is None:
             raise RuntimeError("runflow_v0에는 러너가 준비한 평가 DB 핸들이 필요하다")
         submission = _Submission()
+        memory = PatternMemory() if self._pattern != REACT else None
         clock = FixedClock(episode.task.as_of_time)
         resolver = EpisodeResolver(
             calendar=episode.connectors.calendar,
@@ -171,11 +184,14 @@ class RunflowV0SUT:
             answer_sink=submission,
             facts_extension=self._facts,
             reasoning_cache=ReasoningCache() if self._reasoning_rt else None,
+            pattern=None if self._pattern == REACT else self._pattern,
+            pattern_memory=memory,
         )
         fingerprint = config_fingerprint(
             answer_extension=True,
             facts_extension=self._facts,
             reasoning_roundtrip=self._reasoning_rt,
+            agent_pattern=self._pattern,
         )
         decisions = 0  # 에피소드 전체의 승인 결정 수(정책 순번)
         last_run: uuid.UUID | None = None
@@ -186,7 +202,11 @@ class RunflowV0SUT:
                 deps, database, last_run, episode.task.approval_policy, decisions
             )
         text = await _assistant_text(deps, database, last_run) if last_run is not None else ""
-        return EpisodeOutput(final_text=text, structured=submission.answer)
+        return EpisodeOutput(
+            final_text=text,
+            structured=submission.answer,
+            pattern_stats=memory.stats.to_dict() if memory is not None else None,
+        )
 
 
 def _require_drive(episode: Episode) -> Any:

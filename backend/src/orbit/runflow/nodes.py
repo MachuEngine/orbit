@@ -65,6 +65,7 @@ from orbit.runflow.docs_tool import DOC_TOOLS, DocTools
 from orbit.runflow.eval_variants import with_facts_prompt
 from orbit.runflow.index_tool import SEARCH_INDEXED_MAIL, IndexedMailSearch
 from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
+from orbit.runflow.patterns import PatternDriver
 from orbit.runflow.prompt import build_system_prompt
 from orbit.runflow.reminder_tool import CREATE_REMINDER, ReminderTool
 from orbit.runflow.repo import get_approval_by_tool_call, get_tool_call, lock_run
@@ -322,8 +323,26 @@ class RunNodes:
             boundary = boundary_for(f"run:{run_id}")
             system = build_system_prompt(d.clock.now(), d.tz, boundary)
             tools = run_tool_specs()
+            metadata: dict[str, str] = {}
             if d.facts_extension:  # 평가 전용 [사실 확인] 단락(ADR-0023 §10). 답 제출 안내보다 앞
                 system = with_facts_prompt(system)
+            if d.pattern is not None:
+                if d.pattern_memory is None:
+                    raise RuntimeError("패턴을 켰는데 pattern_memory가 없다")
+                # 평가 전용 Agent 패턴(ADR-0030). 계획·분류도 d.llm으로 호출한다(집계에 잡힌다)
+                try:
+                    ctx = await PatternDriver(d.pattern, d.llm, d.pattern_memory).prepare(
+                        str(run_id), step, transcript
+                    )
+                except LLMError as exc:
+                    return await self._fail(ws, run_id, type(exc).__name__)
+                if ctx.max_steps is not None and step >= ctx.max_steps:
+                    return await self._fail(ws, run_id, "max_steps")
+                if ctx.allowed is not None:
+                    tools = tuple(spec for spec in tools if spec.name in ctx.allowed)
+                if ctx.paragraph:
+                    system = system + "\n" + ctx.paragraph
+                metadata = ctx.metadata
             if d.answer_sink is not None:  # 평가 전용 답 제출 확장(ADR-0023 §6)
                 system = with_answer_prompt(system)
                 tools = (*tools, answer_tool_spec())
@@ -335,6 +354,7 @@ class RunNodes:
                 tools=tools,
                 tool_choice="auto",
                 temperature=TEMPERATURE,
+                metadata=metadata,
             )
             try:
                 response = await d.llm.complete(request)
@@ -415,9 +435,27 @@ class RunNodes:
         """도구 호출을 처리한다. 승인 대기가 생기면 그 `tool_call` id를 돌려준다."""
         done = transcript.tool_results(step)
         tools = ReadOnlyTools(calendar=calendar, mail=mail, tz=self._d.tz, workset=workset)
-        first_write = next((i for i, c in enumerate(calls) if c["name"] in WRITE_TOOLS), None)
+        # 평가 전용 패턴(ADR-0030): 분류된 run은 범주의 도구 부분집합만 실행한다. 프롬프트가 아니라
+        # 서버가 막는다. 패턴이 없으면 None이고 아래 동작은 그대로다.
+        allowed = (
+            self._d.pattern_memory.allowed_tools(str(run_id)) if self._d.pattern_memory else None
+        )
+        first_write = next(
+            (
+                i
+                for i, c in enumerate(calls)
+                if c["name"] in WRITE_TOOLS and (allowed is None or c["name"] in allowed)
+            ),
+            None,
+        )
         for index, call in enumerate(calls):
             llm_id, name = str(call["id"]), str(call["name"])
+            if allowed is not None and name not in allowed:
+                if llm_id not in done:
+                    await self._store_tool_result(
+                        ws, run_id, step, llm_id, name, {"error": "tool_not_allowed"}, is_error=True
+                    )
+                continue
             if name in WRITE_TOOLS:
                 if index != first_write and llm_id not in done:
                     await self._store_tool_result(

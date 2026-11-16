@@ -41,6 +41,7 @@ from orbit.evalrunner.runner import (
 from orbit.evalrunner.suts import DATABASE_SUTS, UnknownSutError, create_sut, sut_names
 from orbit.evalrunner.task_source import Dataset, DatasetError, load_dataset
 from orbit.llm.factory import build_llm, llm_config_info
+from orbit.runflow.patterns import PATTERNS
 
 SEAL_FLAG = "--i-understand-this-uses-the-sealed-test-split"
 
@@ -148,6 +149,13 @@ def _parser() -> argparse.ArgumentParser:
         "facts(facts-v1, 프롬프트에 [사실 확인] 단락), reasoning-rt(추론 항목 되돌리기). "
         "runflow_v0가 아니면 오류",
     )  # fmt: skip
+    run.add_argument(
+        "--pattern", choices=list(PATTERNS), default=None,
+        help="runflow_v0 전용 Agent 패턴(ADR-0030). react(기본, 현재 runflow), "
+        "plan_execute(계획 1회 + 오류 시 재계획 1회), "
+        "fixed_workflow(의도 분류 + 범주별 도구 제한). "
+        "runflow_v0가 아니면 오류",
+    )  # fmt: skip
     run.add_argument("--repeats", type=int, default=3)
     run.add_argument("--out", required=True)
     run.add_argument("--seed", type=int, default=0, help="실험 시드이자 표본 추출 시드")
@@ -240,6 +248,9 @@ def _run(args: argparse.Namespace) -> int:
     if args.runflow_variant and args.sut != "runflow_v0":
         print("--runflow-variant는 --sut runflow_v0에서만 쓴다", file=sys.stderr)
         return 2
+    if args.pattern is not None and args.sut != "runflow_v0":
+        print("--pattern은 --sut runflow_v0에서만 쓴다", file=sys.stderr)
+        return 2
     if args.live_llm and args.llm_script:
         print("--live-llm과 --llm-script는 함께 쓸 수 없다", file=sys.stderr)
         return 2
@@ -258,6 +269,8 @@ def _run(args: argparse.Namespace) -> int:
     sut_options: dict[str, Any] = {"index_mode": args.index} if args.sut in DATABASE_SUTS else {}
     if args.sut == "runflow_v0":
         sut_options["variants"] = tuple(args.runflow_variant)
+        if args.pattern is not None:
+            sut_options["pattern"] = args.pattern
     sha, dirty = _git_state(out.parent)  # 출력 파일을 만들기 전에 읽는다
     common: dict[str, Any] = {
         "split": args.split,
