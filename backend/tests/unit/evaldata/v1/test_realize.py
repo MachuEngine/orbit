@@ -41,7 +41,7 @@ from orbit.llm.interface import (
     ModelMismatchError,
     TransientLLMError,
 )
-from orbit.llm.types import LLMRequest, LLMResponse, LLMUsage
+from orbit.llm.types import LLMRequest, LLMResponse, LLMUsage, Message
 
 FILLER = "진행 상황을 정리해 공유드립니다. "
 USAGE = LLMUsage(input_tokens=1000, output_tokens=500)
@@ -509,7 +509,8 @@ async def test_manifest_content(small_sk: Skeleton, tmp_path: Path) -> None:
         assert cfg_["price_source"] and "api_key" not in json.dumps(cfg_)
         assert m["families"][family]["generated"] == m["families"][family]["total_in_skeleton"]
     assert m["family_configs"]["openai"]["reasoning_effort_sent"] is True
-    assert m["family_configs"]["anthropic"]["temperature_sent"] is True
+    assert m["family_configs"]["anthropic"]["temperature_sent"] is False
+    assert m["family_configs"]["google"]["temperature_sent"] is True
     assert m["total_cost_usd"] == pytest.approx(total_cost(small_sk), rel=1e-3)
     dist = m["length_chars_by_class"]
     assert dist["short"]["n"] > 0 and dist["short"]["min"] <= dist["short"]["max"]
@@ -788,3 +789,59 @@ async def test_assemble_failure_after_cost_cap_keeps_exit_3(
     assert code == EXIT_COST_CAP and "비용 상한" in captured.err
     assert not (out / WORLD_FILE).exists()
     assert "누적 지출" in captured.out
+
+
+async def test_anthropic_default_omits_temperature(small_sk: Skeleton, tmp_path: Path) -> None:
+    assert default_models()["anthropic"].temperature is None
+    llm = FakeLLM(small_sk)
+    await run(small_sk, tmp_path, llm, cfg(limit=9, sample_seed=1))
+    temps = {
+        small_sk.bodies[r.metadata["body_id"]].generator_family: r.temperature for r in llm.requests
+    }
+    assert temps["anthropic"] is None and temps["google"] == 0.7
+
+
+def test_temperature_omit_in_toml(tmp_path: Path) -> None:
+    path = tmp_path / "m.toml"
+    path.write_text('[google]\ntemperature = "omit"\n[openai]\ntemperature = 0.2\n', "utf-8")
+    m = load_models(path)
+    assert m["google"].temperature is None and m["google"].manifest()["temperature_sent"] is False
+    assert m["openai"].temperature == 0.2
+
+
+async def test_openrouter_4xx_message_is_included_for_realize() -> None:
+    import httpx
+
+    from orbit.evaldata.v1.realize_models import build_family_llm
+    from orbit.llm.openrouter import OpenRouterLLM
+
+    body = {"error": {"code": 404, "message": "No endpoints found\n that can handle  parameters"}}
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json=body)
+
+    model = default_models()["anthropic"]
+    # 환경에 키가 없어도 만들 수 있게 더미 키를 쓴다(합성 값).
+    import os
+
+    os.environ["ORBIT_OPENROUTER_API_KEY"] = "sk-test-synthetic"
+    try:
+        llm = build_family_llm(model)
+    finally:
+        del os.environ["ORBIT_OPENROUTER_API_KEY"]
+    assert isinstance(llm, OpenRouterLLM)
+    llm._transport = httpx.MockTransport(handler)  # noqa: SLF001
+    req = LLMRequest(messages=(Message(role="user", content="합성"),), purpose="data_generation")
+    with pytest.raises(LLMRequestError) as info:
+        await llm.complete(req)
+    text = str(info.value)
+    assert "HTTP 404" in text and "No endpoints found that can handle parameters" in text
+    assert "sk-test-synthetic" not in text and len(text) < 300
+
+
+@pytest.mark.parametrize("value", ['"none"', '"0.5"', "true"])
+def test_temperature_rejects_other_values(tmp_path: Path, value: str) -> None:
+    path = tmp_path / "m.toml"
+    path.write_text(f"[google]\ntemperature = {value}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="temperature"):
+        load_models(path)

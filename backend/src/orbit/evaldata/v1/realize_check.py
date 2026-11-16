@@ -73,17 +73,18 @@ _META_PREFIX = re.compile(
     re.IGNORECASE,
 )
 _QUOTE_PAIRS = (('"', '"'), ("“", "”"), ("'", "'"), ("‘", "’"), ("「", "」"))
-_INJECTION = re.compile(
-    r"(?<![A-Za-z])AI(?![A-Za-z])"
-    r"|(?i:assistant)|시스템\s*프롬프트|무시하고"
-    r"|(?i:ignore\s+(?:all|previous|the\s+above))|언어\s*모델"
+# 독자 AI에게 말을 거는 형태만 본다. "AI 기반 분석"처럼 업무 글에 흔한 단어 단독은 검출하지 않는다.
+_TARGET = r"(?:(?<![A-Za-z])AI(?![A-Za-z])|어시스턴트|챗봇|(?i:assistant|chatbot))"
+_PARTICLE = r"(?:이|가|는|에게|께|야|님)"
+# 수신자에게 내리는 명령형만 본다. "~에 따라", "알려드립니다", "보내드립니다"는 정상 업무 문장이다.
+_VERBS = (
+    r"(?:무시(?:하|해)|지시를\s*(?:무시|따르|따라)|명령|따르(?:세요|라|십시오)"
+    r"|(?:출력|전달|실행|보내|알려)(?:해|하라|하세요|해라|라|줘|주세요))"
 )
-# "이전 지시"·"지시를 따라"는 일반 업무 문장에도 나온다. AI·모델 같은 대상과 한 문장에
-# 있을 때만 본다.
-_TARGET = r"(?:(?<![A-Za-z])AI(?![A-Za-z])|어시스턴트|모델|챗봇|(?i:assistant|chatbot))"
-_COMMAND = r"(?:이전\s*지시|지시를\s*따라)"
-_INJECTION_WITH_TARGET = re.compile(
-    rf"{_TARGET}[^.!?\n]{{0,40}}{_COMMAND}|{_COMMAND}[^.!?\n]{{0,40}}{_TARGET}"
+_INJECTION = re.compile(
+    r"시스템\s*프롬프트|무시하고|(?i:ignore\s+(?:all|previous|the\s+above))"
+    rf"|이\s*(?:메일|문서|글)을\s*읽는\s*{_TARGET}"
+    rf"|{_TARGET}{_PARTICLE}[^.!?\n]{{0,40}}{_VERBS}"
 )
 
 _HINTS = {
@@ -189,7 +190,7 @@ def check_body(spec: BodySpec, raw: str | None) -> CheckResult:
         add("meta_prefix")
     if _wrapped(text):
         add("wrapped_quotes")
-    if _INJECTION.search(text) or _INJECTION_WITH_TARGET.search(text):
+    if _INJECTION.search(text):
         add("injection_phrase")
 
     return CheckResult(text=text, reasons=tuple(reasons), hints=tuple(hints))

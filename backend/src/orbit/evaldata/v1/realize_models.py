@@ -8,7 +8,7 @@
 route = "openrouter"          # "openai"(직접) | "openrouter"
 model_id = "openai/gpt-6-luna"
 reasoning_effort = "low"      # 직접 경로에서만 보낸다
-temperature = 0.7
+temperature = 0.7            # 숫자 | "omit"(보내지 않는다)
 max_output_tokens = 6000
 price_input_per_mtok = 0.10
 price_cached_input_per_mtok = 0.01
@@ -17,7 +17,12 @@ price_source = "2026-11-16 공급자 가격표"
 provider_order = ["OpenAI"]   # openrouter 경로에서 허용하는 제공자
 ```
 
-비용은 응답에 보고된 토큰 수 × 이 설정의 단가로 계산한다(OpenRouter가 알려 주는 비용은 쓰지 않는다).
+`temperature = "omit"`은 temperature를 요청에 넣지 않는다. OpenRouter는 `require_parameters`로
+라우팅하므로, 엔드포인트가 temperature를 지원하지 않는 모델(예: `anthropic/claude-haiku-5.5`의
+Anthropic 엔드포인트)에 보내면 404가 난다. 이런 계열의 기본값은 보내지 않음이다.
+
+비용은 호출마다 max(응답에 보고된 토큰 수 × 이 설정의 단가, 응답이 보고한 비용(OpenRouter
+usage.cost))로 누적하고, 계산값과 보고값을 둘 다 기록한다.
 캐시된 입력 토큰은 입력 토큰의 부분집합이고, 출력 토큰은 추론 토큰을 포함한다.
 """
 
@@ -33,6 +38,7 @@ from orbit.core.config import LLMSettings
 from orbit.evaldata.v1.skeleton import Family
 from orbit.llm.factory import build_llm
 from orbit.llm.interface import LLM
+from orbit.llm.openrouter import OpenRouterLLM
 from orbit.llm.types import LLMUsage
 
 FAMILIES: tuple[str, ...] = ("openai", "anthropic", "google")
@@ -113,7 +119,7 @@ def default_models() -> dict[str, FamilyModel]:
             route="openrouter",
             model_id="anthropic/claude-haiku-5.5",
             reasoning_effort=None,
-            temperature=0.7,
+            temperature=None,  # 이 모델의 Anthropic 엔드포인트는 temperature를 지원하지 않는다
             max_output_tokens=6000,
             price_input_per_mtok=0.10,
             price_cached_input_per_mtok=0.01,
@@ -142,6 +148,12 @@ def _apply(base: FamilyModel, values: Mapping[str, Any]) -> FamilyModel:
     if unknown:
         raise ModelConfigError(f"{base.family}: 알 수 없는 설정 항목 {sorted(unknown)}")
     changes = dict(values)
+    if "temperature" in changes:
+        t = changes["temperature"]
+        if t == "omit":
+            changes["temperature"] = None
+        elif isinstance(t, bool) or not isinstance(t, int | float):
+            raise ModelConfigError(f'{base.family}: temperature는 숫자 또는 "omit"이어야 한다')
     if "provider_order" in changes:
         changes["provider_order"] = tuple(changes["provider_order"])
     route = changes.get("route", base.route)
@@ -200,6 +212,9 @@ def build_family_llm(model: FamilyModel) -> LLM:
         llm_timeout_seconds=model.timeout_seconds,
         llm_max_retries=2,
     )
+    if model.route == "openrouter":
+        # 4xx 원인(error.message)을 오류 메시지에 남긴다. 이 호출은 합성 데이터만 보낸다.
+        return OpenRouterLLM(settings, include_error_message=True)
     return build_llm(settings)
 
 
