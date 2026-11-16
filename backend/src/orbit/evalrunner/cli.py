@@ -14,7 +14,7 @@ import asyncio
 import json
 import subprocess  # noqa: S404  git SHA 조회에만 쓴다
 import sys
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,7 @@ from sqlalchemy.engine import make_url
 
 from orbit.connectors.sim.faults import FaultPlan
 from orbit.core.config import get_llm_settings
+from orbit.evaldata.dataset import read_review
 from orbit.evalrunner import stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
@@ -95,17 +96,28 @@ def _load_fault_plan(path: str | None) -> FaultPlanSpec:
     return FaultPlanSpec(name=name, plan=FaultPlan.from_dict(data))
 
 
-def _smoke_subset(dataset: Dataset) -> Dataset:
-    """manifest의 `smoke_task_ids`에 있는 과제만 남긴다. 목록이 없거나 어긋나면 `DatasetError`."""
+def _review_excluded(dataset_dir: str | Path) -> frozenset[str]:
+    """review.jsonl에서 사람 검수로 제외된 과제 ID. 이 과제는 데이터셋에서 이미 빠져 있다."""
+    return frozenset(i for i, e in read_review(dataset_dir).items() if e.decision == "exclude")
+
+
+def _smoke_subset(dataset: Dataset, skip: Collection[str] = frozenset()) -> Dataset:
+    """manifest의 `smoke_task_ids`에 있는 과제만 남긴다.
+
+    `skip`(검수 제외 과제 ID)에 있는 id는 데이터셋에 없어도 건너뛴다. 그 밖에 데이터셋에 없는 id가
+    있거나 목록이 없으면 `DatasetError`다.
+    """
     ids = dataset.manifest.get("smoke_task_ids")
     if not ids:
         raise DatasetError("manifest에 smoke_task_ids가 없다(스모크 목록이 없는 데이터셋)")
     by_id = {t.task_id: t for t in dataset.tasks}
-    missing = sorted(set(ids) - set(by_id))
+    missing = sorted(set(ids) - set(by_id) - set(skip))
     if missing:
         raise DatasetError(f"smoke_task_ids에 데이터셋에 없는 과제가 있다: {missing[:5]}")
-    chosen = set(ids)
+    chosen = set(ids) & set(by_id)
     tasks = tuple(t for t in dataset.tasks if t.task_id in chosen)
+    if not tasks:
+        raise DatasetError("스모크 과제가 남지 않았다(모두 검수에서 제외됐다)")
     if any(t.split != "dev" for t in tasks):
         raise DatasetError("스모크 목록에 dev가 아닌 과제가 있다(test 봉인 규칙 위반)")
     return replace(dataset, tasks=tasks)
@@ -209,11 +221,17 @@ def _run(args: argparse.Namespace) -> int:
     if args.split == "test" and not args.allow_test:
         raise SealedSplitError("test 분할 봉인")  # 출력 파일을 만들기 전에 거부한다
     dataset = load_dataset(args.dataset)
+    smoke_excluded: int | None = None
     if args.subset == "smoke":
         if args.split != "dev":
             print("--subset smoke는 dev 분할에서만 쓴다", file=sys.stderr)
             return 2
-        dataset = _smoke_subset(dataset)
+        excluded = _review_excluded(args.dataset)
+        listed = set(dataset.manifest.get("smoke_task_ids") or [])
+        smoke_excluded = len(listed & excluded - {t.task_id for t in dataset.tasks})
+        dataset = _smoke_subset(dataset, excluded)
+        if smoke_excluded:
+            print(f"스모크 목록에서 검수 제외 과제 {smoke_excluded}개를 건너뛴다", file=sys.stderr)
     out = Path(args.out)
     sink_path = out.with_name(out.stem + ".estimate.jsonl") if args.estimate is not None else out
     if sink_path.exists():
@@ -252,6 +270,7 @@ def _run(args: argparse.Namespace) -> int:
         "fault": _load_fault_plan(args.fault_plan),
         "model_id": model_id,
         "llm_config": llm_config,
+        "smoke_excluded": smoke_excluded,
         "prompt_version": args.prompt_version,
         "git_sha": sha,
         "git_dirty": dirty,

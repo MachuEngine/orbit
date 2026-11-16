@@ -681,3 +681,25 @@ def test_committed_dataset_regenerates_from_its_paraphrase_cache_without_llm(
         == 0
     )  # fmt: skip
     assert digest(out / "tasks.jsonl") == digest(COMMITTED_V1 / "tasks.jsonl")
+
+
+def test_runner_smoke_subset_skips_only_review_excluded_ids() -> None:
+    from orbit.evalrunner.cli import _smoke_subset
+
+    _, world = real_task_world()
+    suite = real_suite()
+    dataset = slim_dataset(suite.tasks, world)
+    ids = list(suite.smoke_ids)
+    # 데이터셋에서 한 과제를 뺀(검수 제외된) 상황. 제외 기록이 있으면 건너뛰고 없으면 거부한다.
+    dropped = ids[0]
+    kept = replace(
+        dataset,
+        manifest={"smoke_task_ids": ids},
+        tasks=tuple(t for t in dataset.tasks if t.task_id != dropped),
+    )
+    smoke = _smoke_subset(kept, {dropped})
+    assert {t.task_id for t in smoke.tasks} == set(ids) - {dropped}
+    with pytest.raises(ds.DatasetError, match="없는 과제"):
+        _smoke_subset(kept)
+    with pytest.raises(ds.DatasetError, match="없는 과제"):
+        _smoke_subset(kept, {"other-id"})
