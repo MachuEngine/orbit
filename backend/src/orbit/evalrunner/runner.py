@@ -116,6 +116,7 @@ def _config_dict(
     sample: int | None,
     n_tasks: int,
     llm_config: Mapping[str, Any] | None = None,
+    smoke_excluded: int | None = None,
 ) -> dict[str, Any]:
     config: dict[str, Any] = {
         "git_sha": git_sha,
@@ -134,6 +135,8 @@ def _config_dict(
         "sample": sample,
         "n_tasks": n_tasks,
     }
+    if smoke_excluded is not None:  # 스모크 목록에서 검수 제외로 빠진 과제 수(ADR-0026 §5)
+        config["smoke_excluded"] = smoke_excluded
     if llm_config is not None:  # 실제 LLM 제공자 설정(ADR-0014). 스크립트 실행에는 없다.
         config["llm"] = dict(llm_config)
     sut_info = getattr(sut, "config_info", None)
@@ -517,6 +520,7 @@ async def run_experiment(
     experiment_id: str | None = None,
     allow_sealed_test: bool = False,
     llm_config: Mapping[str, Any] | None = None,
+    smoke_excluded: int | None = None,
     sink: ResultSink | None = None,
     monotonic: Callable[[], float] = time.perf_counter,
     database_env: RunflowEnvironment | None = None,
@@ -576,6 +580,7 @@ async def run_experiment(
         sample=sample,
         n_tasks=len(tasks),
         llm_config=llm_config,
+        smoke_excluded=smoke_excluded,
     )
     fingerprint = _digest(config)
     exp_id = experiment_id or f"exp-{fingerprint[:12]}"

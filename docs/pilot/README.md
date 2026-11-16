@@ -191,3 +191,16 @@ OpenAI는 스냅샷 ID를 공개하지 않으므로 응답의 실제 모델은 �
 - 도구 정의는 `strict: false`로 보낸다(기존 JSON Schema 유지). `strict: true`는 스키마 제약이 달라 쓰지 않았다.
 - 추론 토큰이 `output_tokens`에 포함된다는 가정으로 비용을 계산한다. 첫 실행에서 `usage` 값을 확인한다.
 - 실제 Responses API 응답 형태는 문서 기준 가정이다. 첫 사전 측정에서 확인한다.
+
+## 평가 v1 스모크 (ADR-0026 §5)
+
+CI 회귀 확인용이다. 모델 품질 비교의 근거로 쓰지 않는다.
+
+- **결정적 스모크(비용 0)**: `backend/tests/integration/test_eval_smoke_ci.py`가 `scripts/check.sh`의 pytest에서
+  매 PR마다 돈다. 정답을 제출하는 스크립트 LLM으로 `runflow_v0`와 `assistant_v0`를 돌려 기대 판정표와
+  비교한다.
+- **실제 모델 스모크(수동, 비용 발생)**: 로컬은 `scripts/eval-smoke-live.sh <runflow_v0|assistant_v0> <model_id> [max_cost_usd]`.
+  키는 `secrets/.env`를 source만 한다. 단가(`ORBIT_LLM_PRICE_*`)와 `ORBIT_LLM_PROVIDER_ORDER`는 그 파일이나
+  환경에 둔다. GitHub Actions는 `Eval smoke (live model)` 워크플로를 수동 실행(workflow_dispatch)한다.
+  저장소 시크릿 `ORBIT_OPENROUTER_API_KEY`가 없으면 바로 실패한다. 결과와 stats 요약은 artifact로 올라간다.
+  PR·push로는 실행되지 않는다.
