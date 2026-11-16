@@ -29,6 +29,10 @@ DEFAULT_RESULTS = 5
 MAX_RESULTS = 20
 MAX_QUERY_CHARS = 500
 
+# 색인 코드 버전. 청크 분할·토큰화·저장 동작을 바꾸면 올린다. 평가용 색인 지문에 들어간다
+# (ADR-0028 §2). `INDEX_CONFIG`에는 넣지 않는다(실행 설정 지문이 달라지지 않게).
+INDEX_CODE_VERSION = 1
+
 # 설정 지문에 넣는 상수 묶음
 INDEX_CONFIG: dict[str, int] = {
     "chunk_chars": CHUNK_CHARS,

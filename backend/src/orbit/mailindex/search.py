@@ -14,6 +14,7 @@ RLS가 같은 `workspace_id` 조건을 DB에서 한 번 더 강제한다. 필터
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,6 +64,9 @@ WHERE si.kind = 'mail'
 ORDER BY b.score DESC, si.sent_at DESC, si.id
 LIMIT :n
 """
+
+
+SearchMode = Literal["hybrid", "keyword", "vector"]
 
 
 @dataclass(frozen=True)
@@ -118,9 +122,18 @@ async def search_index(
     embedding: list[float] | None,
     tokens: list[str],
     limit: int,
+    mode: SearchMode = "hybrid",
 ) -> list[SearchHit]:
-    """하이브리드 검색. 호출자가 연 워크스페이스 세션(트랜잭션) 안에서 실행한다."""
-    tsq = to_tsquery_text(tokens)
+    """하이브리드 검색. 호출자가 연 워크스페이스 세션(트랜잭션) 안에서 실행한다.
+
+    `mode`가 `keyword`이면 키워드 쪽만, `vector`이면 벡터 쪽만 쓴다(평가 비교용, ADR-0028 §3).
+    기본 `hybrid`는 지금 동작과 같다. 고른 쪽의 입력이 없으면 빈 목록이다.
+    """
+    if mode not in ("hybrid", "keyword", "vector"):
+        raise ValueError(f"알 수 없는 검색 방식: {mode}")
+    tsq = "" if mode == "vector" else to_tsquery_text(tokens)
+    if mode == "keyword":
+        embedding = None
     with_vector = embedding is not None
     with_keyword = bool(tsq)
     if not (with_vector or with_keyword):

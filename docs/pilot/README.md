@@ -204,3 +204,34 @@ CI 회귀 확인용이다. 모델 품질 비교의 근거로 쓰지 않는다.
   환경에 둔다. GitHub Actions는 `Eval smoke (live model)` 워크플로를 수동 실행(workflow_dispatch)한다.
   저장소 시크릿 `ORBIT_OPENROUTER_API_KEY`가 없으면 바로 실패한다. 결과와 stats 요약은 artifact로 올라간다.
   PR·push로는 실행되지 않는다.
+
+## 검색 평가 실행기 (ADR-0028)
+
+검색 세트(`search.jsonl`)의 질의를 200·1,000·5,000통 메일함에서 다섯 방식(`gmail_search`, `keyword`, `vector`,
+`hybrid`, `bm25`)으로 검색해 recall@5·10·20, MRR, nDCG@10과 방식 간 짝 차이(주제 묶음 bootstrap 95% 신뢰구간)를
+낸다. 평가 DB(`orbit_eval`)가 있어야 하고(위 "평가 DB 준비"), 앱·소유자 URL 둘 다 필요하다
+(`ORBIT_EVAL_DATABASE_URL`, `ORBIT_EVAL_MIGRATION_DATABASE_URL`. 둘 다 `backend/dev.env`에 있다). 합성 연결 행을 만들 때만
+소유자 URL을 쓴다.
+
+```bash
+set -a; source backend/dev.env; set +a
+cd backend
+# 1) 비용 추정. 임베딩 호출·DB 접근 없음
+uv run python -m orbit.evalrunner.retrieval run --dataset ../eval/datasets/orbit-eval/v1 \
+  --split dev --methods all --sizes 200,1000,5000 --dry-run
+# 2) 실행(openai 임베딩: secrets/.env의 ORBIT_OPENAI_API_KEY를 먼저 source한다)
+uv run python -m orbit.evalrunner.retrieval run --dataset ../eval/datasets/orbit-eval/v1 \
+  --split dev --methods all --sizes 200,1000,5000 --max-cost-usd 0.2 \
+  --out ../runs/retrieval/<id>.json
+```
+
+- 키 없이 흐름만 확인하려면 `--embedder fake`를 쓴다(지표 값은 의미 없다). 같은 `--out`이 있으면 쓰지 않는다.
+- 색인은 지문(세계 해시·계정·청크·토큰화·임베딩 모델·`INDEX_CODE_VERSION`)이 같으면 재사용한다. 청크·토큰화·저장
+  동작을 바꾸면 `orbit.mailindex.limits.INDEX_CODE_VERSION`을 올린다. 지문이 다른 색인은 지우지 않는다.
+- 임베딩 캐시는 `runs/embed-cache/<모델>.jsonl`(git 제외)이다. 질의 임베딩도 같은 캐시를 쓴다.
+- `--max-cost-usd`는 임베딩 누적 상한이다. 호출 전 추정 토큰(글자당 1토큰, 측정값 아님)으로 확인하고 호출 뒤에는
+  응답의 `usage`를 더한다. 넘을 것 같으면 종료 코드 3으로 멈춘다. 단가는 모델별 표(`embed_cache.PRICE_PER_MTOK_USD`)이고
+  `--price-per-mtok`로 바꾼다.
+- test 분할은 `--i-understand-this-uses-the-sealed-test-split` 없이는 실행하지 않는다. 실행하면 `--out` 폴더의
+  `test-runs.jsonl`에 한 줄을 더하고 결과의 `test_runs`에 횟수를 남긴다.
+- 문서가 정답인 질의는 메일 검색 지표에서 빼고, 빠진 수와 ID를 결과의 `queries`에 적는다(ADR-0028 §4).
