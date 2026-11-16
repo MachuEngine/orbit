@@ -66,7 +66,13 @@ class OpenRouterLLM:
         retry_policy: RetryPolicy | None = None,
         sleep: Callable[[float], Any] | None = None,
         include_error_message: bool = False,
+        send_temperature: bool | None = None,
     ) -> None:
+        # None이면 settings.llm_send_temperature를 따른다(OpenAI 어댑터와 같은 규칙).
+        # 요청의 temperature로 직접 제어하는 호출(평가 데이터 생성)은 True로 넘긴다.
+        self._send_temperature = (
+            settings.llm_send_temperature if send_temperature is None else send_temperature
+        )
         # 기본은 꺼 둔다. 응답 본문에 프롬프트가 되돌아올 수 있어서다. 합성 데이터만 보내는 호출
         # (평가 데이터 생성)이 4xx 원인을 보려고 켠다.
         self._include_error_message = include_error_message
@@ -121,7 +127,7 @@ class OpenRouterLLM:
             )
         if request.max_output_tokens is not None:
             body["max_tokens"] = request.max_output_tokens
-        if request.temperature is not None:
+        if self._send_temperature and request.temperature is not None:
             body["temperature"] = request.temperature
         return body
 

@@ -32,7 +32,7 @@ def llm_config_info(settings: LLMSettings) -> dict[str, Any]:
         "provider": "openrouter",
         "provider_order": list(settings.llm_provider_order),
         "reasoning_effort": None,
-        "temperature_sent": True,
+        "temperature_sent": settings.llm_send_temperature,
         "tool_strict": None,
         "reasoning_items_roundtrip": False,
         "accepted_response_models": accepted,

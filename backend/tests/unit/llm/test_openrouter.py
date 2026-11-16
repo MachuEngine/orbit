@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from orbit.core.config import LLMSettings
+from orbit.llm.factory import llm_config_info
 from orbit.llm.interface import (
     LLMRequestError,
     LLMTimeoutError,
@@ -99,7 +100,7 @@ def _llm(server: Server, **over: Any) -> OpenRouterLLM:
 
 async def test_request_body_has_routing_tools_and_auth() -> None:
     server = Server(_json(200, _ok_body()))
-    await _llm(server).complete(_request())
+    await _llm(server, llm_send_temperature=True).complete(_request())
     (req,) = server.requests
     assert str(req.url) == "https://openrouter.ai/api/v1/chat/completions"
     assert req.headers["authorization"] == f"Bearer {KEY}"
@@ -117,6 +118,24 @@ async def test_request_body_has_routing_tools_and_auth() -> None:
     assert body["max_tokens"] == 100
     assert body["temperature"] == 0.0
     assert body["messages"] == [{"role": "user", "content": "합성 질문"}]
+
+
+async def test_temperature_omitted_by_default_even_with_require_parameters() -> None:
+    server = Server(_json(200, _ok_body()))
+    llm = _llm(server)
+    await llm.complete(_request())
+    body = json.loads(server.requests[0].content)
+    assert body["provider"]["require_parameters"] is True
+    assert "temperature" not in body
+    assert llm_config_info(_settings())["temperature_sent"] is False
+    assert llm_config_info(_settings(llm_send_temperature=True))["temperature_sent"] is True
+
+
+async def test_send_temperature_argument_overrides_settings() -> None:
+    server = Server(_json(200, _ok_body()))
+    llm = OpenRouterLLM(_settings(), server.transport(), send_temperature=True, sleep=_no_sleep)
+    await llm.complete(_request())
+    assert json.loads(server.requests[0].content)["temperature"] == 0.0
 
 
 async def test_assistant_tool_calls_and_tool_result_are_serialized() -> None:

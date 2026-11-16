@@ -214,7 +214,8 @@ def build_family_llm(model: FamilyModel) -> LLM:
     )
     if model.route == "openrouter":
         # 4xx 원인(error.message)을 오류 메시지에 남긴다. 이 호출은 합성 데이터만 보낸다.
-        return OpenRouterLLM(settings, include_error_message=True)
+        # temperature는 요청 값(None이면 생략)으로 제어하므로 어댑터는 막지 않는다.
+        return OpenRouterLLM(settings, include_error_message=True, send_temperature=True)
     return build_llm(settings)
 
 
