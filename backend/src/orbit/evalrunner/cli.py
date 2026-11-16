@@ -4,6 +4,7 @@
         --repeats 3 --out <jsonl>
     python -m orbit.evalrunner stats <jsonl> [--compare <jsonl>]
     python -m orbit.evalrunner judge-input <jsonl> --out <jsonl>
+    python -m orbit.evalrunner judge run|agreement|human-sample ...   (judge.py 참고)
 
 종료 코드: 0 정상, 2 사용 오류(봉인된 test 분할, 파일 충돌, 잘못된 입력), 3 누적 상한으로 중단.
 기본은 실제 LLM을 부르지 않는다. `--llm-script`가 없으면 LLM 호출은 모두 실패한다.
@@ -26,7 +27,7 @@ from sqlalchemy.engine import make_url
 from orbit.connectors.sim.faults import FaultPlan
 from orbit.core.config import get_llm_settings
 from orbit.evaldata.dataset import read_review
-from orbit.evalrunner import metrics_v1, stats
+from orbit.evalrunner import judge, metrics_v1, stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
 from orbit.evalrunner.runflow_env import EvalDatabaseSettings, RunflowEnvironment
@@ -198,6 +199,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     ji.add_argument("results")
     ji.add_argument("--out", required=True)
+    judge.add_parser(sub)
     return p
 
 
@@ -396,6 +398,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "run":
             return _run(args)
+        if args.command == "judge":
+            return judge.run_cli(args)
         return _judge_input(args) if args.command == "judge-input" else _stats(args)
     except SealedSplitError:
         print(f"test 분할은 봉인돼 있다. 실행하려면 {SEAL_FLAG}를 명시한다.", file=sys.stderr)

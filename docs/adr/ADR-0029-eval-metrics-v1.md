@@ -34,6 +34,8 @@
 
 ### 3. Judge가 필요한 지표는 기록만 하고 나중에 채점한다
 - 서술형 주장의 근거성(§1-2)은 Judge가 필요하다. 계획대로 사람 라벨 표본과의 일치도(kappa ≥ 0.6)를 먼저 검증해야 한다.
+- Judge 구성(`evalrunner/judge.py`, 프롬프트 `judge-v1`): 평가 대상(OpenAI)이 아닌 anthropic·google 두 계열이 각각 에피소드마다 답의 주장을 최대 8개로 나눠 supported·unsupported·not_checkable로 판정하고 에피소드 grounded 여부를 낸다. 응답 원문은 저장하지 않는다.
+- 신뢰도는 에피소드 단위 grounded 이진 판정의 Cohen's kappa로 잰다(Judge 간, 각 Judge와 사람 표본 60건). 기준은 kappa ≥ 0.6이며, 못 미치면 Judge 지표를 보조 참고로만 쓴다. 주장 단위는 정렬이 어려워 분포만 보고한다.
 - 이번에는 Judge 입력(답 문장·도구 결과 본문)을 기록만 한다. Judge 채점은 기록된 결과에 사후로 적용하므로 기준선을 다시 실행하지 않는다. 범위·비용은 개발자 확인 후 정한다.
 
 ### 4. 범위 밖

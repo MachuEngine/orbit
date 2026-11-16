@@ -705,16 +705,26 @@ def extra_metrics(records: Sequence[Record]) -> dict[str, Any]:
 
 
 def judge_inputs(records: Sequence[Record]) -> Iterator[dict[str, Any]]:
-    """서술형 근거성 Judge용 입력(ADR-0029 §3). 과제 ID·반복 번호, 답 문장, 도구 결과 본문만 담는다.
+    """서술형 근거성 Judge용 입력(ADR-0029 §3). 과제 ID·반복 번호, 평가 대상·과제 유형·묶음 ID,
+    사용자 발화, 답 문장, 도구 결과 본문만 담는다.
     Judge 호출은 여기서 하지 않는다. `trace`가 없거나 답 문장이 없는 행은 건너뛴다."""
     for r in records:
         trace = _trace(r)
         text = (trace or {}).get("final_text")
         if trace is None or not isinstance(text, str) or not text.strip():
             continue
+        turns = [t for t in (trace.get("turns") or []) if isinstance(t, Mapping)]
+        users = [t["user"] for t in turns if isinstance(t.get("user"), str)]
+        meta = _meta(r) or {}
+        config = r.get("config")
+        sut = config.get("sut") if isinstance(config, Mapping) else None
         yield {
             "task_id": r["task_id"],
             "repeat": r.get("repeat"),
+            "sut": sut.get("name") if isinstance(sut, Mapping) else None,
+            "task_type": meta.get("type"),
+            "cluster_id": r.get("cluster_id"),
+            "question": "\n".join(users),
             "answer_text": text,
             "tool_results": [
                 {"name": c.get("name"), "result": c.get("result")}
