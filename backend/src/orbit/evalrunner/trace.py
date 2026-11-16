@@ -46,11 +46,19 @@ class EpisodeTrace:
     tool_calls: list[ToolCallTrace] = field(default_factory=list)
     handles: dict[str, Any] | None = None  # 작업 집합 `export()`
     turn_structured: dict[int, dict[str, Any] | None] = field(default_factory=dict)
+    # 평가 전용 Agent 패턴(ADR-0030)의 LLM 호출: 단계 종류(plan·replan·classify·act)와 계획·분류
+    # 문장.
+    # 문장은 그래프 상태·DB에 두지 않고 결과 파일 trace에만 남긴다(ADR-0029 §1).
+    pattern_steps: list[dict[str, Any]] = field(default_factory=list)
 
     def record_tool(
         self, name: str, arguments: Any, result: str, *, is_error: bool, turn: int | None = None
     ) -> None:
         self.tool_calls.append(ToolCallTrace(name, arguments, result, is_error, turn))
+
+    def record_pattern_step(self, kind: str, text: str | None) -> None:
+        """`act`는 종류만 남긴다(문장은 `run_message`에 있다). 계획·분류는 문장도 남긴다."""
+        self.pattern_steps.append({"kind": kind, "text": None if kind == "act" else text})
 
     def record_handles(self, exported: Mapping[str, Any]) -> None:
         self.handles = dict(exported)
@@ -172,4 +180,5 @@ def build_trace(
         "final_text": final_text,
         "structured": None if structured is None else dict(structured),
         "answer_handles": answer_handle_table(calls, handles),
+        "pattern_steps": list(collector.pattern_steps),
     }

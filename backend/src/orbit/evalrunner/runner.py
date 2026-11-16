@@ -208,9 +208,17 @@ class EpisodeResult:
     task_meta: Mapping[str, Any] | None = None  # 과제 유형·시나리오·근거 태그 ID(정답 아님)
     min_tool_calls: int | None = None  # 정답 제출 오라클의 도구 호출 수(하한)
     result_schema: int = RESULT_SCHEMA_VERSION
+    # 단계 종류별 LLM 호출 수(평가 전용 Agent 패턴, ADR-0030). 종류가 붙은 호출이 없으면 None.
+    llm_calls_by_kind: Mapping[str, int] | None = None
+    # 패턴의 계획·분류 합계(분류 파싱 실패 수 등). 패턴이 없으면 None. 오류로 끝난 에피소드는 None.
+    pattern_stats: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         row = self._base_dict()
+        if self.llm_calls_by_kind is not None:
+            row["usage"]["llm_calls_by_kind"] = dict(sorted(self.llm_calls_by_kind.items()))
+        if self.pattern_stats is not None:
+            row["pattern_stats"] = dict(self.pattern_stats)
         if self.cleanup_failed is not None:  # DB를 쓴 에피소드(관찰이 실패하면 turns가 없다)
             row["approval_violations"] = self.approval_violations
             row["turns"] = None if self.turns is None else [dict(t) for t in self.turns]
@@ -507,7 +515,14 @@ async def run_episode(
         ),
         task_meta=task_meta(task),
         min_tool_calls=min_calls,
+        llm_calls_by_kind=_calls_by_kind(recorder),
+        pattern_stats=output.pattern_stats if output is not None else None,
     )
+
+
+def _calls_by_kind(recorder: UsageRecorder) -> dict[str, int] | None:
+    kinds = [r.step_kind for r in recorder.records if r.step_kind]
+    return {k: kinds.count(k) for k in sorted(set(kinds))} if kinds else None
 
 
 @dataclass

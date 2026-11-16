@@ -185,6 +185,7 @@ class EpisodeRecordingLLM(RecordingLLM):
                         latency_ms=None,
                         retries=0,
                         error_type="Cancelled",
+                        step_kind=request.metadata.get("step_kind"),
                     )
                 )
             raise
@@ -225,6 +226,8 @@ class EpisodeOutput:
     structured: dict[str, Any] | None = None
     # 단계 여유가 없어 최종 텍스트를 받지 못했다. 이때 텍스트 지표는 기록하지 않는다.
     text_skipped: bool = False
+    # 평가 전용 Agent 패턴(ADR-0030)의 계획·분류 합계(`PatternStats.to_dict()`). 패턴이 없으면 None.
+    pattern_stats: dict[str, Any] | None = None
 
 
 class SystemUnderTest(Protocol):
