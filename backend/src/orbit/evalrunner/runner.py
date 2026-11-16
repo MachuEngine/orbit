@@ -171,6 +171,13 @@ class EpisodeResult:
     providers: tuple[str, ...]
     model_mismatch: bool
     latency_ms: int
+    # 커넥터 호출 기록(도구, 요약된 인자, 결과, 오류 종류). 인자는 `CallRecord.args` 요약이라
+    # 본문 필드와 80자 넘는 문자열은 길이 표시다(ADR-0026 §7). 결과 요약은 넣지 않는다.
+    calls: tuple[Mapping[str, Any], ...] = ()
+    # 정답 종류(`expected_answer.kind`). 없으면 None. 통계가 정답이 clarify인 문항을 가른다.
+    expected_kind: str | None = None
+    # `ambiguity_ignored`일 때만: 제출이 일치한 해석 번호(readings 인덱스, 0부터)
+    matched_reading: int | None = None
     text_skipped: bool = False  # 최종 텍스트를 받지 못해 텍스트 지표가 없다
     cached_input_tokens: int = 0
     reasoning_tokens: int = 0  # output_tokens의 부분집합(추론에 쓴 토큰)
@@ -210,7 +217,10 @@ class EpisodeResult:
             "unscored": list(self.unscored),
             "text_fact_recall": self.text_fact_recall,
             "answer_ids": self.answer_ids,
+            "expected_kind": self.expected_kind,
+            "matched_reading": self.matched_reading,
             "trajectory": list(self.trajectory),
+            "calls": [dict(c) for c in self.calls],
             "usage": {
                 "llm_calls": self.llm_calls,
                 "input_tokens": self.input_tokens,
@@ -400,6 +410,19 @@ async def run_episode(
         text_fact_recall=None if error_type is not None or text_skipped else score.text_fact_recall,
         answer_ids=answer_ids(output.structured) if output is not None else None,
         trajectory=tuple(c.tool for c in calls),
+        calls=tuple(
+            {
+                "tool": c.tool,
+                "args": c.args,
+                "outcome": c.outcome,
+                "error_type": c.error_type,
+            }
+            for c in calls
+        ),
+        expected_kind=(
+            task.gold.expected_answer.kind if task.gold.expected_answer is not None else None
+        ),
+        matched_reading=score.matched_reading if failure == "ambiguity_ignored" else None,
         llm_calls=len(recorder.records),
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,

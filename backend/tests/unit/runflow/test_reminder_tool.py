@@ -55,7 +55,7 @@ def test_parse_accepts_only_exact_keys_and_valid_values() -> None:
 
 
 def test_prompt_v07_limits_reminders_to_direct_user_requests_and_explains_relative_time() -> None:
-    assert prompt.PROMPT_VERSION == "runflow-v0.7"
+    assert prompt.PROMPT_VERSION == "runflow-v0.8"  # v0.8: 되묻기 지시 추가(ADR-0026 §4)
     text = prompt.build_system_prompt(NOW, UTC, BOUNDARY)
     assert "create_reminder" in text
     assert "사용자가 직접 알려 달라고 요청했을 때만" in text

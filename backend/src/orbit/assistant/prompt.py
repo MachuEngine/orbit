@@ -6,7 +6,9 @@ system 메시지에는 서버가 만든 고정 문구와 서버가 계산한 값
 
 from datetime import datetime, timedelta, tzinfo
 
-PROMPT_VERSION = "assistant-v0.3"
+from orbit.assistant.answer_guide import answer_guide_lines
+
+PROMPT_VERSION = "assistant-v0.4"
 
 _WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
 
@@ -23,6 +25,11 @@ RELATIVE_DATE_LINE = (
 )
 DAY_RANGE_RULE = "하루는 그날 00:00부터 다음 날 00:00까지로 조회한다."
 FACT_CHECK_HEADER = "[사실 확인]"
+# 되묻기 지시(ADR-0026 §4). 제품 동작이라 assistant와 runflow 실사용 프롬프트가 같은 줄을 쓴다.
+CLARIFY_LINE = (
+    "- 질문이 두 가지 이상으로 읽히고 해석에 따라 답이 달라지면, 답하기 전에 어떤 뜻인지 짧게 "
+    "되묻는다. 한 가지로 읽히면 되묻지 않는다."
+)
 
 
 def fact_check_lines() -> list[str]:
@@ -91,15 +98,7 @@ def build_system_prompt(now: datetime, tz: tzinfo, boundary: str) -> str:
         *disclosure_lines(),
         "",
         "[답하는 방법]",
-        "- 답이 정해지면 submit_answer를 호출하고, 같은 응답에 한국어로 짧게 답을 적는다.",
-        "- 답 종류(kind)",
-        "  - event_set: 일정 목록을 묻는 질문. events에 해당 일정 핸들을 모두 담는다. "
-        "없으면 빈 목록이다.",
-        "  - event: 특정 일정 하나를 묻는 질문. event에 핸들 하나를 담는다.",
-        "  - event_time: 변경된 일정의 현재 시각을 묻는 질문. "
-        "event와 start(오프셋 있는 ISO 8601)를 담는다.",
-        "  - time_slot: 빈 시간을 묻는 질문. "
-        "start(오프셋 있는 ISO 8601)에 가능한 시작 시각을 담는다.",
-        "- submit_answer가 오류를 돌려주면 인자를 고쳐 다시 호출한다.",
+        CLARIFY_LINE,
+        *answer_guide_lines(),
     ]
     return "\n".join(lines) + "\n"

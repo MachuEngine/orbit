@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class _Model(BaseModel):
@@ -90,8 +90,89 @@ class TimeSlotAnswer(_Model):
     start: AwareDatetime
 
 
+class MessageRef(_Model):
+    message_id: str
+
+
+class MessageSetAnswer(_Model):
+    """메일 집합. 순서 무관 집합이 같아야 한다 (ADR-0026 4절)."""
+
+    kind: Literal["message_set"] = "message_set"
+    messages: list[MessageRef]
+
+
+class DocumentRef(_Model):
+    file_id: str
+
+
+class DocumentAnswer(_Model):
+    kind: Literal["document"] = "document"
+    document: DocumentRef
+
+
+class AbstainAnswer(_Model):
+    """도구로 확인했지만 답할 정보가 없음을 알린다."""
+
+    kind: Literal["abstain"] = "abstain"
+
+
+ReadingAnswer = Annotated[
+    EventSetAnswer
+    | EventAnswer
+    | EventTimeAnswer
+    | TimeSlotAnswer
+    | MessageSetAnswer
+    | DocumentAnswer,
+    Field(discriminator="kind"),
+]
+
+
+def answer_signature(answer: Any) -> tuple[str, Any]:
+    """정답의 비교용 값. 종류와 순서 없는 값으로 만든 해시 가능한 값의 쌍이다.
+
+    정답 검증기(`ClarifyAnswer`)와 채점(`orbit.evalrunner.structured`)이 같은 규칙을 쓴다.
+    """
+    if isinstance(answer, EventSetAnswer):
+        return answer.kind, frozenset((e.calendar_id, e.event_id) for e in answer.events)
+    if isinstance(answer, EventAnswer):
+        return answer.kind, (answer.event.calendar_id, answer.event.event_id)
+    if isinstance(answer, EventTimeAnswer):
+        return answer.kind, ((answer.event.calendar_id, answer.event.event_id), answer.start)
+    if isinstance(answer, TimeSlotAnswer):
+        return answer.kind, answer.start
+    if isinstance(answer, MessageSetAnswer):
+        return answer.kind, frozenset(m.message_id for m in answer.messages)
+    if isinstance(answer, DocumentAnswer):
+        return answer.kind, answer.document.file_id
+    return answer.kind, None
+
+
+class ClarifyAnswer(_Model):
+    """모호한 질문 문항의 정답: 되묻는 것이 성공이다 (ADR-0026 4절).
+
+    `readings`는 해석별 정답이고 서로 달라야 한다(같으면 모호성이 결과에 영향이 없다).
+    """
+
+    kind: Literal["clarify"] = "clarify"
+    readings: list[ReadingAnswer] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def _readings_differ(self) -> ClarifyAnswer:
+        signatures = [answer_signature(r) for r in self.readings]
+        if len(set(signatures)) != len(signatures):
+            raise ValueError("clarify readings must be distinct answers")
+        return self
+
+
 ExpectedAnswer = Annotated[
-    EventSetAnswer | EventAnswer | EventTimeAnswer | TimeSlotAnswer,
+    EventSetAnswer
+    | EventAnswer
+    | EventTimeAnswer
+    | TimeSlotAnswer
+    | MessageSetAnswer
+    | DocumentAnswer
+    | AbstainAnswer
+    | ClarifyAnswer,
     Field(discriminator="kind"),
 ]
 

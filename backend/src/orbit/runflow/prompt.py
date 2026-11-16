@@ -7,9 +7,14 @@ system 메시지에는 서버가 만든 고정 문구와 서버가 계산한 값
 
 from datetime import datetime, timedelta, tzinfo
 
-from orbit.assistant.prompt import AUTHORITY_SENTENCE, data_rule_lines, disclosure_lines
+from orbit.assistant.prompt import (
+    AUTHORITY_SENTENCE,
+    CLARIFY_LINE,
+    data_rule_lines,
+    disclosure_lines,
+)
 
-PROMPT_VERSION = "runflow-v0.7"
+PROMPT_VERSION = "runflow-v0.8"
 
 _WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
 
@@ -73,6 +78,7 @@ def build_system_prompt(now: datetime, tz: tzinfo, boundary: str) -> str:
         *disclosure_lines(),
         "",
         "[답하는 방법]",
+        CLARIFY_LINE,
         "- 모든 작업이 끝나면 도구를 부르지 않고 한국어로 짧게 결과를 알린다.",
         "- 도구 결과가 오류면 원인을 추측하지 말고 해당 정보를 가져오지 못했다고만 짧게 알린다. "
         "오류 원인 안내는 화면에 따로 표시된다.",

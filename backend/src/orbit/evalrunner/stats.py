@@ -396,6 +396,45 @@ def failure_distribution(records: Sequence[Record]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _scored(records: Sequence[Record]) -> list[Record]:
+    return [r for r in records if r["outcome"]["success"] is not None]
+
+
+def answer_kind_rate(records: Sequence[Record]) -> float | None:
+    """채점된 에피소드 중 `answer_kind`(답 종류만 틀림) 비율. 채점된 에피소드가 없으면 None."""
+    scored = _scored(records)
+    if not scored:
+        return None
+    hits = sum(r["outcome"].get("failure_type") == "answer_kind" for r in scored)
+    return float(hits / len(scored))
+
+
+def unneeded_clarify_rate(records: Sequence[Record]) -> float | None:
+    """정답이 clarify가 아닌 채점된 에피소드 중 `unneeded_clarify`(과잉 되묻기) 비율.
+
+    정답 종류는 결과 행의 `expected_kind`다(없는 옛 결과 행은 clarify가 아닌 것으로 본다).
+    """
+    pool = [r for r in _scored(records) if r.get("expected_kind") != "clarify"]
+    if not pool:
+        return None
+    hits = sum(r["outcome"].get("failure_type") == "unneeded_clarify" for r in pool)
+    return float(hits / len(pool))
+
+
+def ambiguity_ignored_by_reading(records: Sequence[Record]) -> dict[str, int] | None:
+    """정답이 clarify인 에피소드가 있을 때만: `ambiguity_ignored` 개수를 일치한 해석 번호(0부터,
+    어느 해석과도 안 맞으면 "none")별로 센다. clarify 정답 에피소드가 없으면 None."""
+    clarify = [r for r in _scored(records) if r.get("expected_kind") == "clarify"]
+    if not clarify:
+        return None
+    counts: Counter[str] = Counter()
+    for r in clarify:
+        if r["outcome"].get("failure_type") == "ambiguity_ignored":
+            reading = r.get("matched_reading")
+            counts["none" if reading is None else str(reading)] += 1
+    return dict(sorted(counts.items()))
+
+
 def state_diff_mismatch_count(records: Sequence[Record]) -> int:
     """상태 변화 기대와 달랐던(`state_diff_match` False) 에피소드 수. 실패 유형과 별개로 센다."""
     return sum(r.get("state_diff_match") is False for r in records)

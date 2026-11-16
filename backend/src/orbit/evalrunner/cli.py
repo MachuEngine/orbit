@@ -280,10 +280,15 @@ def _stats(args: argparse.Namespace) -> int:
         "success_rate": rate.__dict__,
         "pass_k": stats.pass_k(records).__dict__,
         "failure_distribution": stats.failure_distribution(records),
+        "answer_kind_rate": stats.answer_kind_rate(records),
+        "unneeded_clarify_rate": stats.unneeded_clarify_rate(records),
         "state_diff_mismatch_episodes": stats.state_diff_mismatch_count(records),
         "model_mismatch_episodes": stats.model_mismatch_count(records),
         "response_models": stats.response_model_set(records),
     }
+    by_reading = stats.ambiguity_ignored_by_reading(records)
+    if by_reading is not None:
+        report["ambiguity_ignored_by_reading"] = by_reading
     if not report["response_models"]["single"]:
         report["warnings"] = [
             "실행 전체의 응답 모델이 하나가 아니다. 결과를 같은 모델로 해석하지 않는다"

@@ -12,24 +12,17 @@
 from collections.abc import Callable
 from typing import Any
 
+from orbit.assistant.answer_guide import answer_guide_lines
 from orbit.assistant.tools import SUBMIT_ANSWER, tool_specs
 from orbit.llm.types import ToolSpec
 
-ANSWER_EXTENSION_VERSION = "eval-answer-v1"
+ANSWER_EXTENSION_VERSION = "eval-answer-v2"
 
 # 구조화된 답(제공자 ID 기반 ADR-0010 형식)을 받는 쪽. 호출은 동기이고 메모리에만 담는다.
 AnswerSink = Callable[[dict[str, Any]], None]
 
-ANSWER_PROMPT_PARAGRAPH = (
-    "[답 제출]\n"
-    "- 일정이나 메일을 조회해 묻는 질문에 답이 정해지면 submit_answer를 호출해 구조화된 답을 "
-    "제출하고, 같은 응답에 한국어로 짧게 답을 적는다. "
-    "답 종류(kind)는 event_set(일정 목록을 묻는 질문, events에 해당 일정 핸들을 모두 담고 "
-    "없으면 빈 목록), event(특정 일정 하나, event에 핸들), event_time(변경된 일정의 현재 시각, "
-    "event와 start), time_slot(빈 시간, start에 가능한 시작 시각)이다. "
-    "start는 오프셋이 있는 ISO 8601이다. submit_answer가 오류를 돌려주면 인자를 고쳐 다시 "
-    "호출한다. 제출한 뒤에는 도구를 더 부르지 않고 한국어로 짧게 결과를 알린다.\n"
-)
+# 안내 본문은 assistant 평가 경로와 같은 함수 출력이다(바이트 단위로 같다).
+ANSWER_PROMPT_PARAGRAPH = "[답 제출]\n" + "\n".join(answer_guide_lines()) + "\n"
 
 
 def answer_tool_spec() -> ToolSpec:

@@ -128,7 +128,7 @@ uv run python -m orbit.evalrunner run \
   아직 지원하지 않는다.
 - 결과 행에는 `assistant_v0` 행의 필드에 더해 `approval_violations`(DB `execution`·`approval`과 Sim 호출 기록으로
   러너가 계산), `turns`(턴별 run 상태·승인 수·오류 종류), `reminders_created`가 있다. 설정 지문의
-  `config.sut_config`에 runflow 설정 지문, 답 제출 확장 버전(`eval-answer-v1`), 색인 모드가 들어간다.
+  `config.sut_config`에 runflow 설정 지문, 답 제출 확장 버전(`eval-answer-v2`), 색인 모드가 들어간다.
 - 원인 확인용 변형(ADR-0023 §10): `--runflow-variant facts`(프롬프트에 `assistant_v0`의 [사실 확인] 단락을 더함,
   `facts-v1`)와 `--runflow-variant reasoning-rt`(추론 항목을 메모리에만 두고 다음 step 요청에 되돌림)를 켠다.
   옵션을 반복해 함께 켤 수 있고, `--sut runflow_v0`가 아니면 거부한다. 켠 변형은 SUT 버전 문자열 끝과
@@ -138,6 +138,27 @@ uv run python -m orbit.evalrunner run \
   승인한다.
 - 모델이 받는 도구 목록과 프롬프트에 `submit_answer`와 안내 한 단락이 더해진다. 실사용 입력과 정확히 같지
   않다(ADR-0023 타당성 위협).
+
+## 평가 스위트 v1 측정 도구 (ADR-0026 §4·§7)
+
+- **답 제출 안내 `eval-answer-v2`**: `assistant_v0`(프롬프트 `assistant-v0.4`)와 `runflow_v0`(`runflow-v0.8` +
+  확장)가 같은 안내 문구(`orbit.assistant.answer_guide.answer_guide_lines`)를 받는다. 정답 유형마다 쓰는 상황과
+  예시 질문 한 줄이 있다. v0 결과와 한 비교에 섞지 않는다.
+- **새 정답 유형**: `message_set`(메일 집합), `document`, `abstain`(답할 정보 없음), `clarify`(되묻기, 모호한 질문 문항의
+  정답이며 `readings`에 해석별 정답이 둘 이상 있다).
+- **새 실패 유형**: `answer_kind`(답 종류만 틀리고 가리킨 일정·메일·문서 ID 집합은 정답과 같음), `ambiguity_ignored`
+  (모호한 질문에 되묻지 않고 답함), `unneeded_clarify`(한 가지로 읽히는 질문에서 되물음). 종류도 대상도 틀리면
+  `wrong_answer`다. 우선순위는 `answer_format` > `answer_kind` > `ambiguity_ignored` = `unneeded_clarify` > `wrong_answer`.
+  성공 판정은 바뀌지 않는다(종류가 틀리면 실패).
+- **결과 행 필드**: `calls`(커넥터 호출마다 `tool`, `args`, `outcome`, `error_type`. `args`는 요약본이라 본문 필드와
+  80자 넘는 문자열은 `<str len=N>`이고 `result_summary`는 없다. 기존 `trajectory`는 유지), `expected_kind`(정답 종류),
+  `matched_reading`(`ambiguity_ignored`일 때 제출이 일치한 해석 번호로 `readings` 인덱스 0부터, 없으면 null).
+- **`stats` 출력**: 기존 키에 `answer_kind_rate`(채점된 에피소드 중 `answer_kind` 비율), `unneeded_clarify_rate`(정답이
+  `clarify`가 아닌 채점된 에피소드 중 `unneeded_clarify` 비율), 정답이 `clarify`인 에피소드가 있으면
+  `ambiguity_ignored_by_reading`(해석 번호별 개수, 일치 없음은 `"none"`)이 더해진다.
+- **되묻기 지시**: 제품 프롬프트에 "질문이 두 가지 이상으로 읽히고 해석에 따라 답이 달라지면 되묻는다. 한 가지로 읽히면
+  되묻지 않는다"는 줄이 들어갔다(`assistant-v0.4`, `runflow-v0.8`). 평가 전용 안내가 아니라 실사용 프롬프트다.
+  `assistant_v0`에는 문서 도구가 없어 `document` 답은 낼 수 없다.
 
 ## 결과에 남는 설정 지문
 

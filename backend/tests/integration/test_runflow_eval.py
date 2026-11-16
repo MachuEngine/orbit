@@ -295,12 +295,12 @@ async def test_read_task_scores_structured_answer_from_handles(app_url: str) -> 
     assert r.checks["approval"] is True
     row = r.to_dict()
     assert row["config"]["sut"]["name"] == "runflow_v0"
-    assert row["config"]["sut_config"]["answer_extension"] == "eval-answer-v1"
+    assert row["config"]["sut_config"]["answer_extension"] == "eval-answer-v2"
     assert row["config"]["sut_config"]["index_mode"] == "off"
     assert row["config"]["sut_config"]["runflow_fingerprint"] == config_fingerprint(
         "unspecified", None, answer_extension=True
     )
-    assert "eval-answer-v1" in row["config"]["sut"]["version"]
+    assert "eval-answer-v2" in row["config"]["sut"]["version"]
 
 
 async def test_provider_ids_stay_out_of_messages_tool_calls_and_checkpoints(app_url: str) -> None:
@@ -760,10 +760,83 @@ async def test_reasoning_cache_does_not_cross_runs(make_harness: Make) -> None:
     assert all(m.provider_items == () for m in h.llm.requests[2].messages)
 
 
+async def test_message_set_clarify_and_calls_are_scored_end_to_end(app_url: str) -> None:
+    """스위트 v1 정답 유형(ADR-0026): 메일 집합, 되묻기, 과잉 되묻기, 종류 오류, 도구 인자."""
+    bob = {
+        "kind": "message_set",
+        "messages": [{"message_id": "msg-a-001"}, {"message_id": "msg-a-003"}],
+    }
+    clarify = {
+        "kind": "clarify",
+        "readings": [
+            {"kind": "event", "event": {"calendar_id": MAIN, "event_id": "evalice001"}},
+            EVENT_SET,
+        ],
+    }
+    tasks = [
+        task(
+            "v-mail",
+            ["밥이 보낸 메일을 모두 알려줘"],
+            gold=read_gold(expected_answer=bob, required_tool_calls=[]),
+        ),
+        task(
+            "v-clarify",
+            ["다음 미팅 알려줘"],
+            gold=read_gold(expected_answer=clarify, required_tool_calls=[]),
+        ),
+        task("v-plain", ["내일 일정 알려줘"], gold=read_gold(required_tool_calls=[])),
+        task(
+            "v-kind",
+            ["내일 첫 일정이 뭐야?"],
+            gold=read_gold(
+                expected_answer={
+                    "kind": "event_set",
+                    "events": [{"calendar_id": MAIN, "event_id": "evalice001"}],
+                },
+            ),
+        ),
+    ]
+    search = call("search_mail", query="from:bob@example.org")
+    script: dict[str, list[dict[str, Any]]] = {
+        "v-mail": [
+            {"tool_calls": [search]},
+            {
+                "text": "두 통입니다.",
+                "structured": {"kind": "message_set", "messages": ["M1", "M2"]},
+            },
+            {"text": "정리했습니다."},
+        ],
+        "v-clarify": [
+            {"text": "어떤 뜻인가요?", "structured": {"kind": "clarify"}},
+            {"text": "되물었습니다."},
+        ],
+        "v-plain": [
+            {"text": "어떤 일정인가요?", "structured": {"kind": "clarify"}},
+            {"text": "되물었습니다."},
+        ],
+        "v-kind": [
+            {"tool_calls": [call("list_events", **DAY)]},
+            {"text": "주간 회의입니다.", "structured": {"kind": "event", "event": "E1"}},
+            {"text": "정리했습니다."},
+        ],
+    }
+    summary, _, _ = await run(app_url, tasks, script)
+    got = {r.task_id: (r.success, r.failure_type) for r in summary.results}
+    assert got["v-mail"] == (True, None), summary.results[0].detail
+    assert got["v-clarify"] == (True, None)
+    assert got["v-plain"] == (False, "unneeded_clarify")
+    assert got["v-kind"] == (False, "answer_kind")  # 같은 일정을 목록이 아닌 하나로 냈다
+    rows = {r.task_id: r.to_dict() for r in summary.results}
+    (entry,) = rows["v-mail"]["calls"]
+    assert entry["tool"] == "search_messages" and entry["args"]["query"] == "from:bob@example.org"
+    assert set(entry) == {"tool", "args", "outcome", "error_type"}
+    assert rows["v-clarify"]["calls"] == [] and rows["v-clarify"]["expected_kind"] == "clarify"
+
+
 def test_sut_rejects_unsupported_index_mode() -> None:
     with pytest.raises(ValueError):
         create_sut("runflow_v0", index_mode="fake")
-    assert create_sut("runflow_v0").version == f"0+{PROMPT_VERSION}+eval-answer-v1+index-off"
+    assert create_sut("runflow_v0").version == f"0+{PROMPT_VERSION}+eval-answer-v2+index-off"
     with_variants = create_sut("runflow_v0", variants=["facts", "reasoning-rt"])
     assert with_variants.version.endswith("+index-off+facts-v1+reasoning-rt")
 

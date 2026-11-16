@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from orbit.assistant.prompt import CLARIFY_LINE
 from orbit.assistant.prompt import build_system_prompt as assistant_prompt
 from orbit.evalrunner.runflow_sut import RunflowV0SUT
 from orbit.runflow.eval_variants import (
@@ -23,12 +24,21 @@ TZ = ZoneInfo("Asia/Seoul")
 INFO = {"provider": "openai", "reasoning_items_roundtrip": True}
 
 
-def test_assistant_prompt_is_byte_identical_after_line_sharing() -> None:
-    # 줄을 함수로 꺼내기 전 출력의 SHA-256(assistant-v0.3, 경계값 B123)
+def test_prompts_match_pinned_hashes_after_clarify_and_answer_guide() -> None:
+    # 의도된 변경으로 해시를 갱신했다(ADR-0026 §4·§7). assistant-v0.4는 [답하는 방법]을 공유 답
+    # 안내(`answer_guide_lines`)와 되묻기 줄로 바꿨고, runflow-v0.8은 되묻기 줄만 더했다.
+    # 경계값 B123 기준 출력의 SHA-256이다.
     digest = hashlib.sha256(assistant_prompt(NOW, TZ, "B123").encode()).hexdigest()
-    assert digest == "cf63a01639c225592f779fbf9593371d366b7265b3ab56ad1586554cb447e372"
-    digest = hashlib.sha256(runflow_prompt(NOW, TZ, "B123").encode()).hexdigest()
-    assert digest == "1b67cc44026a019c2c51e6ac3e424c9c71d1875137c4c16de0589d3a68ee3b28"
+    assert digest == "f45d0539460b94eeeddc5d7fb5e37c5d6aa39885a4cd1aa3e2e9a2416f258ff1"
+    text = runflow_prompt(NOW, TZ, "B123")
+    assert hashlib.sha256(text.encode()).hexdigest() == (
+        "1491628eed35e366f1ad167db92d6219a058acd51cea3db7cb9a87b2e237f955"
+    )
+    # 되묻기 줄 하나를 빼면 runflow-v0.7의 출력과 바이트 단위로 같다(그 밖의 줄은 바뀌지 않았다)
+    without = text.replace(CLARIFY_LINE + "\n", "")
+    assert hashlib.sha256(without.encode()).hexdigest() == (
+        "1b67cc44026a019c2c51e6ac3e424c9c71d1875137c4c16de0589d3a68ee3b28"
+    )
 
 
 def test_facts_paragraph_shares_lines_with_assistant_prompt() -> None:
@@ -68,7 +78,7 @@ def test_reasoning_roundtrip_fingerprint_records_actual_llm_value() -> None:
 
 
 def test_sut_version_and_config_info_list_variants() -> None:
-    base = f"0+{PROMPT_VERSION}+eval-answer-v1+index-off"
+    base = f"0+{PROMPT_VERSION}+eval-answer-v2+index-off"
     assert RunflowV0SUT().version == base
     assert RunflowV0SUT(variants=["reasoning-rt", "facts"]).version == (
         f"{base}+{FACTS_EXTENSION_VERSION}+reasoning-rt"
