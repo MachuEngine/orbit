@@ -458,6 +458,10 @@ def test_judge_inputs_have_only_answer_results_and_ids() -> None:
     assert out[0] == {
         "task_id": "a",
         "repeat": 1,
+        "sut": None,
+        "task_type": "calendar",
+        "cluster_id": None,
+        "question": "질문",
         "answer_text": "답",
         "tool_results": [{"name": "list_events", "result": '{"x": 1}'}],
     }

@@ -187,7 +187,13 @@ uv run python -m orbit.evalrunner run \
   `abstain` 답으로 판정하므로 목록에 없는 표현은 놓친다. 사실 근거율은 날짜·시각·금액·숫자·이메일·이름 후보만 본다
   (`fact_extract`).
 - **Judge 입력 내보내기**: `python -m orbit.evalrunner judge-input <결과.jsonl> --out <입력.jsonl>`은 서술형 근거성 Judge용
-  입력(과제 ID, 반복 번호, 답 문장, 도구 결과 본문)만 쓴다. Judge는 호출하지 않는다.
+  입력(과제 ID, 반복 번호, 평가 대상·과제 유형·묶음 ID, 사용자 발화, 답 문장, 도구 결과 본문)만 쓴다. Judge는 호출하지 않는다.
+- **근거성 Judge**(ADR-0029 §3): 평가 대상(OpenAI)과 다른 계열(anthropic, google)이 답의 서술형 주장을 판정한다.
+  `judge run --input <입력.jsonl> --out <폴더> --max-cost-usd X [--dry-run]`(재개·누적 상한은 자동 검수와 같고 `--families`,
+  `--models-config`로 바꾼다. 프롬프트 `judge-v1`, 도구 결과는 합계 12,000자까지). `judge human-sample --input <입력.jsonl> --n 60
+  --seed S --out <저장소 밖 경로>`가 층화 표본 텍스트와 라벨 서식(`<out>.labels.jsonl`)을 쓰고, 사람 라벨은
+  `{"id","grounded":true|false,"note"}` 줄로 채운다. `judge agreement --a <폴더> --a-family anthropic --b <폴더> --b-family google
+  [--human <라벨.jsonl>]`가 에피소드 단위 이진 판정의 kappa·일치율·혼동표·묶음 bootstrap 신뢰구간을 낸다. 주장 단위는 분포만 보고한다.
 
 ## 결과에 남는 설정 지문
 
