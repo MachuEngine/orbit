@@ -102,7 +102,9 @@ async def test_fault_write_task_is_reconciled_without_duplicate(app_url: str) ->
         for t in real_suite().tasks
         if "derived:fault" in t.tags and "fault:result_unknown" in t.tags
     ]
-    picked = [t for t in faults if t.fault_plan and t.fault_plan["rules"][0]["tool"] == "create_event"]
+    picked = [
+        t for t in faults if t.fault_plan and t.fault_plan["rules"][0]["tool"] == "create_event"
+    ]
     assert picked
     summary = await run_all(app_url, picked[:1])
     r = summary.results[0]

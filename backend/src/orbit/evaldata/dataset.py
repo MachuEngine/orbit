@@ -97,7 +97,10 @@ def dumps_jsonl(rows: list[dict[str, Any]]) -> str:
 
 def write_manifest(out: Path, manifest: Manifest) -> None:
     data = manifest.model_dump(mode="json")
-    for key in ("smoke_task_ids", "details"):  # v1 선택 필드는 값이 없으면 쓰지 않는다(v0와 같은 바이트)
+    for key in (
+        "smoke_task_ids",
+        "details",
+    ):  # v1 선택 필드는 값이 없으면 쓰지 않는다(v0와 같은 바이트)
         if data.get(key) is None:
             data.pop(key, None)
     (out / MANIFEST).write_text(dumps_json(data), encoding="utf-8")
@@ -215,6 +218,14 @@ def validate_dataset(
         if len({t.cluster_id for t in group}) > 1:
             names = ", ".join(sorted(t.task_id for t in group))
             problems.append(f"근거를 공유하는 과제가 서로 다른 묶음에 있다: {names}")
+    if manifest.smoke_task_ids is not None:
+        smoke = manifest.smoke_task_ids
+        by_id = {t.task_id: t for t in tasks}
+        if len(smoke) != len(set(smoke)):
+            problems.append("smoke_task_ids에 중복이 있다")
+        for tid in smoke:
+            if tid not in by_id or by_id[tid].split != "dev":
+                problems.append(f"smoke_task_ids의 {tid}는 유효한 dev 과제가 아니다")
     messages = sum(len(a.get("messages", [])) for a in accounts.values())
     events = sum(len(a.get("events", [])) for a in accounts.values())
     expected = (len(accounts), messages, events, len(tasks))

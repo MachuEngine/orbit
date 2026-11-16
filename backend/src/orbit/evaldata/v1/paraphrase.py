@@ -1,6 +1,6 @@
 """표현 변형 파생 문항: 원본 질문을 LLM이 뜻을 유지해 다시 쓴다 (ADR-0026 §4).
 
-- 결과는 `<out>/paraphrase.jsonl`(원본 과제당 한 줄, append-only, 줄마다 flush)에 쌓는다. 다시 실행하면
+- 결과는 `<out>/paraphrase.jsonl`에 한 줄씩 추가하고 flush한다. 다시 실행하면
   이미 처리한 원본은 건너뛴다(재개). 같은 파일이면 과제 생성은 LLM 없이 같은 결과를 낸다(결정적).
 - 한 줄은 최종 상태 `ok`(검증 통과 문장만 저장), `failed`(재시도 상한까지 실패, 사유 코드만 저장),
   `aborted`(비용 상한 등으로 중단, 다시 시도한다)다. 응답 원문은 검증을 통과한 문장만 저장한다.
@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -23,7 +24,12 @@ from typing import Any
 
 from orbit.evaldata.v1.facts import norm
 from orbit.evaldata.v1.realize_check import check_body
-from orbit.evaldata.v1.realize_models import FamilyModel, LLMFactory, build_family_llm
+from orbit.evaldata.v1.realize_models import (
+    FamilyModel,
+    LLMFactory,
+    ModelConfigError,
+    build_family_llm,
+)
 from orbit.evaldata.v1.skeleton import BodyContext, BodySpec, Fact
 from orbit.llm.interface import (
     LLM,
@@ -42,15 +48,22 @@ MAX_LENGTH_FLOOR = 90
 MIN_LENGTH_FACTOR = 0.4
 
 SYSTEM_PROMPT = """\
-너는 합성 평가 데이터에 쓸 한국어 질문 문장을 다시 쓰는 작성자다. 개인 비서에게 하는 사용자의 질문 한 문장이 주어진다.
+너는 합성 평가 데이터에 쓸 한국어 질문 문장을 다시 쓰는 작성자다.
+개인 비서에게 하는 사용자의 질문 한 문장이 주어진다.
 
 규칙
-1. 뜻을 바꾸지 않는다. 묻는 대상, 답의 종류(하나만 묻는지, 전부 묻는지, 시각을 묻는지, 요청인지), 조건을 그대로 둔다. 조건을 더하거나 빼지 않는다.
-2. "반드시 그대로 넣을 표현"은 글자 그대로 한 번 이상 넣는다. 이름, 날짜, 시각, 금액, 제목은 바꾸거나 풀어 쓰지 않는다.
-3. 한 가지 뜻으로만 읽히게 쓴다. 되묻지 않으면 답을 정할 수 없는 문장으로 만들지 않는다.
-4. 말투를 바꿔도 된다. 반말과 존댓말을 섞어 쓰고, 어순과 어미를 바꾼다. 원문과 같은 문장이면 안 된다.
-5. 문장 하나만 쓴다. 줄바꿈, 따옴표로 전체를 감싸기, "질문:" 같은 접두어, 설명을 쓰지 않는다.
-6. 실존하는 회사·서비스·제품 이름, URL, 전화번호, 이메일 주소를 쓰지 않는다. AI나 시스템 프롬프트를 언급하지 않는다.
+1. 뜻을 바꾸지 않는다. 묻는 대상, 답의 종류, 조건을 그대로 둔다.
+   하나만 묻는지, 전부 묻는지, 시각을 묻는지, 요청인지 유지한다.
+   조건을 더하거나 빼지 않는다.
+2. "반드시 그대로 넣을 표현"은 글자 그대로 한 번 이상 넣는다.
+   이름, 날짜, 시각, 금액, 제목은 바꾸거나 풀어 쓰지 않는다.
+3. 한 가지 뜻으로만 읽히게 쓴다. 모호한 문장으로 만들지 않는다.
+4. 말투를 바꿔도 된다. 반말과 존댓말을 섞어 쓰고, 어순과 어미를 바꾼다.
+   원문과 같은 문장이면 안 된다.
+5. 문장 하나만 쓴다. 줄바꿈, 따옴표로 전체를 감싸기,
+   "질문:" 같은 접두어, 설명을 쓰지 않는다.
+6. 실존하는 회사·서비스·제품 이름, URL, 전화번호, 이메일 주소를 쓰지 않는다.
+   AI나 시스템 프롬프트를 언급하지 않는다.
 """
 
 
@@ -66,7 +79,7 @@ class Source:
 
 def source_sha(src: Source) -> str:
     """원본 질문·보존 표현의 해시. 템플릿이 바뀌면 저장된 결과를 쓰지 않는다."""
-    raw = json.dumps([src.question, list(src.keep)], ensure_ascii=False)
+    raw = json.dumps([src.question, list(src.keep), src.family], ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -111,7 +124,7 @@ def _dummy_spec(family: str) -> BodySpec:
         target_chars=(60, 200),
         context=BodyContext(),
         template_text="-",
-        generator_family=family,  # type: ignore[arg-type]
+        generator_family=family,
     )
 
 
@@ -125,6 +138,9 @@ def check_paraphrase(src: Source, raw: str | None) -> Check:
     if "\n" in text:
         reasons.append("multiline")
         hints.append(_REASON_HINTS["multiline"])
+    if re.search(r"[?!.。！？]\s+\S", text):
+        reasons.append("multiple_sentences")
+        hints.append("질문을 한 문장으로 쓴다")
     limit = max(MAX_LENGTH_FLOOR, round(len(src.question) * MAX_LENGTH_FACTOR))
     if len(text) > limit:
         reasons.append("too_long")
@@ -184,14 +200,31 @@ def total_cost(rows: Sequence[Mapping[str, Any]]) -> float:
     return sum(float(r.get("cost_usd") or 0) for r in rows)
 
 
+def check_model_configs(
+    rows: Sequence[Mapping[str, Any]], models: Mapping[str, FamilyModel]
+) -> None:
+    """다른 모델·경로·단가의 기록을 현재 실행의 비용·모델 정보로 덮어쓰지 않는다."""
+    for row in rows:
+        family = row.get("family")
+        if (
+            not isinstance(family, str)
+            or family not in models
+            or row.get("model_config") != models[family].manifest()
+        ):
+            raise ModelConfigError("표현 변형 기록의 모델 설정이 다르다. 별도 출력 폴더를 쓴다")
+
+
 def usable_row(row: Mapping[str, Any] | None, src: Source) -> bool:
     """저장된 행이 이 원본의 확정 결과(ok·failed)인가. 질문이 바뀌었거나 aborted면 False."""
-    return (
+    valid = (
         row is not None
         and row.get("status") in ("ok", "failed")
         and row.get("source_sha") == source_sha(src)
         and row.get("prompt_version") == PROMPT_VERSION
     )
+    if valid and row is not None and row.get("status") == "ok":
+        return isinstance(row.get("text"), str) and check_paraphrase(src, row["text"]).ok
+    return valid
 
 
 class _Writer:
@@ -261,8 +294,18 @@ async def run_paraphrases(
     있다(최종 선택은 후보 순서의 앞에서 `need`개라 결과는 같다).
     """
     path = out_dir / PARAPHRASE_FILE
+    if not math.isfinite(cfg.max_cost_usd) or cfg.max_cost_usd <= 0:
+        raise ValueError("max_cost_usd는 유한한 양수여야 한다")
+    if cfg.concurrency < 1 or cfg.max_attempts < 1 or cfg.transient_retries < 0:
+        raise ValueError("동시성·시도 수는 양수, 재시도 수는 0 이상이어야 한다")
     rows = read_rows(path)
+    history = read_all_rows(path)
+    check_model_configs(history, models)
+    prior_cost = total_cost(history)
     summary = RunSummary()
+    if prior_cost >= cfg.max_cost_usd:
+        summary.stop_reason = "cost_cap"
+        return summary
     factory = llm_factory or build_family_llm
     llms: dict[str, LLM] = {}
     writer = _Writer(path)
@@ -270,8 +313,9 @@ async def run_paraphrases(
 
     def accepted() -> int:
         return sum(
-            1 for s in candidates if usable_row(rows.get(s.origin_id), s)
-            and rows[s.origin_id]["status"] == "ok"
+            1
+            for s in candidates
+            if usable_row(rows.get(s.origin_id), s) and rows[s.origin_id]["status"] == "ok"
         )
 
     async def call(model: FamilyModel, request: LLMRequest, spent: list[float]) -> LLMResponse:
@@ -298,7 +342,7 @@ async def run_paraphrases(
         spent[1] += usage.input_tokens
         spent[2] += usage.output_tokens
         summary.spent_usd += cost
-        if summary.stop_reason is None and summary.spent_usd >= cfg.max_cost_usd:
+        if summary.stop_reason is None and prior_cost + summary.spent_usd >= cfg.max_cost_usd:
             summary.stop_reason = "cost_cap"
 
     async def one(src: Source) -> None:
@@ -339,7 +383,9 @@ async def run_paraphrases(
                     failures.append(["malformed_response"])
                     continue
                 except TransientLLMError as exc:
-                    raise _Fatal(f"{model.family}: 일시 오류가 계속된다({type(exc).__name__})") from None
+                    raise _Fatal(
+                        f"{model.family}: 일시 오류가 계속된다({type(exc).__name__})"
+                    ) from None
                 except LLMRequestError as exc:
                     charge(model, exc.usage, exc.cost_usd, spent)
                     raise _Fatal(f"{model.family}: 영구 오류({type(exc).__name__})") from None
@@ -372,6 +418,7 @@ async def run_paraphrases(
             "text": final,
             "family": src.family,
             "model_id": response_model or model.model_id,
+            "model_config": model.manifest(),
             "prompt_version": PROMPT_VERSION,
             "source_sha": source_sha(src),
             "attempts": attempts,

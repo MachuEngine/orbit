@@ -2,7 +2,9 @@
 
 유형(+시나리오 유형·파생 종류)마다 과제 하나씩, 스크립트 LLM이 정답을 그대로 제출하게 해 끝까지
 돌린다. 읽기·텍스트 과제는 성공해야 한다. `assistant_v0`가 지원하지 않는 유형(문서, 상태 변화를
-기대하는 쓰기·리마인더 요청)은 실패하는 것이 정상이다. 승인 거절 과제는 기대 변화가 없어 성공한다. 실제 LLM은 부르지 않는다. 합성 데이터만 쓴다.
+기대하는 쓰기·리마인더 요청)은 실패하는 것이 정상이다.
+승인 거절 과제는 기대 변화가 없어 성공한다.
+실제 LLM은 부르지 않는다. 합성 데이터만 쓴다.
 """
 
 from collections.abc import Sequence
@@ -113,7 +115,9 @@ async def test_fault_tasks_recover_after_one_retry(derived: str) -> None:
     ]
     # 장애가 실제로 주입돼 첫 조회 호출이 오류로 끝났다
     for r in summary.results:
-        errors = [c["error_type"] for c in r.calls if c["tool"] in ("list_events", "search_messages")]
+        errors = [
+            c["error_type"] for c in r.calls if c["tool"] in ("list_events", "search_messages")
+        ]
         assert errors[0] is not None and errors[-1] is None
 
 

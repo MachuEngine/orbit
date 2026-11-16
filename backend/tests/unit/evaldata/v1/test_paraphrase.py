@@ -67,7 +67,9 @@ def factory_for(llm: FakeLLM) -> Callable[[FamilyModel], FakeLLM]:
 
 
 def cfg(cap: float = 1.0, concurrency: int = 2) -> pp.ParaphraseConfig:
-    return pp.ParaphraseConfig(max_cost_usd=cap, concurrency=concurrency, transient_backoff_seconds=0)
+    return pp.ParaphraseConfig(
+        max_cost_usd=cap, concurrency=concurrency, transient_backoff_seconds=0
+    )
 
 
 async def no_sleep(_: float) -> None:
@@ -78,7 +80,13 @@ async def run(
     candidates: list[pp.Source], need: int, out: Path, llm: FakeLLM, config: pp.ParaphraseConfig
 ) -> pp.RunSummary:
     return await pp.run_paraphrases(
-        candidates, need, out, MODELS, config, llm_factory=factory_for(llm), sleep=no_sleep  # type: ignore[arg-type]
+        candidates,
+        need,
+        out,
+        MODELS,
+        config,
+        llm_factory=factory_for(llm),
+        sleep=no_sleep,
     )
 
 
@@ -103,6 +111,7 @@ def test_check_accepts_a_faithful_rewrite() -> None:
         ("11월 5일 송유진님과 잡힌 일정 전부 알려줘 https://x.example.com", "url"),
         ("11월 5일 송유진님과 잡힌 일정 전부 알려줘 010-1234-5678", "phone"),
         ("질문: 11월 5일 송유진님과 잡힌 일정 전부 알려줄래", "meta_prefix"),
+        ("11월 5일 송유진님과 잡힌 일정 전부 알려줘. 다른 건 필요 없어.", "multiple_sentences"),
         ("“11월 5일 송유진님과 잡힌 일정 전부 알려줄래?”", "wrapped_quotes"),
         ("11월 5일 송유진님과 잡힌 일정 전부 알려줘 " + "아주 " * 60, "too_long"),
     ],
@@ -177,7 +186,9 @@ async def test_resume_skips_finished_candidates_without_calling_the_llm(tmp_path
 async def test_changed_source_text_invalidates_the_stored_row(tmp_path: Path) -> None:
     llm = FakeLLM(lambda o, n, r: reply(good(1)))
     await run([src(1)], 1, tmp_path, llm, cfg())
-    edited = pp.Source("t-q-0001", "11월 1일 송유진님 일정 알려줘", ("11월 1일", "송유진"), "openai")
+    edited = pp.Source(
+        "t-q-0001", "11월 1일 송유진님 일정 알려줘", ("11월 1일", "송유진"), "openai"
+    )
     rows = pp.read_rows(tmp_path / pp.PARAPHRASE_FILE)
     assert pp.usable_row(rows["t-q-0001"], src(1))
     assert not pp.usable_row(rows["t-q-0001"], edited)
@@ -186,7 +197,9 @@ async def test_changed_source_text_invalidates_the_stored_row(tmp_path: Path) ->
 async def test_cost_cap_stops_new_requests_and_records_aborted_rows(tmp_path: Path) -> None:
     llm = FakeLLM(lambda o, n, r: reply("항상 실패"))  # 계속 실패해 비용만 쌓인다
     cap = CALL_COST * 1.5
-    summary = await run([src(i) for i in range(1, 6)], 5, tmp_path, llm, cfg(cap=cap, concurrency=1))
+    summary = await run(
+        [src(i) for i in range(1, 6)], 5, tmp_path, llm, cfg(cap=cap, concurrency=1)
+    )
     assert summary.stop_reason == "cost_cap"
     assert summary.requests == 2  # 상한을 넘긴 호출 뒤에는 새 요청을 하지 않는다
     rows = pp.read_all_rows(tmp_path / pp.PARAPHRASE_FILE)
@@ -207,6 +220,33 @@ async def test_reported_cost_larger_than_computed_is_charged(tmp_path: Path) -> 
     )  # fmt: skip
     summary = await run([src(1)], 1, tmp_path, FakeLLM(lambda o, n, r: expensive), cfg())
     assert summary.spent_usd == pytest.approx(0.5)
+
+
+async def test_resume_cannot_reset_the_cumulative_cost_cap(tmp_path: Path) -> None:
+    llm = FakeLLM(lambda o, n, r: reply(good(int(o[-4:]))))
+    config = cfg(cap=CALL_COST * 1.5, concurrency=1)
+    candidates = [src(i) for i in range(1, 5)]
+    first = await run(candidates, 4, tmp_path, llm, config)
+    assert first.requests == 2 and first.stop_reason == "cost_cap"
+    before = (tmp_path / pp.PARAPHRASE_FILE).read_bytes()
+    resumed = await run(candidates, 4, tmp_path, llm, config)
+    assert resumed.requests == 0 and resumed.stop_reason == "cost_cap"
+    assert len(llm.requests) == 2
+    assert (tmp_path / pp.PARAPHRASE_FILE).read_bytes() == before
+
+
+def test_cached_success_is_revalidated_and_bound_to_the_family() -> None:
+    source = src(1)
+    row = {
+        "status": "ok",
+        "source_sha": pp.source_sha(source),
+        "prompt_version": pp.PROMPT_VERSION,
+        "text": "잘못된 문장",
+    }
+    assert not pp.usable_row(row, source)
+    row["text"] = good(1)
+    assert pp.usable_row(row, source)
+    assert not pp.usable_row(row, src(1, "google"))
 
 
 async def test_permanent_error_stops_with_fatal(tmp_path: Path) -> None:
@@ -233,7 +273,13 @@ async def test_each_family_uses_its_own_model_settings(tmp_path: Path) -> None:
 
     cands = [src(1, "openai"), src(2, "anthropic"), src(3, "google")]
     await pp.run_paraphrases(
-        cands, 3, tmp_path, MODELS, cfg(), llm_factory=factory, sleep=no_sleep  # type: ignore[arg-type]
+        cands,
+        3,
+        tmp_path,
+        MODELS,
+        cfg(),
+        llm_factory=factory,
+        sleep=no_sleep,
     )
     assert set(seen) == {"openai", "anthropic", "google"}
     rows = pp.read_rows(tmp_path / pp.PARAPHRASE_FILE)

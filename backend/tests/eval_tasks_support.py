@@ -37,8 +37,8 @@ from orbit.evaldata.schema import (
     Task,
     TimeSlotAnswer,
 )
-from orbit.evaldata.v1.task_world import TaskWorld, load_task_world
 from orbit.evaldata.v1.task_gold import Ctx
+from orbit.evaldata.v1.task_world import TaskWorld, load_task_world
 from orbit.evaldata.v1.tasks import DEFAULT_PLAN, Candidates, Suite, build_candidates, build_suite
 from orbit.evalrunner.task_source import Dataset
 from orbit.runflow.docs_tool import DocTools
@@ -125,7 +125,9 @@ class Oracle:
 
     # ------------------------------------------------------------ 핸들 노출
 
-    async def expose_events(self, refs: Sequence[tuple[str, str]]) -> tuple[dict[str, Any], dict]:
+    async def expose_events(
+        self, refs: Sequence[tuple[str, str]]
+    ) -> tuple[dict[str, Any], dict[tuple[str, str], str]]:
         """기대 일정을 모두 담는 `list_events` 호출과 {(calendar, id): 핸들}을 돌려준다."""
         spans = []
         for key in refs:
@@ -200,13 +202,13 @@ class Oracle:
             ids = [m.message_id for m in ans.messages]
             calls, handles = [], []
             for mid in ids:
-                c, h = await self.expose_message(mid)
+                c, mail_handle = await self.expose_message(mid)
                 calls.append(c)
-                handles.append(h)
+                handles.append(mail_handle)
             return calls, {"kind": "message_set", "messages": handles}
         if isinstance(ans, DocumentAnswer):
-            c, h = await self.expose_document(ans.document.file_id)
-            return [c], {"kind": "document", "document": h}
+            c, doc_handle = await self.expose_document(ans.document.file_id)
+            return [c], {"kind": "document", "document": doc_handle}
         if isinstance(ans, AbstainAnswer):
             return [], {"kind": "abstain"}
         if isinstance(ans, ClarifyAnswer):

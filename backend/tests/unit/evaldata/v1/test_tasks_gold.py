@@ -284,7 +284,7 @@ def test_abstain_targets_do_not_exist_in_the_world() -> None:
             assert not any(q in norm(e["title"]) for e in raw["events"])
         elif d.variant == "person_no_meeting":
             email = d.scenario.truth.person_email  # type: ignore[union-attr]
-            assert email not in json.dumps(raw["events"])
+            assert email is not None and email not in json.dumps(raw["events"])
         else:
             for m in raw["messages"]:
                 text = f"{m['subject']} {m['body_text']}"
@@ -295,7 +295,7 @@ def test_abstain_targets_do_not_exist_in_the_world() -> None:
 
 
 def test_write_expected_changes_have_the_right_shape() -> None:
-    kinds = set()
+    kinds: set[str] = set()
     for d in drafts("meeting_request"):
         (c,) = d.gold.expected_changes  # type: ignore[misc]
         assert isinstance(c, EventCreatedChange)
@@ -307,7 +307,7 @@ def test_write_expected_changes_have_the_right_shape() -> None:
         if d.variant == "move":
             assert isinstance(c, EventUpdatedChange)
             assert c.fields.start is not None and c.fields.end is not None
-            assert c.fields.start != acct_of(d).event(c.calendar_id, c.event_id).start  # type: ignore[union-attr]
+            assert c.fields.start != acct_of(d).event(c.calendar_id, c.event_id).start
         else:
             assert isinstance(c, EventCancelledChange)
         kinds.add(c.kind)

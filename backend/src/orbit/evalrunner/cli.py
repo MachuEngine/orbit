@@ -120,7 +120,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--split", required=True, choices=["dev", "test"])
     run.add_argument(
         "--subset", choices=["smoke"], default=None,
-        help="smoke: manifest의 smoke_task_ids만 실행한다(dev 분할만, ADR-0026 §5). CI 회귀 확인용이며 "
+        help="smoke: manifest의 smoke_task_ids만 실행한다(dev 분할만, "
+        "ADR-0026 §5). CI 회귀 확인용이며 "
         "비교 실험의 판단 근거로 쓰지 않는다",
     )  # fmt: skip
     run.add_argument("--sut", required=True, help=f"등록된 이름: {', '.join(sut_names())}")

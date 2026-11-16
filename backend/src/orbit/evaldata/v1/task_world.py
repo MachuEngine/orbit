@@ -98,9 +98,7 @@ class AccountView:
         return [
             e
             for e in self.events
-            if e.status == "confirmed"
-            and e.title == title
-            and e.start.astimezone(tz).date() == day
+            if e.status == "confirmed" and e.title == title and e.start.astimezone(tz).date() == day
         ]
 
     def upcoming_with(self, email: str, after: datetime) -> list[CalendarEvent]:

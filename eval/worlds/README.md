@@ -3,6 +3,41 @@
 - `orbit-v0.toml`: 평가 데이터 v0(템플릿 문장) 세계 모델. `python -m orbit.evaldata.generate`가 읽는다.
 - `orbit-v1.toml`: Sim 세계 v1(ADR-0026) 세계 모델. 합성 데이터이며 주소는 `example.*`·`.test` 도메인뿐이다.
 
+## v1 종단 과제·스모크 생성기
+
+저장소 루트에서 실행한다. 기존 `world.json`·`skeleton.json`은 읽기만 한다.
+
+```bash
+# LLM 호출 없이 원본 192 + 장애 파생 24문항을 생성한다.
+uv run --frozen --directory backend python -m orbit.evaldata.v1.tasks \
+  --dataset-dir eval/datasets/orbit-eval/v1 --seed 20261116 --skip-paraphrase
+# 표현 변형 24문항에 필요한 비용만 추정한다. 키를 읽거나 LLM을 만들지 않는다.
+uv run --frozen --directory backend python -m orbit.evaldata.v1.tasks \
+  --dataset-dir eval/datasets/orbit-eval/v1 --seed 20261116 --max-cost-usd 0.1 --dry-run
+```
+
+- 출력: `tasks.jsonl`, `manifest.json`. `--out /tmp/orbit-tasks-v1`로 별도 출력할 수 있다.
+  별도 출력에는 로드용 `world.json`도 복사한다. `review.jsonl`은 만들지 않는다.
+- 같은 입력·시드·생성기 SHA·표현 변형 캐시면 바이트 단위로 같다.
+  원본의 정답 지문은 집합 순서·UTC 순간을 정규화하며, 기권·승인 거절은 대상도 구분한다.
+  장애·표현 변형은 같은 정답을 의도한 파생이므로 원본과 함께 유지한다.
+- 근거와 시나리오 연결 요소로 묶어 dev/test를 분할한다. test 묶음 100개 미만이면 실패한다.
+  표현 변형을 생략하면 216문항이고 7:12의 test 비중을 유지한다. 변형을 포함하면 240문항이다.
+- 스모크는 dev의 25문항이며 목록은 `manifest.smoke_task_ids`에 저장한다.
+  러너의 `run --subset smoke --split dev`로 그 목록만 실행한다.
+  `--subset smoke --split test`는 봉인 확인 플래그가 있어도 거부한다.
+  러너에 실제 모델 호출 옵션을 주지 않으면 스크립트 LLM만 사용한다.
+- 표현 변형 실제 생성은 별도 비용 승인·키 설정 후 사람이 실행한다.
+  `--max-cost-usd`는 저장된 모든 시도의 비용을 포함한 누적 상한이다.
+  이미 진행 중인 동시 호출 비용만큼 초과할 수 있어, 전체 예산보다 여유 있게 낮게 둔다.
+  `paraphrase.jsonl`로 재개하며, 검증 통과 문장과 시도·모델 설정·비용만 저장한다.
+  모델·경로·단가 설정이 바뀌면 기록 혼합을 거부한다.
+  단가 기본값은 예시이므로 실제 실행 전 공급자 가격과 모델 사용 가능 여부를 확인한다.
+- 답장 쓰기는 제품에 초안 저장 전용 도구가 없어, 승인 후 발송 요청과 `draft_sent`로 채점한다.
+  모든 실행은 Sim의 합성 데이터에만 적용한다. 초안만 저장하는 제품 기능은 이번 범위 밖이다.
+- 사람 검수·test 봉인은 다음 단계다. 질문의 답 종류 유일성, 최신 값과 근거 메일의 타당성,
+  기권 대상의 부재, 두 모호성 해석의 자연스러움, 시간대·상대 날짜를 우선 확인한다.
+
 ## v1 구조 생성기
 
 ```bash

@@ -6,9 +6,11 @@ uv run python -m orbit.evaldata.v1.tasks --dataset-dir ../eval/datasets/orbit-ev
     --seed 20261116 [--skip-paraphrase | --max-cost-usd X [--dry-run]] [--out <dir>]
 ```
 
-입력은 같은 디렉터리의 `skeleton.json`(시나리오 기록)과 `world.json`(세계)이다. 정답은 코드가 세계에서
+입력은 같은 디렉터리의 `skeleton.json`(시나리오 기록)과 `world.json`(세계)이다.
+정답은 코드가 세계에서
 다시 계산한다(`task_gold`). 출력은 `tasks.jsonl`과 `manifest.json`이고, 표현 변형 결과는
-`paraphrase.jsonl`에 쌓는다. 같은 입력·시드·git SHA·`paraphrase.jsonl`이면 출력은 바이트 단위로 같다.
+`paraphrase.jsonl`에 쌓는다. 같은 입력·시드·git SHA·저장된 표현 변형이면
+출력은 바이트 단위로 같다.
 
 생성 순서
 1. 시나리오마다 가능한 형태(단일 턴, 다중 턴, 리마인더 요청·마감 질문)의 설계도를 만든다.
@@ -29,9 +31,11 @@ import math
 import random
 import shutil
 import sys
+import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +57,7 @@ from orbit.evaldata.v1.task_gold import (
     Draft,
     TaskGenError,
     forms_of,
+    ref_tags,
 )
 from orbit.evaldata.v1.task_world import TaskWorld, TaskWorldError, load_task_world
 
@@ -161,28 +166,59 @@ def build_candidates(ctx: Ctx) -> Candidates:
         builder = BUILDERS.get(sc.type)
         if builder is None:
             continue  # search_topic은 검색 세트 몫이다
+        account = ctx.acct(sc)
+        for ref in [*sc.evidence, *sc.distractors]:
+            if ref.kind == "event":
+                account.event_of(ref)
+            elif ref.kind == "message":
+                account.message_of(ref)
+            else:
+                account.file_of(ref)
         for form in forms_of(sc.type):
             result = builder(ctx, sc, form)
             if isinstance(result, str):
                 out.dropped[f"{sc.type}/{form}: {result}"] += 1
             else:
+                result.refs = tuple(sorted(set(result.refs) | set(ref_tags(sc.evidence))))
                 out.drafts[(sc.scenario_id, form)] = result
     return out
 
 
 def fingerprint(d: Draft) -> str:
-    """정답 내용의 정규화 해시. 질문 문장은 넣지 않는다."""
+    """유형·채점 대상의 정규화 해시. 보조 사실과 질문 문장은 넣지 않는다.
+
+    집합 순서와 시간대 표기만 다른 답은 같다. 기권·승인 거절은 질문 대상도 포함한다.
+    장애·표현 변형은 원본을 복제하는 실험이므로 원본 선택에만 중복 제거를 적용한다.
+    """
     g = d.gold
     payload = {
-        "answer": g.expected_answer.model_dump(mode="json") if g.expected_answer else None,
-        "changes": [c.model_dump(mode="json") for c in g.expected_changes or []],
-        "facts": [f.model_dump(mode="json") for f in g.answer_facts],
+        "type": d.kind,
+        "answer": g.expected_answer.model_dump() if g.expected_answer else None,
+        "changes": [c.model_dump() for c in g.expected_changes or []],
+        "facts": [f.any_of for f in g.answer_facts]
+        if g.expected_answer is None or g.answer_facts_required
+        else [],
         "must_not": g.must_not_contain,
         "account": d.scenario.account_id,  # 다른 메일함의 같은 값은 다른 과제다
         "extra": d.fingerprint_extra,
     }
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    raw = json.dumps(_canonical(payload), ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _canonical(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat()
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value)
+    if isinstance(value, dict):
+        return {k: _canonical(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return sorted(
+            (_canonical(v) for v in value),
+            key=lambda v: json.dumps(v, ensure_ascii=False, sort_keys=True),
+        )
+    return value
 
 
 # ---------------------------------------------------------------- 고르게 고르기
@@ -307,11 +343,17 @@ def select_originals(
     single = [s for s in plan.slots if s.form != "mt"]
     multi = [s for s in plan.slots if s.form == "mt"]
     for batch in (single, multi):
-        for slot in sorted(batch, key=lambda s: (len(pools[s]), plan.slots.index(s))):
+        # 모호성 근거는 일반 조회와 자주 겹친다. 먼저 확보해 특정 사용자가 빠지지 않게 한다.
+        for slot in sorted(
+            batch,
+            key=lambda s: (s.scenario_type != "ambiguous", len(pools[s]), plan.slots.index(s)),
+        ):
             label = f"{slot.scenario_type}/{slot.form}/{slot.variant or '*'}"
             rng = random.Random(f"{seed}:select:{label}")  # noqa: S311  재현성용
             group = pools[slot][0].kind if pools[slot] else slot.scenario_type
-            chosen[slot] = pick_balanced(pools[slot], slot.n, rng, balance, group, label, taken, stats)
+            chosen[slot] = pick_balanced(
+                pools[slot], slot.n, rng, balance, group, label, taken, stats
+            )
     originals: list[Original] = []
     reject_keys = set(plan.reject_slots)
     for slot in plan.slots:
@@ -365,14 +407,14 @@ def pick_faults(originals: list[Original], plan: SuitePlan, seed: int) -> list[D
     eligible = [
         o
         for o in originals
-        if o.draft.fault_tool is not None and o.draft.form != "mt" and o.draft.approval_policy is None
+        if o.draft.fault_tool is not None
+        and o.draft.form != "mt"
+        and o.draft.approval_policy is None
     ]
     for kind, n in sorted(plan.fault_reads.items()):
         pool = [o.draft for o in eligible if o.draft.kind == kind and not o.draft.writes]
         rng = random.Random(f"{seed}:fault:{kind}")  # noqa: S311
-        reads += pick_balanced(
-            pool, n, rng, balance, kind, "read", None
-        )
+        reads += pick_balanced(pool, n, rng, balance, kind, "read", None)
     for i, d in enumerate(sorted(reads, key=lambda d: d.scenario.scenario_id)):
         err = READ_FAULT_ERRORS[i % len(READ_FAULT_ERRORS)]
         out.append(_fault(by_id[d.scenario.scenario_id], err))
@@ -386,7 +428,8 @@ def pick_faults(originals: list[Original], plan: SuitePlan, seed: int) -> list[D
 
 def _fault(origin: Original, error: str) -> Derived:
     tool = origin.draft.fault_tool
-    assert tool is not None
+    if tool is None:
+        raise SuiteError("장애를 적용할 도구가 없다")
     rule = {"tool": tool, "nth_call": 1, "error": error}
     return Derived(origin.task_id + "-fault", origin, "fault", {"rules": [rule]}, error)
 
@@ -394,7 +437,8 @@ def _fault(origin: Original, error: str) -> Derived:
 def paraphrase_candidates(
     originals: list[Original], faults: list[Derived], plan: SuitePlan, seed: int
 ) -> list[pp.Source]:
-    """표현 변형 후보를 처리 순서대로 돌려준다(유형 비중대로 섞는다). 장애 파생 원본은 뒤로 미룬다."""
+    """표현 변형 후보를 처리 순서대로 돌려준다(유형 비중대로 섞는다). 장애 파생 원본은 뒤로 "
+    "미룬다."""
     faulted = {f.origin.task_id for f in faults}
     by_kind: dict[str, list[Original]] = defaultdict(list)
     for o in originals:
@@ -502,7 +546,7 @@ def make_task(
         gold=d.gold,
         difficulty=difficulty,
         tags=_tags(d, derived, extra_tags),
-        approval_policy=list(d.approval_policy) if d.approval_policy else None,  # type: ignore[arg-type]
+        approval_policy=list(d.approval_policy) if d.approval_policy else None,
         time_zone=acct.time_zone,
         fault_plan=fault_plan,
     )
@@ -594,7 +638,8 @@ def assign_splits(
         score = cost_of(test) + (1000 if len(test) < plan.min_test_clusters else 0)
         if best is None or score < best[0]:
             best = (score, frozenset(test))
-    assert best is not None
+    if best is None:
+        raise SuiteError("분할 탐색 시도는 1회 이상이어야 한다")
     return SplitResult(best[1], round(best[0]), attempts)
 
 
@@ -605,7 +650,9 @@ def check_split(tasks: Sequence[Task], plan: SuitePlan) -> list[str]:
     test = [t for t in tasks if t.split == "test"]
     target = round(n * plan.test_share)
     if abs(len(test) - target) > plan.test_tolerance:
-        problems.append(f"test 문항 {len(test)}개가 목표 {target}개에서 {plan.test_tolerance}개 넘게 벗어났다")
+        problems.append(
+            f"test 문항 {len(test)}개가 목표 {target}개에서 {plan.test_tolerance}개 넘게 벗어났다"
+        )
     clusters = {t.cluster_id for t in test}
     if len(clusters) < plan.min_test_clusters:
         problems.append(f"test 독립 묶음 {len(clusters)}개가 {plan.min_test_clusters}개보다 적다")
@@ -635,9 +682,7 @@ def select_smoke(tasks: Sequence[Task], size: int, seed: int) -> list[str]:
         open_groups = [g for g in groups if quota[g] < len(by_group[g])]
         if not open_groups:
             break
-        g = min(
-            open_groups, key=lambda g: (-(size * len(by_group[g]) / total - quota[g]), g)
-        )
+        g = min(open_groups, key=lambda g: (-(size * len(by_group[g]) / total - quota[g]), g))
         quota[g] += 1
     picked: list[str] = []
     for g in groups:
@@ -683,7 +728,9 @@ def build_suite(
     faults = pick_faults(originals, plan, seed)
     sources = paraphrase_candidates(originals, faults, plan, seed)
     accepted = (
-        accepted_paraphrases(sources, rows or {}, plan.paraphrase_need) if include_paraphrase else []
+        accepted_paraphrases(sources, rows or {}, plan.paraphrase_need)
+        if include_paraphrase
+        else []
     )
 
     tasks: list[Task] = []
@@ -694,15 +741,24 @@ def build_suite(
         extra = [f"fault:{f.fault_error}"]
         tasks.append(
             make_task(
-                tw, f.task_id, f.origin.draft, derived="fault", origin_id=f.origin.task_id,
-                fault_plan=f.fault_plan, extra_tags=extra,
+                tw,
+                f.task_id,
+                f.origin.draft,
+                derived="fault",
+                origin_id=f.origin.task_id,
+                fault_plan=f.fault_plan,
+                extra_tags=extra,
             )
         )
     for src, text in accepted:
         o = by_id[src.origin_id]
         tasks.append(
             make_task(
-                tw, o.task_id + "-para", o.draft, turns=[text], derived="paraphrase",
+                tw,
+                o.task_id + "-para",
+                o.draft,
+                turns=[text],
+                derived="paraphrase",
                 origin_id=o.task_id,
             )
         )
@@ -763,7 +819,9 @@ def suite_details(
         "scenarios_by_type": dict(sorted(scenario_counts.items())),
         "originals_by_user": dict(sorted(users.items())),
         "originals_by_family": dict(sorted(families.items())),
-        "originals_by_user_and_type": {k: dict(sorted(v.items())) for k, v in sorted(kinds_by_user.items())},
+        "originals_by_user_and_type": {
+            k: dict(sorted(v.items())) for k, v in sorted(kinds_by_user.items())
+        },
         "originals_by_family_and_type": {
             k: dict(sorted(v.items())) for k, v in sorted(kinds_by_family.items())
         },
@@ -779,9 +837,7 @@ def suite_details(
             "duplicate_answer_scenarios": len(stats.duplicate_answers),
         },
         "reject_tasks": sum(1 for t in tasks if t.approval_policy == ["reject"]),
-        "must_not_trimmed_tasks": sum(
-            1 for o in originals if o.draft.note == "must_not_trimmed"
-        ),
+        "must_not_trimmed_tasks": sum(1 for o in originals if o.draft.note == "must_not_trimmed"),
         "fault_tasks": {
             "read": sum(1 for f in faults if f.fault_error != "result_unknown"),
             "write": sum(1 for f in faults if f.fault_error == "result_unknown"),
@@ -795,7 +851,8 @@ NOTES = (
     "종단 과제 v1(ADR-0026 §4). 정답은 skeleton.json의 시나리오 기록과 world.json에서 코드가 다시 "
     "계산했고 불일치하면 생성이 실패한다. 본문은 LLM이 쓴 합성 데이터라 정답 값이 본문에 있는지만 "
     "검사했다(함축된 다른 사실은 사람 검수로 본다, ③). 사용자 질문에서 '메일'은 받은 메일 전체를 "
-    "가리킨다. mail_fact의 정답 메일은 최신 값이 적힌 메일 하나이며 같은 값을 되풀이하는 다른 메일이 "
+    "가리킨다. mail_fact의 정답 메일은 최신 값이 적힌 메일 하나이며 "
+    "같은 값을 되풀이하는 다른 메일이 "
     "있을 수 있다(검수 항목). 답장·초안 쓰기는 runflow가 `send_mail`(초안 생성 후 발송)만 가지므로 "
     "기대 변화를 `draft_sent`로 둔다. test 봉인은 러너의 확인 플래그 수준이고 공개 저장소라 정답은 "
     "누구나 읽을 수 있다. 장애 주입 파생은 같은 정답을 기대하고, 표현 변형 파생은 원본과 같은 "
@@ -890,6 +947,7 @@ def run(
     llm_factory: LLMFactory | None = None,
     echo: Callable[[str], None] = print,
 ) -> int:
+    dataset_dir, out = dataset_dir.resolve(), out.resolve()
     tw, world = load_task_world(dataset_dir)
     ctx = Ctx(tw, seed)
     cands = build_candidates(ctx)
@@ -899,31 +957,49 @@ def run(
     rows: dict[str, dict[str, Any]] = {}
     models: dict[str, FamilyModel] | None = None
     if not skip_paraphrase:
-        _copy_paraphrase(dataset_dir, out)
         models = load_models(models_config, openai_route=openai_route)
-        rows = pp.read_rows(out / pp.PARAPHRASE_FILE)
+        cache_path = out / pp.PARAPHRASE_FILE
+        if not cache_path.exists():
+            cache_path = dataset_dir / pp.PARAPHRASE_FILE
+        pp.check_model_configs(pp.read_all_rows(cache_path), models)
+        rows = pp.read_rows(cache_path)
         have = accepted_paraphrases(sources, rows, plan.paraphrase_need)
         missing = plan.paraphrase_need - len(have)
         pending = [s for s in sources if not pp.usable_row(rows.get(s.origin_id), s)]
-        spent = pp.total_cost(pp.read_all_rows(out / pp.PARAPHRASE_FILE))
-        echo(f"표현 변형: 필요 {plan.paraphrase_need}개 중 확보 {len(have)}개, 남은 {missing}개. 누적 지출 ${spent:.4f}")
+        spent = pp.total_cost(pp.read_all_rows(cache_path))
+        echo(
+            f"표현 변형: 필요 {plan.paraphrase_need}개 중 확보 {len(have)}개, 남은 "
+            f"{missing}개. 누적 지출 ${spent:.4f}"
+        )
         if missing > 0:
             ahead = pending[: math.ceil(missing * 1.3)]
             est = pp.estimate_cost(ahead, models)
             for fam, e in est["families"].items():
-                echo(f"  {fam}: 원본 {e['sources']}개, 입력 {e['input_tokens']:,} / 출력 {e['output_tokens']:,} 토큰, 예상 ${e['cost_usd']:.4f}")
-            echo(f"예상 합계 ${est['total_cost_usd']:.4f} (이번 실행 상한 ${max_cost_usd})")
+                echo(
+                    f"  {fam}: 원본 {e['sources']}개, 입력 {e['input_tokens']:,} / 출력 "
+                    f"{e['output_tokens']:,} 토큰, 예상 ${e['cost_usd']:.4f}"
+                )
+            echo(f"예상 합계 ${est['total_cost_usd']:.4f} (누적 상한 ${max_cost_usd})")
             if dry_run:
                 return EXIT_OK
-            assert max_cost_usd is not None
+            _copy_paraphrase(dataset_dir, out)
+            if max_cost_usd is None:
+                raise SuiteError("표현 변형에는 비용 상한이 필요하다")
             summary = asyncio.run(
                 pp.run_paraphrases(
-                    sources, plan.paraphrase_need, out, models,
+                    sources,
+                    plan.paraphrase_need,
+                    out,
+                    models,
                     pp.ParaphraseConfig(max_cost_usd=max_cost_usd, concurrency=concurrency),
-                    llm_factory=llm_factory, progress=echo,
+                    llm_factory=llm_factory,
+                    progress=echo,
                 )
             )
-            echo(f"요청 {summary.requests}회, 이번 실행 지출 ${summary.spent_usd:.4f}, 통과 {summary.ok}건, 실패 {summary.failed}건")
+            echo(
+                f"요청 {summary.requests}회, 이번 실행 지출 ${summary.spent_usd:.4f}, "
+                f"통과 {summary.ok}건, 실패 {summary.failed}건"
+            )
             rows = pp.read_rows(out / pp.PARAPHRASE_FILE)
             if summary.stop_reason == "cost_cap":
                 echo(f"비용 상한 ${max_cost_usd}에 닿아 멈췄다. 같은 명령으로 이어서 실행한다")
@@ -933,11 +1009,15 @@ def run(
                 return EXIT_FATAL
             have = accepted_paraphrases(sources, rows, plan.paraphrase_need)
             if len(have) < plan.paraphrase_need:
-                print(f"표현 변형 후보를 모두 써도 {len(have)}개뿐이다. 후보를 늘려야 한다", file=sys.stderr)
+                print(
+                    f"표현 변형 후보를 모두 써도 {len(have)}개뿐이다. 후보를 늘려야 한다",
+                    file=sys.stderr,
+                )
                 return EXIT_PLAN
         elif dry_run:
             echo("추가 호출이 필요 없다(예상 비용 $0)")
             return EXIT_OK
+        _copy_paraphrase(dataset_dir, out)
     elif dry_run:
         echo("--skip-paraphrase라 LLM 호출이 없다")
         return EXIT_OK
@@ -954,16 +1034,16 @@ def run(
         not skip_paraphrase, sources, rows_all, rows, models, suite.details["paraphrase_tasks"]
     )
     manifest = manifest_for(tw, world, suite, seed, sha, info)
-    out.mkdir(parents=True, exist_ok=True)
-    if out != dataset_dir:  # 출력 디렉터리만으로 읽을 수 있게 세계를 함께 둔다
-        shutil.copyfile(dataset_dir / "world.json", out / ds.WORLD)
-    ds.write_tasks(out, suite.tasks)
-    ds.write_manifest(out, manifest)
     problems = ds.validate_dataset(manifest, world, suite.tasks)
     if problems:
         for p in problems:
             print(f"검증 실패: {p}", file=sys.stderr)
         return EXIT_PLAN
+    out.mkdir(parents=True, exist_ok=True)
+    if out != dataset_dir:  # 출력 디렉터리만으로 읽을 수 있게 세계를 함께 둔다
+        shutil.copyfile(dataset_dir / "world.json", out / ds.WORLD)
+    ds.write_tasks(out, suite.tasks)
+    ds.write_manifest(out, manifest)
     d = suite.details
     echo(f"생성 완료: 과제 {len(suite.tasks)}개 -> {out}")
     echo(f"유형·분할별: {json.dumps(d['tasks_by_type'], ensure_ascii=False, sort_keys=True)}")
@@ -978,14 +1058,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default=None, help="출력 폴더(기본: --dataset-dir)")
     parser.add_argument("--git-sha", default=None, help="manifest에 적을 SHA(기본: 현재 HEAD)")
     parser.add_argument("--skip-paraphrase", action="store_true", help="표현 변형 파생 없이 생성")
-    parser.add_argument("--max-cost-usd", type=float, default=None, help="표현 변형 이번 실행 비용 상한")
+    parser.add_argument(
+        "--max-cost-usd", type=float, default=None, help="표현 변형 재개 포함 누적 비용 상한"
+    )
     parser.add_argument("--dry-run", action="store_true", help="표현 변형 비용만 추정하고 끝낸다")
-    parser.add_argument("--models-config", default=None, help="계열별 모델 설정 TOML(realize와 같은 형식)")
+    parser.add_argument(
+        "--models-config", default=None, help="계열별 모델 설정 TOML(realize와 같은 형식)"
+    )
     parser.add_argument("--openai-route", choices=("openai", "openrouter"), default=None)
     parser.add_argument("--concurrency", type=int, default=4)
     args = parser.parse_args(argv)
-    if not args.skip_paraphrase and (args.max_cost_usd is None or args.max_cost_usd <= 0):
-        print("--max-cost-usd(0보다 큼)가 필요하다. LLM 없이 만들려면 --skip-paraphrase", file=sys.stderr)
+    if not args.skip_paraphrase and (
+        args.max_cost_usd is None or not math.isfinite(args.max_cost_usd) or args.max_cost_usd <= 0
+    ):
+        print(
+            "--max-cost-usd(0보다 큼)가 필요하다. LLM 없이 만들려면 --skip-paraphrase",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
     if args.concurrency < 1:
         print("--concurrency는 1 이상이어야 한다", file=sys.stderr)
@@ -995,10 +1084,16 @@ def main(argv: list[str] | None = None) -> int:
     sha = args.git_sha if args.git_sha is not None else git_sha(Path(__file__).parent)
     try:
         return run(
-            dataset_dir, args.seed, out,
-            skip_paraphrase=args.skip_paraphrase, max_cost_usd=args.max_cost_usd,
-            dry_run=args.dry_run, sha=sha, models_config=args.models_config,
-            openai_route=args.openai_route, concurrency=args.concurrency,
+            dataset_dir,
+            args.seed,
+            out,
+            skip_paraphrase=args.skip_paraphrase,
+            max_cost_usd=args.max_cost_usd,
+            dry_run=args.dry_run,
+            sha=sha,
+            models_config=args.models_config,
+            openai_route=args.openai_route,
+            concurrency=args.concurrency,
         )
     except SuiteError as exc:
         print(f"쿼터를 채우지 못했다: {exc}", file=sys.stderr)

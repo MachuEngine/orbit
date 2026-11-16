@@ -38,7 +38,7 @@ def test_known_relative_phrases() -> None:
 
 
 def test_phrase_choice_falls_back_to_explicit_date() -> None:
-    rng = random.Random(1)
+    rng = random.Random(1)  # noqa: S311  재현 가능한 표본 선택
     far = date(2026, 12, 25)
     assert tt.pick_date_phrase(rng, far, date(2026, 11, 18), relative=True) == "12월 25일"
     assert tt.pick_date_phrase(rng, date(2026, 11, 19), date(2026, 11, 18), relative=False) == (
@@ -110,7 +110,7 @@ def test_templates_have_two_to_four_wordings_each() -> None:
         if isinstance(w, tuple)
     ]
     assert groups
-    assert all(2 <= len(g) <= 4 for g in groups if g is not tt.WEEKDAYS_KO)
+    assert all(2 <= len(g) <= 4 for g in groups)
 
 
 def test_templates_carry_no_provider_ids() -> None:

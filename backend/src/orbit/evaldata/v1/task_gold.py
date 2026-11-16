@@ -1,6 +1,7 @@
 """시나리오 기록(`truth`)에서 질문·정답을 계산하는 빌더 (ADR-0026 §4).
 
-정답은 코드가 세계(`TaskWorld`)에서 다시 계산한다. truth의 참조가 세계에 없거나 재계산 결과가 truth와
+정답은 코드가 세계(`TaskWorld`)에서 다시 계산한다.
+truth의 참조가 세계에 없거나 재계산 결과가 truth와
 다르면 `TaskGenError`로 생성을 실패시킨다. 정답이 비었거나 질문이 모호해지는 시나리오는 버릴
 사유(문자열)를 돌려준다(호출자가 다른 시나리오로 대체한다).
 
@@ -62,8 +63,8 @@ from orbit.evaldata.v1.skeleton import (
     MismatchTruth,
     PersonNextTruth,
     ProjectWeekTruth,
-    RescheduleTruth,
     ReplyNeededTruth,
+    RescheduleTruth,
     ScenarioRecord,
     TzEventTruth,
 )
@@ -216,9 +217,7 @@ def _asof_day(sc: ScenarioRecord, acct: AccountView) -> Any:
 
 def _when(rng: random.Random, sc: ScenarioRecord, acct: AccountView, target: Any) -> str:
     """상대 표현을 쓰면 되돌려 계산해 날짜가 맞는지 확인한다."""
-    phrase = tt.pick_date_phrase(
-        rng, target, _asof_day(sc, acct), relative=rng.random() < 0.6
-    )
+    phrase = tt.pick_date_phrase(rng, target, _asof_day(sc, acct), relative=rng.random() < 0.6)
     _need(
         tt.resolve_date_phrase(phrase, _asof_day(sc, acct)) == target,
         f"{sc.scenario_id}: 날짜 표현 {phrase!r}이 날짜로 되돌려지지 않는다",
@@ -252,7 +251,8 @@ def trimmed_previous(previous: Fact, latest: Fact) -> tuple[list[str], int]:
 
 def build_day_agenda(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, DayAgendaTruth)
+    if not isinstance(t, DayAgendaTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     got = acct.events_on_day(t.day)
     _check_event_ids(sc, "day_agenda 일정", got, t.events)
@@ -266,7 +266,10 @@ def build_day_agenda(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     rng = ctx.rng(sc, form)
     when = _when(rng, sc, acct, t.day)
     refs = ref_tags([*t.events, *t.cancelled], got)
-    diff = {"scope_events": len(got), "cancelled_in_scope": len(cancelled)}
+    diff: dict[str, int | float | str] = {
+        "scope_events": len(got),
+        "cancelled_in_scope": len(cancelled),
+    }
     if form == "mt":
         return _mt_day_agenda(sc, acct, rng, when, got, refs, diff)
     expected = EventSetAnswer(events=[_ev_ref(e) for e in got])
@@ -293,7 +296,8 @@ def _mt_day_agenda(
     diff: dict[str, int | float | str],
 ) -> Result:
     day = tt.resolve_date_phrase(when, _asof_day(sc, acct))
-    assert day is not None
+    if day is None:
+        raise TaskGenError(f"{sc.scenario_id}: 날짜 표현을 해석할 수 없다")
     noon = acct.local_day_bounds(day)[0] + timedelta(hours=12)
     timed = [e for e in got if not e.all_day]
     if any(e.start < noon < e.end for e in timed):
@@ -316,7 +320,8 @@ def _mt_day_agenda(
 
 def build_free_slot(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, FreeSlotTruth)
+    if not isinstance(t, FreeSlotTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     busy = acct.events_on_day(t.day)
     _check_event_ids(sc, "free_slot 일정", busy, t.busy)
@@ -359,7 +364,8 @@ def build_free_slot(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_reschedule(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, RescheduleTruth)
+    if not isinstance(t, RescheduleTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     ev = acct.event_of(t.event)
     _need(
@@ -389,7 +395,8 @@ def build_reschedule(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_cancellation(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, CancellationTruth)
+    if not isinstance(t, CancellationTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     ev = acct.event_of(t.event)
     _need(ev.status == "cancelled", f"{sc.scenario_id}: 취소 일정이 세계에서 취소 상태가 아니다")
@@ -406,9 +413,7 @@ def build_cancellation(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
         "calendar",
         form,
         [tt.pick(rng, tt.CANCELLATION).format(when=when)],
-        _gold(
-            EventSetAnswer(events=[_ev_ref(e) for e in got]), facts=_event_facts(got, acct)
-        ),
+        _gold(EventSetAnswer(events=[_ev_ref(e) for e in got]), facts=_event_facts(got, acct)),
         ref_tags([t.event, t.cancel_message], got),
         keep=(when,),
         difficulty={"scope_events": len(got), "cancelled_in_scope": 1},
@@ -418,7 +423,8 @@ def build_cancellation(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_project_week(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, ProjectWeekTruth)
+    if not isinstance(t, ProjectWeekTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     end = t.week_start + timedelta(days=7)
     got = [
@@ -453,7 +459,8 @@ def build_project_week(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_person_next(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, PersonNextTruth)
+    if not isinstance(t, PersonNextTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     upcoming = acct.upcoming_with(t.person_email, t.as_of)
     _check_event_ids(sc, "person_next 일정", upcoming, t.upcoming)
@@ -525,7 +532,8 @@ def _mt_person_next(
 
 def build_cross_midnight(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, CrossMidnightTruth)
+    if not isinstance(t, CrossMidnightTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     ev = acct.event_of(t.event)
     tz = acct.tz
@@ -560,7 +568,8 @@ def build_cross_midnight(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_tz_event(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, TzEventTruth)
+    if not isinstance(t, TzEventTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     ev = acct.event_of(t.event)
     _need(
@@ -591,7 +600,8 @@ def build_tz_event(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_all_day(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, AllDayTruth)
+    if not isinstance(t, AllDayTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     ev = acct.event_of(t.event)
     _need(
@@ -628,7 +638,8 @@ def _message_text(acct: AccountView, ref: ArtifactRef) -> str:
 
 def build_mail_fact(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, MailFactTruth)
+    if not isinstance(t, MailFactTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     latest = acct.message_of(t.latest_message)
     acct.message_of(t.previous_message)
@@ -693,7 +704,8 @@ def build_mail_fact(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_mismatch(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, MismatchTruth)
+    if not isinstance(t, MismatchTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     ev = acct.event_of(t.event)
     _need(
@@ -744,7 +756,8 @@ def build_mismatch(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_meeting_request(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, MeetingRequestTruth)
+    if not isinstance(t, MeetingRequestTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     message = acct.message_of(t.message)
     _need(
@@ -786,7 +799,8 @@ def build_meeting_request(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_event_change(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, EventChangeTargetTruth)
+    if not isinstance(t, EventChangeTargetTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     ev = acct.event_of(t.event)
     request = acct.message_of(t.request_message)
@@ -807,7 +821,8 @@ def build_event_change(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     change: ExpectedChange
     if t.action == "move":
         _need(t.new is not None, f"{sc.scenario_id}: 이동 요청에 새 시각이 없다")
-        assert t.new is not None
+        if t.new is None:
+            raise TaskGenError(f"{sc.scenario_id}: 이동할 새 시각이 없다")
         change = EventUpdatedChange(
             calendar_id=ev.calendar_id,
             event_id=ev.id,
@@ -835,7 +850,8 @@ def build_event_change(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_reply_needed(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, ReplyNeededTruth)
+    if not isinstance(t, ReplyNeededTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     message = acct.message_of(t.awaiting_message)
     _need(
@@ -844,9 +860,7 @@ def build_reply_needed(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     )
     subject = t.subject.removeprefix("Re: ").strip()
     rng = ctx.rng(sc, form)
-    change = DraftSentChange(
-        to_include=[t.sender_email], reply_to_message_id=t.awaiting_message.id
-    )
+    change = DraftSentChange(to_include=[t.sender_email], reply_to_message_id=t.awaiting_message.id)
     return Draft(
         sc,
         "write",
@@ -869,7 +883,8 @@ def _file_text(acct: AccountView, ref: ArtifactRef) -> str:
 
 def build_doc_fact(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, DocFactTruth)
+    if not isinstance(t, DocFactTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     file = acct.file_of(t.file)
     if file.get("trashed"):
@@ -903,10 +918,13 @@ def build_doc_fact(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
 
 def build_doc_version(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, DocVersionTruth)
+    if not isinstance(t, DocVersionTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     latest, previous = acct.file_of(t.latest_file), acct.file_of(t.previous_file)
-    if str(latest["modified_at"]) <= str(previous["modified_at"]):
+    if datetime.fromisoformat(str(latest["modified_at"])) <= datetime.fromisoformat(
+        str(previous["modified_at"])
+    ):
         return "최신 판의 수정 시각이 이전 판보다 늦지 않다"
     if not fact_in(_file_text(acct, t.latest_file), t.latest):
         return "최신 문서 본문에 최신 값이 없다"
@@ -956,7 +974,8 @@ def _reminder_options(
 
 def build_deadline(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, DeadlineTruth)
+    if not isinstance(t, DeadlineTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     text = (
         _message_text(acct, t.source) if t.source.kind == "message" else _file_text(acct, t.source)
@@ -1032,9 +1051,8 @@ def _exists_in_world(acct: AccountView, t: AbsentTruth) -> str | None:
     else:  # no_amount: 그 프로젝트를 다루는 메일·문서 어디에도 금액 표기가 없어야 한다
         for m in acct.messages.values():
             body = f"{m.get('subject', '')} {m.get('body_text', '')}"
-            if q in norm(body) and "원" in body and any(ch.isdigit() for ch in body):
-                if _has_amount(body):
-                    return "없어야 할 금액이 메일에 있다"
+            if q in norm(body) and _has_amount(body):
+                return "없어야 할 금액이 메일에 있다"
         for f in acct.files.values():
             body = f"{f.get('name', '')} {f.get('text', '')}"
             if q in norm(body) and _has_amount(body):
@@ -1048,7 +1066,8 @@ def _has_amount(text: str) -> bool:
 
 def build_absent(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, AbsentTruth)
+    if not isinstance(t, AbsentTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     problem = _exists_in_world(acct, t)
     _need(problem is None, f"{sc.scenario_id}: {problem}")
@@ -1059,7 +1078,7 @@ def build_absent(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
         form,
         [tt.pick(rng, tt.ABSENT[t.variant]).format(query=t.query)],
         _gold(AbstainAnswer()),
-        (),
+        ref_tags(t.related_exist),
         keep=(t.query,),
         difficulty={"related_exist": len(t.related_exist)},
         fingerprint_extra={"absent": t.variant, "query": t.query},  # 정답(abstain)이 모두 같다
@@ -1082,7 +1101,8 @@ def _reading(
 
 def build_ambiguous(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
-    assert isinstance(t, AmbiguousTruth)
+    if not isinstance(t, AmbiguousTruth):
+        raise TaskGenError(f"{sc.scenario_id}: 시나리오 truth 유형이 다르다")
     acct = ctx.acct(sc)
     readings = [_reading(acct, i.answer_kind, list(i.gold), sc) for i in t.interpretations]
     people = [p for p in ctx.tw.skeleton.people.values() if p.name == t.query_subject]
@@ -1106,8 +1126,9 @@ def build_ambiguous(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
         )
     elif t.variant == "same_project_notes":
         notes = [
-            f for f in acct.files.values() if norm(t.query_subject) in norm(str(f["name"]))
-            and "회의록" in str(f["name"])
+            f
+            for f in acct.files.values()
+            if norm(t.query_subject) in norm(str(f["name"])) and "회의록" in str(f["name"])
         ]
         _need(len(notes) == 2, f"{sc.scenario_id}: 회의록 문서가 두 개가 아니다")
     rng = ctx.rng(sc, form)

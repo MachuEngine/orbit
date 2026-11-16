@@ -43,7 +43,8 @@ class Manifest(_Model):
 
     `created_with`: `templates`는 템플릿 문장만 쓴 v0, `structure+llm`은 구조는 코드가 만들고 본문은
     LLM이 쓴 세계 v1(ADR-0026 §2)이다.
-    `smoke_task_ids`: 스모크 부분집합(dev 과제, ADR-0026 §5). `details`: 생성 요약(수량·분할·비용 등).
+    `smoke_task_ids`: 스모크 부분집합(dev 과제, ADR-0026 §5).
+    `details`: 생성 요약(수량·분할·비용 등).
     """
 
     name: str

@@ -5,7 +5,8 @@ import hashlib
 import json
 import random
 from collections import Counter
-from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -16,9 +17,10 @@ from eval_tasks_support import (
     real_candidates,
     real_suite,
     real_task_world,
+    slim_dataset,
 )
 from orbit.evaldata import dataset as ds
-from orbit.evaldata.schema import Manifest, Task
+from orbit.evaldata.schema import EventSetAnswer, EventTimeAnswer, Manifest, Task
 from orbit.evaldata.v1 import paraphrase as pp
 from orbit.evaldata.v1.realize_models import FamilyModel
 from orbit.evaldata.v1.task_gold import Draft
@@ -99,20 +101,39 @@ def test_users_and_families_are_spread_and_la_user_is_included() -> None:
         by_type.setdefault(kind(t), Counter())[fam] += 1
     for k, c in by_type.items():
         assert max(c.values()) - min(c.values()) <= 4, (k, c)
+    by_user: dict[str, Counter[str]] = {}
+    for t in originals():
+        by_user.setdefault(kind(t), Counter())[t.account_id] += 1
+    for k, c in by_user.items():
+        assert len(c) == 6 and max(c.values()) - min(c.values()) <= 2, (k, c)
 
 
 def test_every_scenario_variant_in_the_quota_is_present() -> None:
     variants = Counter(
         next((x for x in t.tags if x.startswith("variant:")), "") for t in originals()
     )
-    for v in ("move", "cancel", "meeting_request", "reply_needed", "person_no_meeting",
-              "no_document", "no_amount", "project_no_meeting", "person_meetings",
-              "same_project_notes", "homonym_person", "doc_fact", "doc_version", "request", "ask"):
+    for v in (
+        "move",
+        "cancel",
+        "meeting_request",
+        "reply_needed",
+        "person_no_meeting",
+        "no_document",
+        "no_amount",
+        "project_no_meeting",
+        "person_meetings",
+        "same_project_notes",
+        "homonym_person",
+        "doc_fact",
+        "doc_version",
+        "request",
+        "ask",
+    ):
         assert variants[f"variant:{v}"] > 0, v  # fmt: skip
     assert variants["variant:request"] == 12 and variants["variant:ask"] == 4
-    assert {f"variant:{k}" for k in ("deadline", "amount", "place", "decision", "attachment")} <= set(
-        variants
-    )
+    assert {
+        f"variant:{k}" for k in ("deadline", "amount", "place", "decision", "attachment")
+    } <= set(variants)
 
 
 # ---------------------------------------------------------------- 쓰기·거절·장애 파생
@@ -140,7 +161,9 @@ def test_fault_tasks_keep_the_gold_and_share_the_cluster() -> None:
         origin = by_id[f.task_id.removesuffix("-fault")]
         assert f.gold == origin.gold and f.turns == origin.turns
         assert f.cluster_id == origin.cluster_id and f.split == origin.split
-        assert f.scenario_id == origin.scenario_id and f.difficulty["derived_from"] == origin.task_id
+        assert (
+            f.scenario_id == origin.scenario_id and f.difficulty["derived_from"] == origin.task_id
+        )
         (rule,) = f.fault_plan["rules"]  # type: ignore[index]
         assert rule["nth_call"] == 1
         if rule["error"] == "result_unknown":
@@ -192,7 +215,9 @@ def test_assign_splits_is_deterministic_and_respects_min_clusters() -> None:
     a = assign_splits(clusters, DEFAULT_PLAN, SEED)
     b = assign_splits(clusters, DEFAULT_PLAN, SEED)
     assert a == b and len(a.test_clusters) >= DEFAULT_PLAN.min_test_clusters
-    assert assign_splits(clusters, DEFAULT_PLAN, SEED + 1) != a or True
+    other = assign_splits(clusters, DEFAULT_PLAN, SEED + 1)
+    assert len(other.test_clusters) >= DEFAULT_PLAN.min_test_clusters
+    assert other.test_clusters != a.test_clusters
 
 
 # ---------------------------------------------------------------- 중복 제거·근거 비공유
@@ -204,6 +229,9 @@ def test_no_two_originals_share_evidence_or_an_answer_fingerprint() -> None:
     assert len(prints) == len(set(prints)) == 192
     seen: dict[str, str] = {}
     for o in chosen:
+        from orbit.evaldata.v1.task_gold import ref_tags
+
+        assert set(ref_tags(o.draft.scenario.evidence)) <= set(o.draft.refs)
         for ref in o.draft.refs:
             assert ref not in seen, (ref, seen[ref], o.task_id)
             seen[ref] = o.task_id
@@ -220,6 +248,22 @@ def test_fingerprint_ignores_the_question_and_splits_by_account() -> None:
     assert fingerprint(reject) != fingerprint(d)
 
 
+def test_fingerprint_normalizes_sets_and_instants_and_ignores_auxiliary_facts() -> None:
+    day = next(d for d in real_candidates().drafts.values() if d.scenario.type == "day_agenda")
+    answer = day.gold.expected_answer
+    assert isinstance(answer, EventSetAnswer)
+    reversed_answer = answer.model_copy(update={"events": list(reversed(answer.events))})
+    gold = day.gold.model_copy(update={"expected_answer": reversed_answer, "answer_facts": []})
+    assert fingerprint(day) == fingerprint(replace(day, gold=gold))
+    timed = next(d for d in real_candidates().drafts.values() if d.scenario.type == "tz_event")
+    moment = timed.gold.expected_answer
+    assert isinstance(moment, EventTimeAnswer)
+    utc = moment.model_copy(update={"start": moment.start.astimezone(UTC)})
+    assert fingerprint(timed) == fingerprint(
+        replace(timed, gold=timed.gold.model_copy(update={"expected_answer": utc}))
+    )
+
+
 def _pool(scenario_type: str, form: str = "single") -> list[Draft]:
     return [
         d
@@ -232,17 +276,17 @@ def test_pick_balanced_spreads_users_and_stops_at_conflicts() -> None:
     from orbit.evaldata.v1.tasks import Balance, SelectStats, Taken
 
     pool = _pool("mail_fact")
-    picked = pick_balanced(pool, 12, random.Random(1), Balance(), "mail", "s", None)
+    picked = pick_balanced(pool, 12, random.Random(1), Balance(), "mail", "s", None)  # noqa: S311  재현 가능한 표본 선택
     users = Counter(d.scenario.account_id for d in picked)
     assert len(users) == 6 and set(users.values()) == {2}
     taken, stats = Taken(), SelectStats()
-    first = pick_balanced(pool, 1, random.Random(2), Balance(), "mail", "s", taken, stats)
+    first = pick_balanced(pool, 1, random.Random(2), Balance(), "mail", "s", taken, stats)  # noqa: S311  재현 가능한 표본 선택
     twin = Draft(
         pool[0].scenario.model_copy(update={"scenario_id": "sc-twin"}),
         "mail", "single", ["질문"], pool[0].gold, first[0].refs,
     )  # fmt: skip
     with pytest.raises(SuiteError):
-        pick_balanced([twin], 1, random.Random(3), Balance(), "mail", "s", taken, stats)
+        pick_balanced([twin], 1, random.Random(3), Balance(), "mail", "s", taken, stats)  # noqa: S311  재현 가능한 표본 선택
     assert "sc-twin" in stats.ref_conflicts
 
 
@@ -250,12 +294,15 @@ def test_pick_balanced_fails_with_a_reason_when_the_pool_is_too_small() -> None:
     from orbit.evaldata.v1.tasks import Balance
 
     with pytest.raises(SuiteError, match="채우지 못했다"):
-        pick_balanced(_pool("all_day"), 99, random.Random(1), Balance(), "calendar", "x", None)
+        pick_balanced(_pool("all_day"), 99, random.Random(1), Balance(), "calendar", "x", None)  # noqa: S311  재현 가능한 표본 선택
 
 
 def test_unfillable_quota_fails_generation_instead_of_shrinking() -> None:
     plan = DEFAULT_PLAN.__class__(
-        **{**DEFAULT_PLAN.__dict__, "slots": (DEFAULT_PLAN.slots[0].__class__("all_day", "single", 50),)}
+        **{
+            **DEFAULT_PLAN.__dict__,
+            "slots": (DEFAULT_PLAN.slots[0].__class__("all_day", "single", 50),),
+        }
     )
     with pytest.raises(SuiteError):
         select_originals(real_candidates(), plan, SEED)
@@ -289,6 +336,25 @@ def test_smoke_never_picks_more_than_the_dev_tasks_and_prefers_distinct_clusters
     picked = select_smoke(tasks(), 25, SEED)
     by_id = {t.task_id: t for t in tasks()}
     assert len({by_id[i].cluster_id for i in picked}) >= 20
+
+
+def test_runner_smoke_subset_contains_only_manifest_ids_and_preserves_test_seal() -> None:
+    from orbit.evalrunner.cli import _smoke_subset
+
+    _, world = real_task_world()
+    suite = real_suite()
+    dataset = slim_dataset(suite.tasks, world)
+    dataset = replace(dataset, manifest={"smoke_task_ids": suite.smoke_ids})
+    smoke = _smoke_subset(dataset)
+    assert {t.task_id for t in smoke.tasks} == set(suite.smoke_ids)
+    assert len(smoke.tasks) == 25 and all(t.split == "dev" for t in smoke.tasks)
+    test_task = next(t for t in suite.tasks if t.split == "test")
+    with pytest.raises(ds.DatasetError, match="봉인"):
+        _smoke_subset(replace(dataset, manifest={"smoke_task_ids": [test_task.task_id]}))
+    with pytest.raises(ds.DatasetError, match="없는 과제"):
+        _smoke_subset(replace(dataset, manifest={"smoke_task_ids": ["not-a-task"]}))
+    with pytest.raises(ds.DatasetError, match="목록이 없는"):
+        _smoke_subset(replace(dataset, manifest={}))
 
 
 # ---------------------------------------------------------------- 결정성
@@ -338,11 +404,43 @@ def test_cli_skip_paraphrase_writes_a_loadable_dataset(tmp_path: Path) -> None:
         "enabled": False,
         "note": "--skip-paraphrase: 표현 변형 파생 문항 없이 생성했다",
     }
-    assert details["tasks_by_type"]["fault"]["dev"] + details["tasks_by_type"]["fault"]["test"] == 24
+    assert (
+        details["tasks_by_type"]["fault"]["dev"] + details["tasks_by_type"]["fault"]["test"] == 24
+    )
     assert manifest.smoke_task_ids == real_suite().smoke_ids
     assert (out / "world.json").exists() and not (out / pp.PARAPHRASE_FILE).exists()
     runner = load_runner_dataset(out)  # 러너가 읽는 경로로도 열린다
     assert runner.manifest["smoke_task_ids"] and len(runner.tasks_for("dev")) > 0
+    from orbit.evalrunner.cli import SEAL_FLAG
+    from orbit.evalrunner.cli import main as runner_main
+
+    result = tmp_path / "smoke.jsonl"
+    cli_args = [
+        "run",
+        "--dataset",
+        str(out),
+        "--split",
+        "dev",
+        "--subset",
+        "smoke",
+        "--sut",
+        "noop",
+        "--repeats",
+        "1",
+        "--out",
+        str(result),
+    ]
+    assert runner_main(cli_args) == 0
+    rows = [json.loads(line) for line in result.read_text().splitlines()]
+    assert len(rows) == 25 and {row["task_id"] for row in rows} == set(
+        manifest.smoke_task_ids or []
+    )
+    forbidden_out = tmp_path / "test-smoke.jsonl"
+    test_args = cli_args[:]
+    test_args[test_args.index("--split") + 1] = "test"
+    test_args[test_args.index("--out") + 1] = str(forbidden_out)
+    assert runner_main([*test_args, SEAL_FLAG]) == 2
+    assert not forbidden_out.exists()
     first = (digest(out / "tasks.jsonl"), digest(out / "manifest.json"))
     again = tmp_path / "again"
     assert main([*args[:-4], "--out", str(again), "--git-sha", "test-sha"]) == 0
@@ -356,6 +454,25 @@ def test_cli_needs_a_cost_cap_unless_paraphrase_is_skipped(tmp_path: Path) -> No
                  "--max-cost-usd", "0"]) == 2  # fmt: skip
 
 
+@pytest.mark.parametrize("cap", ["nan", "inf", "-inf"])
+def test_nonfinite_cap_is_rejected_before_generation(tmp_path: Path, cap: str) -> None:
+    assert (
+        main(
+            [
+                "--dataset-dir",
+                str(COMMITTED_V1),
+                "--seed",
+                "1",
+                "--out",
+                str(tmp_path),
+                f"--max-cost-usd={cap}",
+            ]
+        )
+        == 2
+    )
+    assert not list(tmp_path.iterdir())
+
+
 def test_cli_dry_run_prints_an_estimate_and_writes_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -367,7 +484,47 @@ def test_cli_dry_run_prints_an_estimate_and_writes_nothing(
     assert not (tmp_path / "x").exists()
 
 
-# ---------------------------------------------------------------- 표현 변형을 포함한 전체 생성(스크립트 LLM)
+def test_dry_run_with_saved_paraphrases_does_not_copy_or_call_llm(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for name in ("world.json", "skeleton.json"):
+        (input_dir / name).symlink_to(COMMITTED_V1 / name)
+    # A failed cached attempt is enough to exercise the read-only path.
+    from orbit.evaldata.v1.realize_models import default_models
+
+    row = {
+        "origin_id": "unrelated",
+        "status": "failed",
+        "family": "openai",
+        "cost_usd": 0.01,
+        "model_config": default_models()["openai"].manifest(),
+    }
+    cache = input_dir / pp.PARAPHRASE_FILE
+    cache.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    before = cache.read_bytes()
+    out = tmp_path / "dry"
+
+    def forbidden_factory(model: FamilyModel) -> RewriteLLM:
+        raise AssertionError("dry-run에서 LLM을 만들면 안 된다")
+
+    assert (
+        run(
+            input_dir,
+            SEED,
+            out,
+            skip_paraphrase=False,
+            max_cost_usd=1.0,
+            dry_run=True,
+            sha="test-sha",
+            llm_factory=forbidden_factory,
+            echo=lambda _: None,
+        )
+        == 0
+    )
+    assert not out.exists() and cache.read_bytes() == before
+
+
+# ---------------- 표현 변형 전체 생성(스크립트 LLM)
 
 
 class RewriteLLM:
@@ -382,8 +539,11 @@ class RewriteLLM:
         self.requests.append(request)
         user = str(request.messages[1].content)
         original = user.splitlines()[0].removeprefix("원래 질문: ")
-        text = "슬랙으로 알려줘" if request.metadata["origin_id"] in self.fail_for else (
-            f"{original} 부탁해"
+        original = original.replace("? ", ", ").replace("! ", ", ")
+        text = (
+            "슬랙으로 알려줘"
+            if request.metadata["origin_id"] in self.fail_for
+            else (f"{original.replace('. ', ', ').rstrip('.?!')} 부탁해")
         )
         return LLMResponse(
             text=text, tool_calls=(), finish_reason="stop",
@@ -393,7 +553,11 @@ class RewriteLLM:
 
 
 def full_run(out: Path, llm: RewriteLLM | None, *, cap: float = 1.0) -> int:
-    factory: Callable[[FamilyModel], RewriteLLM] = lambda model: llm  # type: ignore[assignment,return-value]  # noqa: E731
+    def factory(model: FamilyModel) -> RewriteLLM:
+        if llm is None:
+            raise AssertionError("예상하지 않은 LLM 생성")
+        return llm
+
     return run(
         COMMITTED_V1, SEED, out, skip_paraphrase=False, max_cost_usd=cap, dry_run=False,
         sha="test-sha", llm_factory=factory, echo=lambda _: None,
@@ -413,8 +577,13 @@ def test_paraphrase_tasks_are_added_resumed_and_deterministic(tmp_path: Path) ->
     for p in paras:
         origin = by_id[p.task_id.removesuffix("-para")]
         assert p.gold == origin.gold and p.cluster_id == origin.cluster_id
-        assert p.turns != origin.turns and p.turns[0].content.startswith(origin.turns[0].content)
-        assert len(origin.turns) == 1 and kind(origin) in ("calendar", "mail", "mismatch", "document")
+        assert p.turns != origin.turns and p.turns[0].content.endswith("부탁해")
+        assert len(origin.turns) == 1 and kind(origin) in (
+            "calendar",
+            "mail",
+            "mismatch",
+            "document",
+        )
     assert abs(sum(1 for t in all_tasks if t.split == "test") - 140) <= DEFAULT_PLAN.test_tolerance
     assert len({t.cluster_id for t in all_tasks if t.split == "test"}) >= 100
     info = loaded.manifest.details["paraphrase"]  # type: ignore[index]
@@ -465,5 +634,7 @@ def test_v0_manifest_bytes_are_unchanged_by_the_optional_fields(tmp_path: Path) 
     manifest = Manifest.model_validate_json(v0.read_text(encoding="utf-8"))
     assert manifest.smoke_task_ids is None and manifest.details is None
     ds.write_manifest(tmp_path, manifest)
-    assert (tmp_path / "manifest.json").read_text(encoding="utf-8") == v0.read_text(encoding="utf-8")
+    assert (tmp_path / "manifest.json").read_text(encoding="utf-8") == v0.read_text(
+        encoding="utf-8"
+    )
     assert json.loads(v0.read_text(encoding="utf-8"))["created_with"] == "templates"
