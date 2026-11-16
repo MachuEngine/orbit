@@ -98,12 +98,12 @@ class AssistantV0SUT:
     """제품 경로 `ReadOnlyAssistant`(ADR-0011)를 감싸는 어댑터. 에피소드 입력을 변환할 뿐이다.
 
     `version`에 프롬프트 버전을 넣어 결과의 설정 지문(`sut.version`)에 남긴다.
-    v0는 사용자 시간대를 `Asia/Seoul`로 고정한다. 사용자 발화(`role == "user"`)만 넘긴다.
+    사용자 시간대는 과제의 `time_zone`(없으면 `Asia/Seoul`)이다.
+    사용자 발화(`role == "user"`)만 넘긴다.
     """
 
     name = "assistant_v0"
     version = f"0+{PROMPT_VERSION}+temp{TEMPERATURE:g}"
-    TIME_ZONE = "Asia/Seoul"
 
     def __init__(self, *, max_turns: int = 20) -> None:
         self._max_turns = max_turns
@@ -114,7 +114,7 @@ class AssistantV0SUT:
             calendar=episode.connectors.calendar,
             mail=episode.connectors.mail,
             clock=episode.clock,
-            tz=ZoneInfo(self.TIME_ZONE),
+            tz=ZoneInfo(episode.task.time_zone),
             on_step=episode.steps.consume,
             has_step_room=episode.steps.has_room,
             max_turns=self._max_turns,

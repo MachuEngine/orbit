@@ -73,13 +73,16 @@ def test_expected_changes_empty_requires_empty_diff() -> None:
     )
 
 
-def test_expected_changes_nonempty_is_unscored() -> None:
-    g = gold(expected_changes=({"type": "event_created"},))
-    s = score_episode(g, "2026-11-12", [], EMPTY)
-    assert s.success is None and s.failure_type == "unscored"
-    assert s.state_diff_match is None and s.unscored == ("expected_changes",)
-    # 이미 실패한 에피소드는 실패로 둔다
-    assert score_episode(g, "틀림", [], EMPTY).failure_type == "wrong_answer"
+def test_expected_changes_nonempty_is_scored_not_unscored() -> None:
+    g = gold(
+        expected_changes=({"kind": "event_cancelled", "calendar_id": "cal", "event_id": "ev"},)
+    )
+    s = score_episode(g, "2026-11-12", [], CHANGED)
+    assert s.success is True and s.failure_type is None and s.unscored == ()
+    assert s.state_diff_match is True and s.change_matches == (True,)
+    # 기대한 변화가 없으면 실패다. 다른 실패가 겹치면 그쪽이 먼저다
+    assert score_episode(g, "2026-11-12", [], EMPTY).failure_type == "wrong_state_change"
+    assert score_episode(g, "틀림", [], CHANGED).failure_type == "wrong_answer"
 
 
 def test_required_tool_call_name_and_args_subset() -> None:

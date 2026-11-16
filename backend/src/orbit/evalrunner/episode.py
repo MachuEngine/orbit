@@ -124,6 +124,9 @@ class SutTask:
     # 시뮬레이션 사용자의 승인 결정(ADR-0023 §3). 정답이 아니라 사용자 행동 입력이다. n번째 승인
     # 요청(0부터, 에피소드 전체 순서)에 `approve`·`reject`를 준다. 목록이 끝나면 모두 승인한다.
     approval_policy: tuple[str, ...] = ()
+    # 사용자 시간대(IANA 이름). 평가 대상이 시각을 해석하는 기준이다. 과제 속성이라 설정 지문에
+    # 넣지 않는다.
+    time_zone: str = "Asia/Seoul"
 
 
 @dataclass(frozen=True)

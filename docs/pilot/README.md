@@ -159,6 +159,17 @@ uv run python -m orbit.evalrunner run \
 - **되묻기 지시**: 제품 프롬프트에 "질문이 두 가지 이상으로 읽히고 해석에 따라 답이 달라지면 되묻는다. 한 가지로 읽히면
   되묻지 않는다"는 줄이 들어갔다(`assistant-v0.4`, `runflow-v0.8`). 평가 전용 안내가 아니라 실사용 프롬프트다.
   `assistant_v0`에는 문서 도구가 없어 `document` 답은 낼 수 없다.
+- **쓰기·리마인더 최종 상태 채점**: `gold.expected_changes`가 비어 있지 않으면 `event_created`·`event_updated`·
+  `event_cancelled`·`draft_created`·`draft_sent`·`reminder_created` 기대와 실제 변화(정규화 `WorldDiff` + DB 리마인더)를
+  일대일로 맞춘다(`orbit.evalrunner.state_changes`). 기대가 빠지거나 어긋나면 `wrong_state_change`, 짝 없는 실제 변화가
+  남으면 `unexpected_state_change`(둘 다면 후자). 구조화된 답이 함께 있으면 둘 다 맞아야 성공이다. 이 항목은 더 이상
+  `unscored`가 아니다. 결과 행에 `change_matches`(기대 변화별 일치 여부, 원문 없음)가 남고 `stats`에
+  `write_tasks`(쓰기 과제 에피소드 성공률)가 더해진다.
+- **`answer_facts_required`**: `true`이면 `expected_answer`가 있어도 `answer_facts`를 모두 충족해야 한다(불충족은
+  `wrong_answer`, 구조화 판정 다음). `false`(기본)이면 `text_fact_recall` 보조 지표만 쓴다.
+- **과제별 시간대·장애 주입**: `Task.time_zone`(없으면 `Asia/Seoul`)을 두 평가 대상이 사용자 시간대로 쓴다. 설정 지문에는
+  넣지 않고 결과 행에 `time_zone`을 남긴다. `Task.fault_plan`은 그 과제 에피소드에만 걸리고(결과 행 `task_fault`에 규칙
+  요약) 평가 대상에게 보이지 않는다. `--fault-plan`과 과제 `fault_plan`을 함께 쓰면 실행 전에 거부한다.
 
 ## 결과에 남는 설정 지문
 

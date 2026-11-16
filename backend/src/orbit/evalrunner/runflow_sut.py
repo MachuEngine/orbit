@@ -97,7 +97,6 @@ def decision_for(policy: tuple[str, ...], index: int) -> bool:
 
 class RunflowV0SUT:
     name = "runflow_v0"
-    TIME_ZONE = "Asia/Seoul"
 
     def __init__(self, *, index_mode: str = "off", variants: Iterable[str] = ()) -> None:
         if index_mode not in INDEX_MODES:
@@ -165,7 +164,7 @@ class RunflowV0SUT:
             ids=database.ids,
             llm=_StepGuardLLM(episode.llm, episode.steps.consume),
             resolver=resolver,
-            tz=ZoneInfo(self.TIME_ZONE),
+            tz=ZoneInfo(episode.task.time_zone),
             checkpoint_conninfo=database.checkpoint_conninfo,
             jobs=None,
             mail_index=None,

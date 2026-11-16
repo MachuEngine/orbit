@@ -23,6 +23,7 @@ from orbit.connectors.sim.factory import build_sim_connectors
 from orbit.connectors.sim.faults import FaultPlan
 from orbit.connectors.sim.world import SimWorld, SnapshotError, diff
 from orbit.core.clock import FixedClock
+from orbit.evaldata.schema import DEFAULT_TIME_ZONE
 from orbit.evalrunner.episode import (
     Budget,
     BudgetExceeded,
@@ -187,6 +188,12 @@ class EpisodeResult:
     turns: tuple[Mapping[str, Any], ...] | None = None  # 턴별 run 상태·승인 수(러너가 DB에서 읽음)
     reminders_created: int | None = None
     cleanup_failed: bool | None = None  # 평가 DB 정리 실패 여부(runflow_v0에서만)
+    time_zone: str = DEFAULT_TIME_ZONE  # 이 에피소드에서 평가 대상이 쓴 사용자 시간대(과제 속성)
+    # 과제 전용 장애 주입의 규칙 요약("도구:오류"). 없으면 None. 평가 대상에게는 안 보인다.
+    task_fault_rules: tuple[str, ...] | None = None
+    # 기대 변화별(기대 순서) 일치 여부. `expected_changes`가 비어 있지 않은 과제에서만 값이 있다
+    # (값 원문 대신 일치 여부만 남긴다).
+    change_matches: tuple[bool, ...] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         row = self._base_dict()
@@ -218,6 +225,9 @@ class EpisodeResult:
             "text_fact_recall": self.text_fact_recall,
             "answer_ids": self.answer_ids,
             "expected_kind": self.expected_kind,
+            "time_zone": self.time_zone,
+            "task_fault": None if self.task_fault_rules is None else list(self.task_fault_rules),
+            "change_matches": None if self.change_matches is None else list(self.change_matches),
             "matched_reading": self.matched_reading,
             "trajectory": list(self.trajectory),
             "calls": [dict(c) for c in self.calls],
@@ -241,6 +251,11 @@ class EpisodeResult:
         return json.dumps(self.to_dict(), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
+def task_fault_plan(task: TaskView) -> FaultPlan | None:
+    """과제 전용 장애 주입. 없으면 None. 형식 오류는 데이터셋 로드가 먼저 거부한다."""
+    return FaultPlan.from_dict(task.fault_plan) if task.fault_plan is not None else None
+
+
 async def run_episode(
     *,
     task: TaskView,
@@ -261,7 +276,13 @@ async def run_episode(
     clock = FixedClock(task.as_of_time)  # 에피소드마다 자기 시계(D1-5)
     world = base_world.fork(episode_seed(seed, task.task_id, repeat), clock=clock)
     before = world.copy()
-    connectors = build_sim_connectors(world, [task.account_id], fault.plan)
+    task_plan = task_fault_plan(task)
+    if task_plan is not None and fault.plan is not None:
+        raise ValueError("과제 fault_plan과 실행 fault_plan(--fault-plan)을 함께 쓸 수 없다")
+    connectors = build_sim_connectors(
+        world, [task.account_id], task_plan if task_plan is not None else fault.plan
+    )
+    time_zone = task.time_zone or DEFAULT_TIME_ZONE
     recorder = UsageRecorder()
     recording_llm = EpisodeRecordingLLM(llm, recorder)
     account = task.account_id
@@ -288,6 +309,7 @@ async def run_episode(
                 as_of_time=task.as_of_time,
                 account_id=account,
                 approval_policy=tuple(task.approval_policy or ()),
+                time_zone=time_zone,
             ),
             connectors=EpisodeConnectors(
                 mail=connectors.mail[account],
@@ -353,6 +375,7 @@ async def run_episode(
         diff(before, world),
         output.structured if output is not None else None,
         reminders_created=len(observation.reminders) if observation is not None else 0,
+        reminders=observation.reminders if observation is not None else (),
     )
     violations = approval_violations(observation, calls) if observation is not None else 0
     failure: FailureType | None
@@ -387,7 +410,7 @@ async def run_episode(
     checks: Mapping[str, bool | None] = score.checks
     if error_type is not None:  # 응답이 없으면 응답·호출 검사는 의미가 없다
         checks = {
-            k: (v if k in ("forbidden_tools", "state_diff") else None)
+            k: (v if k in ("forbidden_tools", "state_diff", "state_changes") else None)
             for k, v in score.checks.items()
         }
     if observation is not None:
@@ -439,6 +462,11 @@ async def run_episode(
         turns=(tuple(t.to_dict() for t in observation.turns) if observation is not None else None),
         reminders_created=len(observation.reminders) if observation is not None else None,
         cleanup_failed=cleanup_failed if database_env is not None else None,
+        time_zone=time_zone,
+        task_fault_rules=(
+            tuple(f"{r.tool}:{r.error}" for r in task_plan.rules) if task_plan is not None else None
+        ),
+        change_matches=score.change_matches,
     )
 
 
@@ -518,8 +546,15 @@ async def run_experiment(
         base_world = SimWorld.load(dict(dataset.world_snapshot), FixedClock(tasks[0].as_of_time))
     except SnapshotError as exc:  # pydantic 오류 메시지에는 입력값이 들어 있을 수 있다
         raise DatasetError("world.json이 Sim 스냅샷 v1 형식과 맞지 않는다") from exc
+    if fault.plan is not None and any(t.fault_plan is not None for t in tasks):
+        # 두 장애 주입이 섞이면 결과 해석이 어렵다. 실행 전에 거부한다.
+        raise ValueError("과제 fault_plan이 있는 데이터셋에는 --fault-plan을 함께 쓸 수 없다")
     for account in {t.account_id for t in tasks}:  # FaultPlan 오타를 실행 전에 드러낸다
         build_sim_connectors(base_world.fork(0), [account], fault.plan)
+    for t in tasks:
+        plan = task_fault_plan(t)
+        if plan is not None:
+            build_sim_connectors(base_world.fork(0), [t.account_id], plan)
 
     # LLM 인스턴스를 따로 만들지 않고 팩토리 메타데이터(`is_scripted`)로 판별한다.
     if model_id == UNSPECIFIED_MODEL and not getattr(llm_factory, "is_scripted", False):

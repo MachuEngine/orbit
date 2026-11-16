@@ -440,6 +440,19 @@ def state_diff_mismatch_count(records: Sequence[Record]) -> int:
     return sum(r.get("state_diff_match") is False for r in records)
 
 
+def write_task_summary(records: Sequence[Record]) -> dict[str, Any] | None:
+    """쓰기·리마인더 과제(기대 변화가 비어 있지 않은 과제)의 에피소드 성공률. 없으면 None.
+
+    결과 행의 `change_matches`가 리스트이면 그런 과제다. 채점된 에피소드만 센다. 신뢰구간 없는
+    단순 비율이며, 전체 성공률과 별개로 쓴다.
+    """
+    writes = [r for r in _scored(records) if isinstance(r.get("change_matches"), list)]
+    if not writes:
+        return None
+    ok = sum(r["outcome"]["success"] is True for r in writes)
+    return {"episodes": len(writes), "successes": ok, "success_rate": ok / len(writes)}
+
+
 def response_model_set(records: Sequence[Record]) -> dict[str, Any]:
     """실행 전체에서 응답한 모델의 집합. 하나가 아니면 서로 다른 모델이 섞인 실행이다."""
     models: set[str] = set()

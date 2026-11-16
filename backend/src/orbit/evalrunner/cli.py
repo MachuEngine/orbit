@@ -283,6 +283,7 @@ def _stats(args: argparse.Namespace) -> int:
         "answer_kind_rate": stats.answer_kind_rate(records),
         "unneeded_clarify_rate": stats.unneeded_clarify_rate(records),
         "state_diff_mismatch_episodes": stats.state_diff_mismatch_count(records),
+        "write_tasks": stats.write_task_summary(records),
         "model_mismatch_episodes": stats.model_mismatch_count(records),
         "response_models": stats.response_model_set(records),
     }

@@ -46,7 +46,7 @@ async def test_sut_receives_task_without_gold(dataset: Dataset) -> None:
     for ep in seen:
         # approval_policy는 사용자 행동 입력이라 보인다(정답 아님, ADR-0023 §3). v0는 비어 있다.
         assert {f.name for f in fields(ep.task)} == {
-            "task_id", "turns", "as_of_time", "account_id", "approval_policy",
+            "task_id", "turns", "as_of_time", "account_id", "approval_policy", "time_zone",
         }  # fmt: skip
         assert ep.task.approval_policy == ()
         for attr in (
