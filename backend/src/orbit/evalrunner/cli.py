@@ -15,8 +15,8 @@ import asyncio
 import json
 import subprocess  # noqa: S404  git SHA 조회에만 쓴다
 import sys
-from collections.abc import Collection, Sequence
-from dataclasses import replace
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,12 +24,20 @@ from pydantic import ValidationError
 from sqlalchemy.engine import make_url
 
 from orbit.connectors.sim.faults import FaultPlan
+from orbit.connectors.sim.world import SimWorld
+from orbit.core.clock import FixedClock
 from orbit.core.config import get_llm_settings
 from orbit.evaldata.dataset import read_review
 from orbit.evalrunner import metrics_v1, stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
+from orbit.evalrunner.retrieval import worldmail
+from orbit.evalrunner.retrieval.dryrun import dry_run_report
+from orbit.evalrunner.retrieval.embed_cache import BudgetExceeded as EmbedBudgetExceeded
+from orbit.evalrunner.retrieval.embed_cache import CachingEmbedder
+from orbit.evalrunner.retrieval.indexer import IndexBuildError
 from orbit.evalrunner.runflow_env import EvalDatabaseSettings, RunflowEnvironment
+from orbit.evalrunner.runflow_index import EvalIndexProvider, build_eval_indexes
 from orbit.evalrunner.runflow_sut import VARIANTS
 from orbit.evalrunner.runner import (
     ExperimentBudget,
@@ -38,6 +46,7 @@ from orbit.evalrunner.runner import (
     SealedSplitError,
     estimate_experiment,
     run_experiment,
+    select_tasks,
 )
 from orbit.evalrunner.suts import DATABASE_SUTS, UnknownSutError, create_sut, sut_names
 from orbit.evalrunner.task_source import Dataset, DatasetError, load_dataset
@@ -140,9 +149,28 @@ def _parser() -> argparse.ArgumentParser:
     )  # fmt: skip
     run.add_argument("--sut", required=True, help=f"등록된 이름: {', '.join(sut_names())}")
     run.add_argument(
-        "--index", choices=["off"], default="off",
-        help="runflow_v0의 색인 검색 모드. off만 지원한다(fake는 평가 DB에 연결 행이 필요해 보류, "
-        "ADR-0023 §8)",
+        "--index", choices=["off", "on"], default="off",
+        help="runflow_v0의 색인 검색 모드. off(기본): search_indexed_mail은 index_unavailable. "
+        "on: 실행 전에 과제 계정마다 평가용 색인을 만들거나 재사용하고(ADR-0028 인덱서, 평가 DB "
+        "orbit_eval) 그 색인을 고정 시점 스냅샷으로 검색한다. runflow_v0가 아니면 오류",
+    )  # fmt: skip
+    run.add_argument(
+        "--embedder", choices=["openai", "fake"], default="openai",
+        help="--index on의 임베딩 방식(openai는 ORBIT_OPENAI_API_KEY 필요, 비용 발생)",
+    )  # fmt: skip
+    run.add_argument(
+        "--max-embed-cost-usd", type=float, default=None,
+        help="--index on의 임베딩 누적 비용 상한(색인 + 질의 임베딩). 넘을 것 같으면 중단(코드 3)",
+    )  # fmt: skip
+    run.add_argument(
+        "--price-per-mtok", type=float, default=None, help="임베딩 1M 토큰당 달러(재정의)"
+    )
+    run.add_argument(
+        "--embed-cache-dir", default=None, help="임베딩 캐시 폴더(기본 runs/embed-cache)"
+    )
+    run.add_argument(
+        "--index-dry-run", action="store_true",
+        help="--index on의 색인 비용만 추정해 출력하고 끝낸다(임베딩 호출·DB 접근 없음)",
     )  # fmt: skip
     run.add_argument(
         "--runflow-variant", action="append", default=[], choices=sorted(VARIANTS),
@@ -234,6 +262,104 @@ def _database_env(sut: str) -> RunflowEnvironment | None:
     return RunflowEnvironment(url)
 
 
+@dataclass
+class _IndexSetup:
+    """`--index on`의 실행 전 준비 값. `build`는 색인을 만들고 제공자를 돌려준다."""
+
+    args: argparse.Namespace
+    accounts: list[str]
+    world_snapshot: Mapping[str, Any]
+    world_sha256: str
+    model_id: str
+    cache_dir: Path
+    urls: tuple[str, str] | None = None
+    embedder: CachingEmbedder | None = None
+
+    def dry_run(self) -> dict[str, Any]:
+        """색인 비용 추정. 임베딩 호출도 DB 접근도 하지 않는다(질의 임베딩은 추정에 없다)."""
+        world = SimWorld.load(dict(self.world_snapshot), FixedClock(worldmail.INDEX_NOW))
+        report = dry_run_report(
+            world=world,
+            sizes=self.accounts,
+            accounts={a: a for a in self.accounts},
+            query_texts=[],
+            model_id=self.model_id,
+            cache_dir=self.cache_dir,
+            price_per_mtok=self.args.price_per_mtok,
+            needs_query_embedding=False,
+        )
+        report["note"] = (
+            "과제 계정별 색인만 추정한다. 평가 DB에 같은 지문의 색인이 있으면 임베딩이 필요 없다. "
+            "에피소드 중 모델이 보내는 검색 질의의 임베딩은 포함하지 않는다."
+        )
+        return report
+
+    async def build(self) -> tuple[EvalIndexProvider, float]:
+        assert self.embedder is not None and self.urls is not None  # noqa: S101  준비 단계가 채운다
+        return await build_eval_indexes(
+            world_snapshot=self.world_snapshot,
+            world_sha256=self.world_sha256,
+            accounts=self.accounts,
+            app_url=self.urls[0],
+            owner_url=self.urls[1],
+            embedder=self.embedder,
+        )
+
+
+def _index_setup(args: argparse.Namespace, dataset: Dataset) -> _IndexSetup | None:
+    """`--index on` 준비. 설정이 잘못됐으면 메시지를 출력하고 None(종료 코드 2)."""
+    # 검색 평가 CLI가 이 모듈을 불러오므로 순환을 피하려고 함수 안에서 가져온다.
+    from orbit.evalrunner.retrieval import cli as retrieval_cli
+
+    sample = args.estimate if args.estimate is not None else args.sample
+    tasks = select_tasks(dataset.tasks_for(args.split), sample, args.seed)
+    accounts = sorted({t.account_id for t in tasks})
+    world_path = Path(args.dataset) / "world.json"
+    model_id, fake, embed_settings = retrieval_cli._embedder_parts(args.embedder)
+    setup = _IndexSetup(
+        args=args,
+        accounts=accounts,
+        world_snapshot=dataset.world_snapshot,
+        world_sha256=worldmail.file_sha256(world_path),
+        model_id=model_id,
+        cache_dir=Path(args.embed_cache_dir or retrieval_cli.DEFAULT_CACHE_DIR),
+    )
+    if args.index_dry_run:
+        return setup
+    try:
+        setup.urls = retrieval_cli._eval_urls()
+        inner = fake if fake is not None else retrieval_cli._build_openai(embed_settings)
+    except retrieval_cli.UsageError as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return None
+    setup.embedder = CachingEmbedder(
+        inner,
+        setup.cache_dir,
+        max_cost_usd=args.max_embed_cost_usd,
+        price_per_mtok=args.price_per_mtok,
+    )
+    return setup
+
+
+def _print_index_summary(
+    provider: EvalIndexProvider, embedder: CachingEmbedder | None, seconds: float
+) -> None:
+    """색인 준비 결과를 표준 오류에 한 줄씩 낸다(계정 ID·건수만)."""
+    for account, h in sorted(provider.handles.items()):
+        state = "재사용" if h.reused else "새로 만듦"
+        print(
+            f"색인 {account}: {state} mails={h.indexed_mails} chunks={h.chunks} "
+            f"embedded_chunks={h.embedded_chunks} fingerprint={h.fingerprint[:12]}",
+            file=sys.stderr,
+        )
+    emb = embedder.stats() if embedder is not None else {}
+    print(
+        f"색인 준비 {seconds:.1f}초 cache_hits={emb.get('cache_hits')} "
+        f"cache_misses={emb.get('cache_misses')} cost_usd={emb.get('cost_usd')}",
+        file=sys.stderr,
+    )
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.split == "test" and not args.allow_test:
         raise SealedSplitError("test 분할 봉인")  # 출력 파일을 만들기 전에 거부한다
@@ -260,9 +386,26 @@ def _run(args: argparse.Namespace) -> int:
     if args.pattern is not None and args.sut != "runflow_v0":
         print("--pattern은 --sut runflow_v0에서만 쓴다", file=sys.stderr)
         return 2
+    if (args.index == "on" or args.index_dry_run) and args.sut != "runflow_v0":
+        print("--index on은 --sut runflow_v0에서만 쓴다", file=sys.stderr)
+        return 2
+    if args.index_dry_run and args.index != "on":
+        print("--index-dry-run은 --index on과 함께 쓴다", file=sys.stderr)
+        return 2
+    if args.index == "off" and args.max_embed_cost_usd is not None:
+        print("--max-embed-cost-usd는 --index on에서만 쓴다", file=sys.stderr)
+        return 2
     if args.live_llm and args.llm_script:
         print("--live-llm과 --llm-script는 함께 쓸 수 없다", file=sys.stderr)
         return 2
+    index_setup: _IndexSetup | None = None
+    if args.index == "on":
+        index_setup = _index_setup(args, dataset)
+        if index_setup is None:
+            return 2
+        if args.index_dry_run:
+            print(json.dumps(index_setup.dry_run(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
     llm_config: dict[str, Any] | None = None
     model_id: str = args.model_id
     if args.live_llm:
@@ -280,6 +423,13 @@ def _run(args: argparse.Namespace) -> int:
         sut_options["variants"] = tuple(args.runflow_variant)
         if args.pattern is not None:
             sut_options["pattern"] = args.pattern
+    provider: EvalIndexProvider | None = None
+    if (
+        index_setup is not None
+    ):  # 출력 파일을 만들기 전에 색인을 준비한다(실패해도 파일이 남지 않는다)
+        provider, seconds = asyncio.run(index_setup.build())
+        sut_options["index"] = provider
+        _print_index_summary(provider, index_setup.embedder, seconds)
     sha, dirty = _git_state(out.parent)  # 출력 파일을 만들기 전에 읽는다
     common: dict[str, Any] = {
         "split": args.split,
@@ -405,7 +555,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SealedSplitError:
         print(f"test 분할은 봉인돼 있다. 실행하려면 {SEAL_FLAG}를 명시한다.", file=sys.stderr)
         return 2
-    except (DatasetError, stats.ResultsError, UnknownSutError) as exc:
+    except EmbedBudgetExceeded as exc:
+        print(f"임베딩 비용 상한으로 중단했다: {exc}", file=sys.stderr)
+        return 3
+    except (IndexBuildError, DatasetError, stats.ResultsError, UnknownSutError) as exc:
         # 이 예외들의 메시지는 위치·이름만 담도록 직접 만든 것이다.
         print(f"오류: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2

@@ -124,8 +124,20 @@ uv run python -m orbit.evalrunner run \
 ```
 
 - LLM 환경(`ORBIT_LLM_*`)은 위 `assistant_v0` 실행과 같다. 비용이 드는 실행은 사전 측정 뒤 개발자 승인을 받는다.
-- `--index off`(기본)는 색인 의존성 없이 실행한다(`search_indexed_mail`은 `index_unavailable`). `--index fake`는
-  아직 지원하지 않는다.
+- `--index off`(기본)는 색인 의존성 없이 실행한다(`search_indexed_mail`은 `index_unavailable`).
+- `--index on`(runflow_v0 전용)은 시작 때 과제에 나오는 계정마다 ADR-0028 인덱서로 평가 DB(`orbit_eval`)에 색인을
+  만들거나 재사용하고(지문·임베딩 캐시 공통), `search_indexed_mail`이 그 계정 색인만 검색한다. 평가 DB 앱·소유자
+  URL(`ORBIT_EVAL_DATABASE_URL`, `ORBIT_EVAL_MIGRATION_DATABASE_URL`)이 필요하다. 먼저 비용을 추정한다(호출·DB 없음).
+  ```bash
+  uv run python -m orbit.evalrunner run --dataset ../eval/datasets/orbit-eval/v1 --split dev \
+    --sut runflow_v0 --index on --index-dry-run --out /dev/null          # 추정만 출력
+  uv run python -m orbit.evalrunner run ... --sut runflow_v0 --index on --embedder openai \
+    --max-embed-cost-usd 0.1 --out ../runs/pilot/runflow-index-on.jsonl  # --embedder fake로 흐름 확인
+  ```
+  고정 시점 스냅샷이다. 질의 직전 동기화는 끄고 `indexed_as_of`는 색인 시각(2026-11-16)으로 고정한다. 에피소드 중
+  Sim 쓰기(발송 등)는 색인에 반영하지 않는다. 결과 `config.sut_config`에 `index_mode: on`, 계정별 색인 지문, 임베딩
+  모델이 들어가 off 결과와 다른 실험으로 구분된다. `--max-embed-cost-usd`는 색인과 질의 임베딩의 누적 상한이다
+  (초과하면 종료 코드 3).
 - 결과 행에는 `assistant_v0` 행의 필드에 더해 `approval_violations`(DB `execution`·`approval`과 Sim 호출 기록으로
   러너가 계산), `turns`(턴별 run 상태·승인 수·오류 종류), `reminders_created`가 있다. 설정 지문의
   `config.sut_config`에 runflow 설정 지문, 답 제출 확장 버전(`eval-answer-v2`), 색인 모드가 들어간다.

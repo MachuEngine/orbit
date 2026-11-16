@@ -25,9 +25,11 @@ from orbit.evalrunner.episode import (
     SutTurn,
 )
 from orbit.evalrunner.runflow_env import EpisodeResolver
+from orbit.evalrunner.runflow_index import EvalIndexProvider
 from orbit.evalrunner.trace import EpisodeTrace
 from orbit.llm.interface import LLM
 from orbit.llm.types import LLMRequest, LLMResponse
+from orbit.mailindex.deps import MailIndexDeps
 from orbit.records.approvals import decide_approval
 from orbit.records.runs import (
     TERMINAL_RUN_STATUSES,
@@ -53,7 +55,7 @@ MAX_APPROVALS_PER_RUN = (
     5  # run 하나의 승인 왕복 상한(그래프 `max_steps`와 별개로 무한 반복을 막는다)
 )
 MAX_DRIVE_ROUNDS = 2 * (MAX_APPROVALS_PER_RUN + 1)  # `advance_run` 호출 상한(run 하나)
-INDEX_MODES = ("off",)
+INDEX_MODES = ("off", "on")
 # CLI 이름(`--runflow-variant`) -> SUT 버전 문자열에 붙는 이름 (ADR-0023 §10)
 VARIANTS = {"facts": FACTS_EXTENSION_VERSION, "reasoning-rt": REASONING_ROUNDTRIP_VERSION}
 
@@ -116,10 +118,18 @@ class RunflowV0SUT:
     name = "runflow_v0"
 
     def __init__(
-        self, *, index_mode: str = "off", variants: Iterable[str] = (), pattern: str = REACT
+        self,
+        *,
+        index_mode: str = "off",
+        variants: Iterable[str] = (),
+        pattern: str = REACT,
+        index: EvalIndexProvider | None = None,
     ) -> None:
         if index_mode not in INDEX_MODES:
             raise ValueError(f"지원하지 않는 색인 모드: {index_mode!r} (지원: {INDEX_MODES})")
+        if (index_mode == "on") != (index is not None):
+            raise ValueError("--index on에는 색인 제공자가 필요하고, off에는 쓰지 않는다")
+        self._index = index
         chosen = set(variants)
         unknown = chosen - set(VARIANTS)
         if unknown:
@@ -170,6 +180,8 @@ class RunflowV0SUT:
             "index_mode": self._index_mode,
             "max_approvals_per_run": MAX_APPROVALS_PER_RUN,
         }
+        if self._index is not None:  # off는 키를 더하지 않는다(기존 결과와 같게 둔다)
+            info["index"] = self._index.config_info()
         if self._pattern != REACT:  # react는 키를 더하지 않는다(기존 결과와 같게 둔다)
             info["pattern"] = self._pattern
             info["pattern_version"] = PATTERN_VERSIONS[self._pattern]
@@ -196,7 +208,7 @@ class RunflowV0SUT:
             tz=ZoneInfo(episode.task.time_zone),
             checkpoint_conninfo=database.checkpoint_conninfo,
             jobs=None,
-            mail_index=None,
+            mail_index=self._mail_index(episode, database, clock),
             answer_sink=submission,
             facts_extension=self._facts,
             reasoning_cache=ReasoningCache() if self._reasoning_rt else None,
@@ -225,6 +237,20 @@ class RunflowV0SUT:
             final_text=text,
             structured=submission.answer,
             pattern_stats=memory.stats.to_dict() if memory is not None else None,
+        )
+
+    def _mail_index(
+        self, episode: Episode, database: EpisodeDatabase, clock: FixedClock
+    ) -> MailIndexDeps | None:
+        """`--index on`이면 과제 계정의 색인에 고정된 의존성, off면 None(`index_unavailable`)."""
+        if self._index is None:
+            return None
+        return self._index.mail_index_for(
+            account_id=episode.task.account_id,
+            db=database.db,
+            clock=clock,
+            ids=database.ids,
+            episode_workspace=database.workspace_id,
         )
 
 
