@@ -4,6 +4,7 @@
 import hashlib
 import json
 import random
+import shutil
 from collections import Counter
 from dataclasses import replace
 from datetime import UTC
@@ -473,11 +474,21 @@ def test_nonfinite_cap_is_rejected_before_generation(tmp_path: Path, cap: str) -
     assert not list(tmp_path.iterdir())
 
 
+def clean_input(base: Path) -> Path:
+    """커밋된 paraphrase.jsonl 캐시 없이 world.json·skeleton.json만 가진 입력 폴더."""
+    input_dir = base / "clean_input"
+    if not input_dir.exists():
+        input_dir.mkdir()
+        for name in ("world.json", "skeleton.json"):
+            shutil.copyfile(COMMITTED_V1 / name, input_dir / name)
+    return input_dir
+
+
 def test_cli_dry_run_prints_an_estimate_and_writes_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code = main(["--dataset-dir", str(COMMITTED_V1), "--seed", str(SEED), "--max-cost-usd", "1",
-                 "--dry-run", "--out", str(tmp_path / "x")])  # fmt: skip
+    code = main(["--dataset-dir", str(clean_input(tmp_path)), "--seed", str(SEED),
+                 "--max-cost-usd", "1", "--dry-run", "--out", str(tmp_path / "x")])  # fmt: skip
     assert code == 0
     text = capsys.readouterr().out
     assert "예상 합계" in text and "필요 24개 중 확보 0개" in text
@@ -559,7 +570,7 @@ def full_run(out: Path, llm: RewriteLLM | None, *, cap: float = 1.0) -> int:
         return llm
 
     return run(
-        COMMITTED_V1, SEED, out, skip_paraphrase=False, max_cost_usd=cap, dry_run=False,
+        clean_input(out.parent), SEED, out, skip_paraphrase=False, max_cost_usd=cap, dry_run=False,
         sha="test-sha", llm_factory=factory, echo=lambda _: None,
     )  # fmt: skip
 
@@ -638,3 +649,25 @@ def test_v0_manifest_bytes_are_unchanged_by_the_optional_fields(tmp_path: Path) 
         encoding="utf-8"
     )
     assert json.loads(v0.read_text(encoding="utf-8"))["created_with"] == "templates"
+
+
+def test_committed_dataset_regenerates_from_its_paraphrase_cache_without_llm(
+    tmp_path: Path,
+) -> None:
+    committed = ds.load_dataset(COMMITTED_V1)
+    assert len(committed.tasks) == 240
+    assert Counter(derived(t) for t in committed.tasks)["paraphrase"] == 24
+    assert (COMMITTED_V1 / pp.PARAPHRASE_FILE).exists()
+    out = tmp_path / "regen"
+
+    def forbidden_factory(model: FamilyModel) -> RewriteLLM:
+        raise AssertionError("커밋된 캐시로 재생성할 때 LLM을 만들면 안 된다")
+
+    assert (
+        run(
+            COMMITTED_V1, SEED, out, skip_paraphrase=False, max_cost_usd=1.0, dry_run=False,
+            sha="test-sha", llm_factory=forbidden_factory, echo=lambda _: None,
+        )
+        == 0
+    )  # fmt: skip
+    assert digest(out / "tasks.jsonl") == digest(COMMITTED_V1 / "tasks.jsonl")
