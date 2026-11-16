@@ -10,7 +10,7 @@ from typing import Any
 
 from orbit.assistant.envelope import boundary_for, safe_source, wrap_data
 from orbit.assistant.prompt import build_system_prompt
-from orbit.assistant.tools import SUBMIT_ANSWER, ReadOnlyTools, tool_specs
+from orbit.assistant.tools import SUBMIT_ANSWER, ReadOnlyTools, ToolOutcome, tool_specs
 from orbit.connectors.contracts import CalendarConnector, MailConnector
 from orbit.core.clock import Clock
 from orbit.llm.interface import LLM
@@ -36,6 +36,8 @@ class ReadOnlyAssistant:
         max_turns: int = DEFAULT_MAX_TURNS,
         metadata: Mapping[str, str] | None = None,
         boundary_seed: str | None = None,
+        on_tool: Callable[[str, Any, ToolOutcome], None] | None = None,
+        on_workset: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         if max_turns < 1:
             raise ValueError("max_turns는 1 이상이어야 한다")
@@ -45,6 +47,9 @@ class ReadOnlyAssistant:
         self._clock = clock
         self._tz = tz
         self._on_step = on_step
+        # 평가 기록용(ADR-0029): 도구 호출마다 (이름, 인자, 결과)와 작업 집합 대응표를 알려 준다.
+        self._on_tool = on_tool
+        self._on_workset = on_workset
         self._has_step_room = has_step_room
         self._max_turns = max_turns
         self.text_skipped = False  # 마지막 `run`에서 단계 여유가 없어 보충 호출을 건너뛰었다
@@ -115,6 +120,10 @@ class ReadOnlyAssistant:
                 if call.name != SUBMIT_ANSWER:  # 제출은 LLM·커넥터 호출이 아니라 단계가 아니다
                     self._step()
                 outcome = await tools.execute(call.name, dict(call.arguments))
+                if self._on_tool is not None:
+                    self._on_tool(call.name, call.arguments, outcome)
+                if self._on_workset is not None:
+                    self._on_workset(tools.workset.export())
                 if call.name == SUBMIT_ANSWER and outcome.structured is not None:
                     structured = outcome.structured  # 같은 응답의 마지막 유효 제출이 남는다
                 messages.append(

@@ -8,6 +8,7 @@
 """
 
 import inspect
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, overload
 
@@ -107,10 +108,23 @@ class SimRuntime:
         if self.shared and not self._sealed:
             raise RuntimeError("공유 런타임은 seal() 뒤에 써야 한다(build_sim_connectors 사용)")
         match_args = args if account_id is None else {**args, "account_id": account_id}
+        started = time.perf_counter()
         rule = self.faults.check(tool, match_args)
+        fault = None if rule is None else f"{rule.tool}:{rule.error}"
+
+        def elapsed() -> float:
+            return round((time.perf_counter() - started) * 1000, 3)
+
         if rule is not None and rule.error != "result_unknown":
             pre_err = build_error(rule)
-            self.calls.record(tool, args, outcome="error", error_type=type(pre_err).__name__)
+            self.calls.record(
+                tool,
+                args,
+                outcome="error",
+                error_type=type(pre_err).__name__,
+                fault=fault,
+                latency_ms=elapsed(),
+            )
             raise pre_err
 
         try:
@@ -118,13 +132,27 @@ class SimRuntime:
             if inspect.isawaitable(result):
                 result = await result
         except Exception as exc:
-            self.calls.record(tool, args, outcome="error", error_type=type(exc).__name__)
+            self.calls.record(
+                tool,
+                args,
+                outcome="error",
+                error_type=type(exc).__name__,
+                fault=fault,
+                latency_ms=elapsed(),
+            )
             raise
 
         if rule is not None:  # result_unknown: 적용은 됐지만 응답이 유실됐다
             err = build_error(rule)
-            self.calls.record(tool, args, outcome="error", error_type=type(err).__name__)
+            self.calls.record(
+                tool,
+                args,
+                outcome="error",
+                error_type=type(err).__name__,
+                fault=fault,
+                latency_ms=elapsed(),
+            )
             raise err
 
-        self.calls.record(tool, args, outcome="ok", result=result)
+        self.calls.record(tool, args, outcome="ok", result=result, latency_ms=elapsed())
         return result

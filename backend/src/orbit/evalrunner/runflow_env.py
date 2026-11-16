@@ -44,7 +44,9 @@ from orbit.core.clock import FixedClock
 from orbit.core.ids import Uuid7Generator
 from orbit.db.session import AsyncDatabase
 from orbit.evalrunner.episode import EpisodeDatabase
+from orbit.evalrunner.trace import ToolCallTrace, TranscriptTurn
 from orbit.records.deletion import CHECKPOINT_TABLES
+from orbit.records.runs import list_messages
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +132,8 @@ class DbObservation:
     turns: tuple[TurnObservation, ...]
     executions: tuple[ExecutionObservation, ...]
     reminders: tuple[ReminderCreated, ...]
+    # 실행 기록(ADR-0029): run마다 사용자 발화·비서 문장·도구 호출. 채점에는 쓰지 않는다.
+    transcript: tuple[TranscriptTurn, ...] = ()
 
 
 def db_violations(executions: Sequence[ExecutionObservation]) -> int:
@@ -271,7 +275,7 @@ class RunflowEnvironment:
             runs = (
                 await s.execute(
                     text(
-                        "SELECT r.status, r.error_kind,"
+                        "SELECT r.id, r.status, r.error_kind,"
                         " (SELECT count(*) FROM approval a"
                         "   WHERE a.run_id = r.id AND a.workspace_id = r.workspace_id) AS approvals"
                         " FROM run r WHERE r.workspace_id = :ws AND r.conversation_id = :conv"
@@ -305,8 +309,13 @@ class RunflowEnvironment:
                     {"ws": ws},
                 )
             ).all()
+            transcript = []
+            for r in runs:
+                rows = await list_messages(s, workspace_id=ws, run_id=r.id)
+                transcript.append(_transcript_turn(rows))
         return DbObservation(
             turns=tuple(TurnObservation(r.status, int(r.approvals), r.error_kind) for r in runs),
+            transcript=tuple(transcript),
             executions=tuple(
                 ExecutionObservation(
                     tool_name=e.tool_name,
@@ -346,6 +355,46 @@ class RunflowEnvironment:
                         {"ids": run_ids},
                     )
             await s.execute(text("DELETE FROM workspace WHERE id = :ws"), {"ws": ws})
+
+
+def _transcript_turn(rows: Sequence[Any]) -> TranscriptTurn:
+    """run 하나의 `run_message` 행에서 사용자 발화·비서 문장·도구 호출을 모은다(호출 순서 유지).
+
+    도구 결과는 (step, 모델 호출 ID)로 짝짓는다. 호출 ID는 step 안에서만 유일하다고 본다."""
+    user = ""
+    texts: list[str] = []
+    calls: list[tuple[Any, Mapping[str, Any]]] = []  # (step, 호출)
+    results: dict[tuple[Any, str], Mapping[str, Any]] = {}
+    handles: Mapping[str, Any] | None = None
+    for row in rows:
+        content = row.content if isinstance(row.content, Mapping) else {}
+        if row.role == "user":
+            user = str(content.get("text", ""))
+        elif row.role == "assistant":
+            text = content.get("text")
+            if isinstance(text, str) and text.strip():
+                texts.append(text)
+            calls += [
+                (content.get("step"), c)
+                for c in content.get("tool_calls", [])
+                if isinstance(c, Mapping)
+            ]
+        elif row.role == "tool":
+            results[(content.get("step"), str(content.get("tool_call_id")))] = content
+            if isinstance(content.get("handles"), Mapping):
+                handles = content["handles"]
+    traced = []
+    for step, c in calls:
+        got = results.get((step, str(c.get("id"))), {})
+        traced.append(
+            ToolCallTrace(
+                name=str(c.get("name", "")),
+                arguments=c.get("arguments"),
+                result=str(got.get("text", "")),
+                is_error=bool(got.get("is_error", False)),
+            )
+        )
+    return TranscriptTurn(user, "\n\n".join(texts), tuple(traced), handles)
 
 
 def _hash_consistent(args: Any, call_hash: str, approval_hash: str) -> bool:

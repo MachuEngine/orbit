@@ -179,12 +179,15 @@ class RunflowV0SUT:
         )
         decisions = 0  # 에피소드 전체의 승인 결정 수(정책 순번)
         last_run: uuid.UUID | None = None
-        for turn in (t for t in episode.task.turns if t.role == "user"):
+        for index, turn in enumerate(t for t in episode.task.turns if t.role == "user"):
             submission.answer = None  # 성공 판정은 마지막 run의 제출이다
-            last_run = await _start_run(deps, database, turn, fingerprint)
-            decisions = await _drive(
-                deps, database, last_run, episode.task.approval_policy, decisions
-            )
+            try:
+                last_run = await _start_run(deps, database, turn, fingerprint)
+                decisions = await _drive(
+                    deps, database, last_run, episode.task.approval_policy, decisions
+                )
+            finally:  # 턴별 구조화된 답 기록(ADR-0029). 실패한 턴에도 남긴다
+                episode.trace.record_turn_structured(index, submission.answer)
         text = await _assistant_text(deps, database, last_run) if last_run is not None else ""
         return EpisodeOutput(final_text=text, structured=submission.answer)
 

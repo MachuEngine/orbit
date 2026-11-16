@@ -171,6 +171,24 @@ uv run python -m orbit.evalrunner run \
   넣지 않고 결과 행에 `time_zone`을 남긴다. `Task.fault_plan`은 그 과제 에피소드에만 걸리고(결과 행 `task_fault`에 규칙
   요약) 평가 대상에게 보이지 않는다. `--fault-plan`과 과제 `fault_plan`을 함께 쓰면 실행 전에 거부한다.
 
+## 실행 기록과 보조 지표 (ADR-0029)
+
+- **결과 행 기록(`result_schema` 2)**: 두 평가 대상 모두 `trace`에 턴별 사용자 발화·답 문장·구조화된 답, 도구 호출마다
+  이름·인자·결과 본문(모델에 보여 준 JSON, 호출당 8,000자 상한이고 잘리면 `result_truncated`)·`error_kind`, 마지막 유효
+  `submit_answer`의 핸들 -> 아티팩트 ID 대응표(`answer_handles`)를 남긴다. `calls[]`에는 주입된 장애 규칙(`fault`,
+  없으면 null)과 커넥터 호출 시간(`latency_ms`)이, 행에는 `task_meta`(유형·시나리오·근거 태그 ID, 정답 아님),
+  `min_tool_calls`(정답 제출 오라클의 호출 수, 하한), `change_fields`(기대 변화별 필드 일치)가 더해진다.
+  `result_schema`가 없는 옛 결과는 스키마 1이다. 결과 파일(`runs/`)은 git에서 제외한다.
+- **`stats` 섹션**: 기존 키 뒤에 `accuracy_extra`(쓰기 인자 필드별 일치율, 다중 턴 대화 단위 성공률), `grounding`(사실 근거율,
+  인용 precision·recall, 기권률·환각률·과잉 거절률), `tools`(기대 영역 recall, 잘못된 영역 호출 비율, 인자 유효율, 최소
+  호출 수 대비 초과 호출), `robustness`(결함 과제 성공률·정직 보고율·결함 환각률, 표현 변형 짝 일치), `efficiency`(성공당
+  비용, 지연 p50·p95, 과제당 호출 수)가 더해진다. 기록이 없는 옛 결과는 해당 지표가
+  `{"available": false, "reason": ...}`이고, 새 결과와 한 비교에 섞지 않는다. 정직 보고는 표현 목록(`metrics_v1.FAILURE_PHRASES`)과
+  `abstain` 답으로 판정하므로 목록에 없는 표현은 놓친다. 사실 근거율은 날짜·시각·금액·숫자·이메일·이름 후보만 본다
+  (`fact_extract`).
+- **Judge 입력 내보내기**: `python -m orbit.evalrunner judge-input <결과.jsonl> --out <입력.jsonl>`은 서술형 근거성 Judge용
+  입력(과제 ID, 반복 번호, 답 문장, 도구 결과 본문)만 쓴다. Judge는 호출하지 않는다.
+
 ## 결과에 남는 설정 지문
 
 결과 `config.llm`에 `provider`, `reasoning_effort`, `temperature_sent`, `tool_strict`, `reasoning_items_roundtrip`,
