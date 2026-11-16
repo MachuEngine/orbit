@@ -19,6 +19,7 @@ from orbit.evaldata.v1.search_set import (
     BASELINE_SPLIT_SEED,
     FROZEN_CONTRACT_SHA256,
     SearchSetError,
+    _choose_person_time,
     _deduplicate_queries,
     _unique_time_precision,
     assign_splits,
@@ -26,6 +27,7 @@ from orbit.evaldata.v1.search_set import (
     load_search_set,
 )
 from orbit.evaldata.v1.skeleton import SearchTopicTruth, Skeleton
+from orbit.evaldata.v1.task_world import load_task_world
 from orbit.evaldata.v1.templates import SEARCH_NOUNS
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -138,7 +140,7 @@ def test_synonym_coverage_and_actual_person_time_refinement() -> None:
     rows, manifest = generate(DATA, 20261116, "test-sha")
     assert manifest["synonym_noun_count"] == 20
     assert manifest["synonym_variant_count"] >= 40
-    assert manifest["person_time_precision_counts"] == {"date": 19, "month": 41}
+    assert manifest["person_time_precision_counts"] == {"date": 41, "month": 19}
     assert len(rows) == 180
     assert set(search_templates.NOUN_SYNONYMS) == set(SEARCH_NOUNS)
     for noun, aliases in search_templates.NOUN_SYNONYMS.items():
@@ -639,3 +641,240 @@ def test_loader_rejects_duplicates_and_mixed_cluster(tmp_path: Path) -> None:
     )
     with pytest.raises(SearchSetError, match="cluster"):
         load_search_set(path)
+
+
+@pytest.mark.parametrize(
+    ("word", "pair", "expected"),
+    [
+        ("2026년 10월 28일", "이야/야", "2026년 10월 28일이야"),
+        ("2026년 11월", "이야/야", "2026년 11월이야"),
+        ("최세아", "이야/야", "최세아야"),
+        ("최종 금액", "이/가", "최종 금액이"),
+        ("확정 마감", "을/를", "확정 마감을"),
+        ("서아린님", "이/가", "서아린님이"),
+        ("프로젝트", "이/가", "프로젝트가"),
+        ("프로젝트", "은/는", "프로젝트는"),
+        ("마감일", "은/는", "마감일은"),
+        ("달빛정원", "과/와", "달빛정원과"),
+        ("고지원", "과/와", "고지원과"),
+        ("고지원", "을/를", "고지원을"),
+        ("ABC 12", "이/가", "ABC 12가"),
+    ],
+)
+def test_josa_follows_final_consonant(word: str, pair: str, expected: str) -> None:
+    assert search_templates.attach_josa(word, pair) == expected
+
+
+def test_final_consonant_uses_last_hangul_for_digit_endings() -> None:
+    assert search_templates.has_final_consonant("28일")
+    assert search_templates.has_final_consonant("11월")
+    assert not search_templates.has_final_consonant("3시 5분 7초 2")
+    assert not search_templates.has_final_consonant("")
+    assert not search_templates.has_final_consonant("ABC")
+
+
+def test_generated_queries_have_no_josa_error() -> None:
+    rows, _ = generate(DATA, 20261116, "test-sha")
+    # A sentence-ending "야" must not directly follow a syllable with a final consonant.
+    ending = re.compile(r"([가-힣])야(?=\s|$|[?.!,])")
+    checked = 0
+    for row in rows:
+        for match in ending.finditer(row["query"]):
+            checked += 1
+            assert not search_templates.has_final_consonant(match.group(1)), row["query"]
+    assert checked > 0
+    assert not any(re.search(r"[월일시분초]야(?=\s|$)", row["query"]) for row in rows)
+
+
+def _world_author_when(
+    tw: Any, account_id: str, artifact_id: str, kind: str
+) -> tuple[str, dt.datetime]:
+    account = tw.accounts[account_id]
+    if kind == "mail":
+        item = account.messages[artifact_id]
+        author, raw = item["from"]["name"], item["sent_at"]
+    else:
+        item = account.files[artifact_id]
+        author, raw = item["owners"][0]["name"], item["modified_at"]
+    return author, dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(account.tz)
+
+
+def test_person_time_condition_does_not_match_grade_one_bodies() -> None:
+    rows, manifest = generate(DATA, 20261116, "test-sha")
+    tw, _ = load_task_world(DATA)
+    skeleton = Skeleton.model_validate_json((DATA / "skeleton.json").read_bytes())
+    kinds = {
+        scenario.scenario_id: SearchTopicTruth.model_validate(scenario.truth).artifact_by_body
+        for scenario in skeleton.scenarios
+        if scenario.type == "search_topic"
+    }
+    latest_rows = 0
+    for row in (r for r in rows if r["form"] == "person_time"):
+        query = row["query"]
+        precision = "date" if re.search(r"\d+월 \d+일", query) else "month"
+        latest = any(cue in query for cue in search_templates.LATEST_CUES)
+        latest_rows += latest
+        project = next(
+            body.context.project
+            for body_id, body in skeleton.bodies.items()
+            if body_id in row["body_refs"] and row["body_refs"][body_id] == 2
+        )
+        assert project in query
+        for box in row["mailboxes"].values():
+            artifacts = {
+                artifact_id: grade for artifact_id, grade in box["relevance"].items() if grade >= 1
+            }
+            grade2: list[dt.datetime] = []
+            grade1: list[tuple[str, dt.datetime]] = []
+            for body_id, grade in row["body_refs"].items():
+                if grade == 0:
+                    continue
+                kind = kinds[row["scenario_id"]][body_id]
+                size_box = skeleton.search_mailboxes[box["account_id"]]
+                mapping = size_box.message_by_body if kind == "mail" else size_box.file_by_body
+                author, when = _world_author_when(tw, box["account_id"], mapping[body_id], kind)
+                assert mapping[body_id] in artifacts
+                if grade == 2:
+                    assert author in query
+                    grade2.append(when)
+                else:
+                    grade1.append((author, when))
+            fmt = "%Y년 %m월 %d일" if precision == "date" else "%Y년 %m월"
+            for author, when in grade1:
+                matches = author in query and when.strftime(fmt) in query
+                if matches:
+                    # Only a strictly older body may share the condition, and only with a cue.
+                    assert latest
+                    assert all(when < g2 for g2 in grade2)
+    assert latest_rows == manifest["person_time_latest_count"]
+    assert sum(manifest["person_time_precision_counts"].values()) == 60
+
+
+def _pt_context(
+    when: dt.datetime, grade1: list[dt.datetime], author: str = "전준혁"
+) -> dict[str, Any]:
+    return {
+        "project": "달빛정원",
+        "author": author,
+        "kind": "mail",
+        "truth": SimpleNamespace(fact=SimpleNamespace(kind="amount")),
+        "when": when,
+        "grade1_by_size": {
+            size: [
+                {
+                    "body_id": f"b{i}",
+                    "kind": "mail",
+                    "author": author,
+                    "when": g,
+                    "project": "달빛정원",
+                }
+                for i, g in enumerate(grade1)
+            ]
+            for size in ("200", "1000", "5000")
+        },
+    }
+
+
+def test_person_time_choice_order_date_then_latest_then_drop() -> None:
+    tz = dt.UTC
+    base = dt.datetime(2026, 10, 14, 9, 0, tzinfo=tz)
+    # Same month but a different day: the date alone separates grade 1 from grade 2.
+    ctx = _pt_context(base, [dt.datetime(2026, 10, 2, 9, 0, tzinfo=tz)])
+    assert _choose_person_time(ctx, [ctx]) == ("date", False)
+    # Different person: no conflict, month stays.
+    other = _pt_context(base, [])
+    assert _choose_person_time(other, [other]) == ("month", False)
+    # Same day, grade 1 older: latest cue separates them.
+    ctx = _pt_context(base, [dt.datetime(2026, 10, 14, 8, 0, tzinfo=tz)])
+    assert _choose_person_time(ctx, [ctx]) == ("date", True)
+    # Same day, grade 1 newer than grade 2: cannot be separated.
+    ctx = _pt_context(base, [dt.datetime(2026, 10, 14, 10, 0, tzinfo=tz)])
+    assert _choose_person_time(ctx, [ctx]) is None
+    # Same instant is not "strictly later".
+    ctx = _pt_context(base, [base])
+    assert _choose_person_time(ctx, [ctx]) is None
+
+
+def test_latest_wording_is_rendered_and_required() -> None:
+    import random
+
+    when = dt.datetime(2026, 10, 14, 9, 0, tzinfo=dt.UTC)
+    for kind in ("mail", "document"):
+        for seed in range(4):
+            query = search_templates.render(
+                "달빛정원 견적",
+                "person_time",
+                "전준혁",
+                when,
+                kind,
+                "amount",
+                random.Random(seed),  # noqa: S311
+                project="달빛정원",
+                noun="견적",
+                time_precision="date",
+                latest=True,
+            )
+            assert any(cue in query for cue in search_templates.LATEST_CUES)
+            assert (
+                search_templates.missing_required_field(
+                    query,
+                    "person_time",
+                    "달빛정원",
+                    "달빛정원 견적",
+                    "amount",
+                    author="전준혁",
+                    when=when,
+                    time_precision="date",
+                    latest=True,
+                )
+                is None
+            )
+            assert (
+                search_templates.missing_required_field(
+                    query.replace("마지막으로", "").replace("가장 최근에", ""),
+                    "person_time",
+                    "달빛정원",
+                    "달빛정원 견적",
+                    "amount",
+                    author="전준혁",
+                    when=when,
+                    time_precision="date",
+                    latest=True,
+                )
+                == "latest"
+            )
+
+
+def test_grade_one_overlap_drop_is_counted_and_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import orbit.evaldata.v1.search_set as search_set
+
+    target = "sc-search-topic-0001"
+    original = search_set._choose_person_time
+
+    def undecidable(context: dict[str, Any], contexts: list[dict[str, Any]]) -> Any:
+        return None if context["scenario_id"] == target else original(context, contexts)
+
+    monkeypatch.setattr(search_set, "_choose_person_time", undecidable)
+    rows, manifest = generate(DATA, 20261116, "test-sha")
+    assert len(rows) == 179
+    assert manifest["dropped"] == {"person_time_matches_grade1": 1}
+    assert manifest["dropped_by_topic"] == {target: 1}
+
+
+def test_query_wording_change_keeps_counts_and_contract() -> None:
+    rows, manifest = generate(DATA, 20261116, "test-sha")
+    assert len(rows) == 180
+    assert Counter(r["form"] for r in rows) == {
+        "keyword": 60,
+        "paraphrase_question": 60,
+        "person_time": 60,
+    }
+    assert manifest["dropped"] == {}
+    saved = [
+        json.loads(line)
+        for line in (DATA / "search.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    keys = ("query_id", "split", "cluster_id", "mailboxes", "body_refs", "as_of", "scenario_id")
+    assert [{k: r[k] for k in keys} for r in rows] == [{k: r[k] for k in keys} for r in saved]

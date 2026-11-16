@@ -33,6 +33,32 @@ NOUN_SYNONYMS: dict[str, tuple[str, ...]] = {
 }
 
 
+def has_final_consonant(word: str) -> bool:
+    """Whether the last Hangul syllable of `word` ends in a final consonant (받침).
+
+    Trailing digits, punctuation and Latin letters are skipped, so "28일" is judged by "일".
+    A word without any Hangul syllable counts as having none.
+    """
+    for char in reversed(word):
+        code = ord(char)
+        if 0xAC00 <= code <= 0xD7A3:
+            return (code - 0xAC00) % 28 != 0
+    return False
+
+
+def attach_josa(word: str, pair: str) -> str:
+    """Append the particle from `pair` ("이/가", "을/를", "은/는", "과/와", "이야/야").
+
+    The first form follows a word with a final consonant, the second one without.
+    """
+    with_final, without_final = pair.split("/")
+    return word + (with_final if has_final_consonant(word) else without_final)
+
+
+# A query that uses the latest-item condition must contain one of these wordings.
+LATEST_CUES = ("가장 최근에", "마지막으로")
+
+
 def fact_cue(fact_kind: str) -> str:
     """Return the rendered, answer-neutral cue required for a search fact kind."""
     return "최종 금액" if fact_kind == "amount" else "확정 마감"
@@ -63,6 +89,7 @@ def missing_required_field(
     author: str = "",
     when: datetime | None = None,
     time_precision: str = "month",
+    latest: bool = False,
 ) -> str | None:
     """Return the first required rendered field missing from a query, if any."""
     normalized = normalize(query)
@@ -79,6 +106,8 @@ def missing_required_field(
     for field, value in required:
         if not value or normalize(value) not in normalized:
             return field
+    if latest and not any(normalize(cue_word) in normalized for cue_word in LATEST_CUES):
+        return "latest"
     return None
 
 
@@ -95,6 +124,7 @@ def render(
     noun: str | None = None,
     synonym: str | None = None,
     time_precision: str = "month",
+    latest: bool = False,
 ) -> str:
     """Render a query without answer values; `keyword` preserves lexical baseline wording."""
     project = project or phrase
@@ -111,21 +141,38 @@ def render(
         description = synonym or noun or "관련 사항"
         question_subject = cue
         variants = [
-            f"{project} {description} 관련 {question_subject}이 확인되는 자료를 찾아줘",
-            f"{project} {description}에 관해 {question_subject}을 확인할 수 있는 자료가 뭐야?",
+            f"{project} {description} 관련 {attach_josa(question_subject, '이/가')} "
+            "확인되는 자료를 찾아줘",
+            f"{project} {description}에 관해 {attach_josa(question_subject, '을/를')} "
+            "확인할 수 있는 자료가 뭐야?",
         ]
         return rng.choice(variants)
     if form == "person_time":
         date = format_source_time(when, time_precision)
-        if artifact_kind == "document":
+        who = attach_josa(f"{author}님", "이/가")
+        if artifact_kind == "document" and latest:
             variants = [
-                f"{author}님 소유 자료 중 {project} {subject} 자료를 찾아줘. 수정 날짜는 {date}야",
-                f"{project} {subject} 자료가 필요해. {author}님 소유이고 수정 날짜는 {date}야",
+                f"{author}님 소유 자료 중 {project} {subject} 자료를 찾아줘. "
+                f"{date}에 마지막으로 수정한 것이야",
+                f"{project} {subject} 자료가 필요해. "
+                f"{author}님 소유이고 {date}에 가장 최근에 수정한 것이야",
+            ]
+        elif artifact_kind == "document":
+            variants = [
+                f"{author}님 소유 자료 중 {project} {subject} 자료를 찾아줘. "
+                f"수정 날짜는 {attach_josa(date, '이야/야')}",
+                f"{project} {subject} 자료가 필요해. {author}님 소유이고 "
+                f"수정 날짜는 {attach_josa(date, '이야/야')}",
+            ]
+        elif latest:
+            variants = [
+                f"{date}에 {who} 가장 최근에 보낸 {project} {subject} 자료를 찾아줘",
+                f"{project} {subject} 관련해 {who} {date}에 마지막으로 보낸 자료가 필요해",
             ]
         else:
             variants = [
-                f"{date}에 {author}님이 보낸 {project} {subject} 자료를 찾아줘",
-                f"{project} {subject} 관련해 {author}님이 {date}에 보낸 자료가 필요해",
+                f"{date}에 {who} 보낸 {project} {subject} 자료를 찾아줘",
+                f"{project} {subject} 관련해 {who} {date}에 보낸 자료가 필요해",
             ]
         return rng.choice(variants)
     raise ValueError(f"unknown query form: {form}")

@@ -96,6 +96,69 @@ def _unique_time_precision(context: dict[str, Any], contexts: list[dict[str, Any
     return None
 
 
+_TIME_FORMATS = {
+    "month": "%Y-%m",
+    "date": "%Y-%m-%d",
+    "minute": "%Y-%m-%dT%H:%M",
+    "second": "%Y-%m-%dT%H:%M:%S",
+}
+
+
+def _grade1_conflicts(context: dict[str, Any], precision: str) -> list[dict[str, Any]]:
+    """Grade-1 bodies of the same topic that the person/period query condition also matches.
+
+    Compared per mailbox with the project, author and the period at `precision` (account-local
+    time). The artifact kind is deliberately ignored: a mail and a document of the same person
+    and period are not told apart by the query conditions. The fact kind is the topic's own.
+    """
+    fmt = _TIME_FORMATS[precision]
+    key = context["when"].strftime(fmt)
+    return [
+        other
+        for others in context["grade1_by_size"].values()
+        for other in others
+        if other["project"] == context["project"]
+        and other["author"] == context["author"]
+        and other["when"].strftime(fmt) == key
+    ]
+
+
+def _choose_person_time(
+    context: dict[str, Any], contexts: list[dict[str, Any]]
+) -> tuple[str, bool] | None:
+    """Return (precision, latest) whose condition matches no grade-1 body, or None if impossible.
+
+    Order: the precision unique among topics, then the date, then the date plus a "latest" cue
+    that holds only if every matching grade-1 body is strictly older than the grade-2 source.
+    """
+    selected = _unique_time_precision(context, contexts)
+    if selected is None:
+        return None
+    candidates = [selected, "date"] if selected == "month" else [selected]
+    for precision in candidates:
+        if not _grade1_conflicts(context, precision):
+            return precision, False
+    precision = candidates[-1]
+    if all(other["when"] < context["when"] for other in _grade1_conflicts(context, precision)):
+        return precision, True
+    return None
+
+
+def _author_and_when(kind: str, item: Any, tz: dt.tzinfo) -> tuple[str, dt.datetime | None]:
+    """Sender/owner name and account-local send/modify time of a mail or document."""
+    if kind == "mail":
+        sender = item.get("from", {})
+        author = str(sender.get("name", "")) if isinstance(sender, dict) else ""
+        when_raw = item.get("sent_at")
+    else:
+        author = str((item.get("owners") or [{"name": ""}])[0].get("name", ""))
+        when_raw = item.get("modified_at")
+    if not when_raw:
+        return author, None
+    when = dt.datetime.fromisoformat(str(when_raw).replace("Z", "+00:00")).astimezone(tz)
+    return author, when
+
+
 def _alias_identifies_topic(
     noun: str, alias: str, context: dict[str, Any], contexts: list[dict[str, Any]]
 ) -> bool:
@@ -340,18 +403,34 @@ def generate(
         source_item = (source_account.messages if kind == "mail" else source_account.files)[
             source_id
         ]
-        if kind == "mail":
-            sender = source_item.get("from", {})
-            author = str(sender.get("name", "")) if isinstance(sender, dict) else ""
-            when_raw = source_item.get("sent_at")
-        else:
-            author = str((source_item.get("owners") or [{"name": ""}])[0].get("name", ""))
-            when_raw = source_item.get("modified_at")
-        if not author or not when_raw:
+        author, when = _author_and_when(kind, source_item, source_account.tz)
+        if not author or when is None:
             raise SearchSetError(f"{scenario.scenario_id}: source person or time is missing")
-        when = dt.datetime.fromisoformat(str(when_raw).replace("Z", "+00:00")).astimezone(
-            source_account.tz
-        )
+        grade1_by_size: dict[str, list[dict[str, Any]]] = {}
+        for size, box in box_by_size.items():
+            account_id = next(k for k, b in boxes.items() if b is box)
+            account = tw.accounts[account_id]
+            found: list[dict[str, Any]] = []
+            for body_id, grade in sorted(truth.relevance_by_body.items()):
+                if grade != 1:
+                    continue
+                other_kind = truth.artifact_by_body[body_id]
+                mapping = box.message_by_body if other_kind == "mail" else box.file_by_body
+                item = (account.messages if other_kind == "mail" else account.files)[
+                    mapping[body_id]
+                ]
+                other_author, other_when = _author_and_when(other_kind, item, account.tz)
+                other_spec = sk.bodies.get(body_id)
+                found.append(
+                    {
+                        "body_id": body_id,
+                        "kind": other_kind,
+                        "author": other_author,
+                        "when": other_when,
+                        "project": other_spec.context.project if other_spec else None,
+                    }
+                )
+            grade1_by_size[size] = found
         contexts[scenario.scenario_id] = {
             "scenario_id": scenario.scenario_id,
             "truth": truth,
@@ -360,8 +439,9 @@ def generate(
             "kind": kind,
             "author": author,
             "when": when,
+            "grade1_by_size": grade1_by_size,
         }
-    precision_counts: Counter[str] = Counter()
+    person_time_choice: dict[str, tuple[str, bool]] = {}
     topic_drop_counts: Counter[str] = Counter()
     split_slots = [
         {"query_id": f"{scenario.scenario_id}-{form}", "cluster_id": clusters[scenario.scenario_id]}
@@ -379,6 +459,7 @@ def generate(
             author, when, kind = context["author"], context["when"], context["kind"]
             synonym: str | None = None
             precision = "month"
+            latest = False
             if form == "keyword" and scenario.scenario_id in collisions:
                 dropped["ambiguous_topic_phrase"] += 1
                 topic_drop_counts[scenario.scenario_id] += 1
@@ -396,13 +477,18 @@ def generate(
                     topic_drop_counts[scenario.scenario_id] += 1
                     continue
             if form == "person_time":
-                selected_precision = _unique_time_precision(context, list(contexts.values()))
-                if selected_precision is None:
-                    dropped["ambiguous_person_time"] += 1
+                choice = _choose_person_time(context, list(contexts.values()))
+                if choice is None:
+                    reason = (
+                        "ambiguous_person_time"
+                        if _unique_time_precision(context, list(contexts.values())) is None
+                        else "person_time_matches_grade1"
+                    )
+                    dropped[reason] += 1
                     topic_drop_counts[scenario.scenario_id] += 1
                     continue
-                precision = selected_precision
-                precision_counts[precision] += 1
+                precision, latest = choice
+                person_time_choice[f"{scenario.scenario_id}-{form}"] = choice
             query = search_templates.render(
                 truth.topic_phrase,
                 form,
@@ -415,6 +501,7 @@ def generate(
                 noun=noun,
                 synonym=synonym,
                 time_precision=precision,
+                latest=latest,
             )
             if any(normalize(surface) in normalize(query) for surface in truth.fact.surface_forms):
                 raise SearchSetError(
@@ -430,6 +517,7 @@ def generate(
                 author=author,
                 when=when,
                 time_precision=precision,
+                latest=latest,
             )
             if missing_field is not None:
                 raise SearchSetError(
@@ -470,6 +558,12 @@ def generate(
         raise SearchSetError(f"more than one query dropped for a topic: {over_dropped}")
     if not 150 <= len(candidates) <= 200:
         raise SearchSetError(f"generated query count outside 150..200: {len(candidates)}")
+    precision_counts = Counter(
+        person_time_choice[r["query_id"]][0] for r in candidates if r["form"] == "person_time"
+    )
+    latest_count = sum(
+        person_time_choice[r["query_id"]][1] for r in candidates if r["form"] == "person_time"
+    )
     counts = Counter((r["split"], r["form"]) for r in candidates)
     test_clusters = len({r["cluster_id"] for r in candidates if r["split"] == "test"})
     rough_half_width = 1.96 * 0.5 / math.sqrt(test_clusters) * 100
@@ -496,6 +590,7 @@ def generate(
             for aliases in search_templates.NOUN_SYNONYMS.values()
         ),
         "person_time_precision_counts": dict(sorted(precision_counts.items())),
+        "person_time_latest_count": latest_count,
         "lexical_overlap_by_form": _lexical_overlap_by_form(candidates, contexts),
         "missing_grade1_topics": missing_grade1,
         "d2_evidence_body_overlap_count": len(d2_overlap),
