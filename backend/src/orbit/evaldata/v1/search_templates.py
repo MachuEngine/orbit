@@ -59,9 +59,18 @@ def attach_josa(word: str, pair: str) -> str:
 LATEST_CUES = ("가장 최근에", "마지막으로")
 
 
+def fact_name(fact_kind: str) -> str:
+    """Fact name used in queries: the amount, or a neutral date.
+
+    Grade-2 bodies call a date fact many things (delivery date, training date, hand-over
+    deadline), so a deadline-only name such as "마감일" would not match their wording.
+    """
+    return "최종 금액" if fact_kind == "amount" else "확정 날짜"
+
+
 def fact_cue(fact_kind: str) -> str:
     """Return the rendered, answer-neutral cue required for a search fact kind."""
-    return "최종 금액" if fact_kind == "amount" else "확정 마감"
+    return fact_name(fact_kind)
 
 
 def format_source_time(when: datetime, precision: str) -> str:
@@ -129,7 +138,7 @@ def render(
     """Render a query without answer values; `keyword` preserves lexical baseline wording."""
     project = project or phrase
     cue = fact_cue(fact_kind)
-    subject = "최종 금액" if fact_kind == "amount" else "확정 마감일"
+    subject = fact_name(fact_kind)
     if form == "keyword":
         variants = [
             f"{phrase} {subject}",

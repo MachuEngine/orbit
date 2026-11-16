@@ -636,6 +636,18 @@ def _message_text(acct: AccountView, ref: ArtifactRef) -> str:
     return str(acct.message_of(ref).get("body_text", ""))
 
 
+def _fact_name(kind: str, text: str) -> str | None:
+    """질문에 쓸 사실 이름. 본문에 실제로 나오는 가장 구체적인 이름이다.
+
+    이름을 쓰지 않는 사실 종류는 빈 문자열, 어떤 이름도 본문에 없으면 None(그 시나리오를 버린다).
+    """
+    names = tt.FACT_NAMES.get(kind)
+    if not names:
+        return ""
+    body = norm(text)
+    return next((n for n in names if norm(n) in body), None)
+
+
 def build_mail_fact(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     t = sc.truth
     if not isinstance(t, MailFactTruth):
@@ -653,7 +665,12 @@ def build_mail_fact(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
         "same_thread": int(t.same_thread),
     }
     note = "must_not_trimmed" if trimmed else ""
-    first = tt.pick(rng, tt.MAIL_FACT[t.fact_kind]).format(project=t.project, item=t.item)
+    name = _fact_name(t.fact_kind, _message_text(acct, t.latest_message))
+    if name is None:
+        return "질문에 쓸 사실 이름이 최신 메일 본문에 없다"
+    first = tt.pick(rng, tt.MAIL_FACT[t.fact_kind]).format(
+        project=t.project, item=t.item, **tt.name_fields(name)
+    )
     gold_facts = [_fact("latest", t.latest.surface_forms, "최신 값")]
     if form == "mt":
         if t.fact_kind == "attachment":
@@ -768,15 +785,20 @@ def build_meeting_request(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
         acct.message_of(t.superseded_message)
     if t.proposed.start <= sc.as_of:
         return "제안 시각이 as_of 이전이다"
+    # 정답에는 요청 메일에 실제로 나오는 값만 넣는다(종료 시각은 메일에 없으므로 검사하지 않는다).
+    text = norm(f"{message.get('subject', '')} {_message_text(acct, t.message)}")
+    if not any(norm(f) in text for f in tt.local_time_forms(t.proposed.start, acct.tz)):
+        return "요청 메일 본문에서 제안 시작 시각을 확인할 수 없다"
+    if norm(t.title) not in text:
+        return "요청 메일에서 일정 제목을 확인할 수 없다"
     rng = ctx.rng(sc, form)
     proposal = "가장 최근에 바꿔 제안한 시간으로" if t.revised else "제안한 시간으로"
     change = EventCreatedChange(
         calendar_id=acct.primary_calendar_id,
         start=t.proposed.start,
-        end=t.proposed.end,
         title_any_of=[t.title],
-        attendees_include=list(t.attendee_emails),
-        location_any_of=[t.location] if t.location else None,
+        attendees_include=[t.requester_email],
+        location_any_of=[t.location] if t.location and norm(t.location) in text else None,
     )
     refs = [t.message] + ([t.superseded_message] if t.superseded_message else [])
     return Draft(
@@ -791,7 +813,7 @@ def build_meeting_request(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
         _gold(None, changes=[change]),
         ref_tags(refs),
         keep=(t.requester_name, t.title),
-        difficulty={"revised": int(t.revised), "attendees": len(t.attendee_emails)},
+        difficulty={"revised": int(t.revised), "attendees": 1},
         fault_tool="create_event",
         variant="meeting_request",
     )
@@ -897,20 +919,34 @@ def build_doc_fact(ctx: Ctx, sc: ScenarioRecord, form: str) -> Result:
     key = "date" if t.fact.kind in ("deadline", "date", "datetime", "time") else t.fact.kind
     if key not in tt.DOC_FACT:
         return "문서 질문 템플릿이 없는 사실 종류다"
+    text = _file_text(acct, t.file)
+    name = ""
+    if key == "date":
+        spec = tt.DOC_DATE_NAMES.get(t.fact.fact_id)
+        if spec is None:
+            return "문서 날짜 사실의 이름을 알 수 없다"
+        name, marker = spec
+        if norm(marker) not in norm(text):
+            return "질문에 쓸 날짜 이름이 문서 본문에 없다"
+    elif key == "amount":
+        found = _fact_name("amount", text)
+        if found is None:
+            return "질문에 쓸 금액 이름이 문서 본문에 없다"
+        name = found
     rng = ctx.rng(sc, form)
     title = str(file["name"])
     return Draft(
         sc,
         "document",
         form,
-        [tt.pick(rng, tt.DOC_FACT[key]).format(title=title)],
+        [tt.pick(rng, tt.DOC_FACT[key]).format(title=title, **tt.name_fields(name))],
         _gold(
             DocumentAnswer(document=DocumentRef(file_id=t.file.id)),
             facts=[_fact("value", t.fact.surface_forms, "문서의 정답 값")],
             facts_required=True,
         ),
         ref_tags([t.file]),
-        keep=(title,),
+        keep=(title, name) if name else (title,),
         difficulty={"doc_kind": t.doc_kind},
         variant="doc_fact",
     )

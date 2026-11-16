@@ -35,7 +35,7 @@ uv run --frozen --directory backend python -m orbit.evaldata.v1.tasks \
   단가 기본값은 예시이므로 실제 실행 전 공급자 가격과 모델 사용 가능 여부를 확인한다.
 - 답장 쓰기는 제품에 초안 저장 전용 도구가 없어, 승인 후 발송 요청과 `draft_sent`로 채점한다.
   모든 실행은 Sim의 합성 데이터에만 적용한다. 초안만 저장하는 제품 기능은 이번 범위 밖이다.
-- 사람 검수·test 봉인은 다음 단계다. 질문의 답 종류 유일성, 최신 값과 근거 메일의 타당성,
+- 사람 검수·test 봉인은 아래 "v1 자동 검수·사람 검수·봉인"의 순서로 한다. 질문의 답 종류 유일성, 최신 값과 근거 메일의 타당성,
   기권 대상의 부재, 두 모호성 해석의 자연스러움, 시간대·상대 날짜를 우선 확인한다.
 
 ## v1 구조 생성기
@@ -103,3 +103,41 @@ uv run --frozen --directory backend python -m orbit.evaldata.v1.search_set \
 - `load_search_set(search_jsonl, manifest_path)`로 저장 파일의 형식·중복·공유 근거 연결 요소와 분할, 매니페스트 수량을 확인할 수 있다. 원본 세계의 ID·본문 검사는 생성 단계에서 수행한다.
 - 검색 지표 함수는 `orbit.evalrunner.retrieval_metrics`의 `recall_at_k`(등급 2 또는 1 이상), `mrr`(첫 등급 2), `ndcg_at_k`(기본 10, 선형 gain)다. 결과 ID의 중복은 첫 등장만 남긴 뒤 순위를 계산하며, 관련 항목이 없으면 0을 반환한다.
 - 실제 검색 실행기와 색인 저장·재사용은 이번 단계에 없다. 사람 검수·test 봉인 후 RAG 비교 실험 전에 별도로 정한다. 변형 질의는 독립 표본이 아니므로 정밀도·bootstrap은 묶음 단위를 기준으로 해석해야 한다.
+
+## v1 자동 검수·사람 검수·봉인 (ADR-0026 §8)
+
+원본 종단 과제 192와 검색 질의 180을 LLM이 먼저 검수하고, 사람은 flagged 전부와 나머지의 10% 표본만 본다.
+장애 파생은 원본 판정을 물려받고, 표현 변형 24문항은 이미 사람이 검수했으므로 LLM에 보내지 않는다.
+검수 모델은 문항 시나리오의 생성 계열이 아닌 나머지 두 계열이다. API 키·모델 설정은 본문 실현기와 같다.
+
+```bash
+cd backend
+D=../eval/datasets/orbit-eval/v1
+# 1) 호출 없이 계열별 예상 토큰·비용만 본다
+uv run python -m orbit.evaldata.v1.auto_review --dataset-dir $D --max-cost-usd 1 --dry-run
+# 2) 시험 실행: 층화 표본 24문항만
+uv run python -m orbit.evaldata.v1.auto_review --dataset-dir $D --max-cost-usd 0.2 --limit 24
+# 3) 전체 실행(같은 명령으로 이어서 한다. --max-cost-usd는 이전 지출을 포함한 누적 상한이다)
+uv run python -m orbit.evaldata.v1.auto_review --dataset-dir $D --max-cost-usd 1
+# 4) 사람 검수 표본(폰에서 보는 JSON). 공개 저장소에 커밋하지 않는 위치에 쓴다
+uv run python -m orbit.evaldata.v1.auto_review sample --dataset-dir $D --out /tmp/human-review-packet.json
+# 5) 결정 반영: {"id","decision": approve|fix|exclude,"note"} 한 줄씩
+uv run python -m orbit.evaldata.v1.auto_review apply --dataset-dir $D decisions.jsonl
+# 6) 봉인: fix 0, 모든 문항에 검수 기록이 있어야 한다
+uv run python -m orbit.evaldata.v1.auto_review seal --dataset-dir $D
+```
+
+- 산출물(데이터셋 폴더): `auto-review.jsonl`(검수자별 판정·사유 120자 이하·토큰·비용, 응답 원문 없음),
+  `auto-review-manifest.json`(모델·단가·프롬프트 버전 `review-v1`·flagged 수·비용),
+  `search-review.jsonl`(검색 질의 결정), 종단 과제 결정은 기존 `review.jsonl`.
+- 종료 코드: 0 정상, 2 입력·설정 오류, 3 비용 상한 도달(이어서 실행 가능), 4 영구 오류로 중단.
+- 표시 규칙: 두 검수자 중 하나라도 `issue`·`unsure`이면 flagged. 응답을 두 번 다시 받아도 JSON으로
+  해석하지 못하면 그 판정은 `unsure`다.
+- `apply`: 표본 밖이면서 flagged가 아닌 문항은 note `auto-review pass, not human-sampled`로 승인한다.
+  flagged인데 결정이 없는 문항은 기록하지 않아 봉인이 막힌다. 종단 과제를 `exclude`하면 그 장애·표현 변형도
+  제외한다. 검색 `exclude`는 질의 단위다. `fix`는 매니페스트 `details.review.warnings`에 남고 봉인을 막는다.
+  `load_dataset`·`load_search_set`은 제외 문항을 기본으로 건너뛰고, 제외 후 test 묶음 수를 다시 센다.
+- `seal`: `manifest.json`의 `seal`과 `search-manifest.json`의 `seal`에 봉인 시각, test 문항·묶음 수,
+  test 문항 내용 sha256, 검수 요약을 쓴다. 자기 일치도는 미측정이며 진행을 막지 않는다.
+  `tests/unit/evaldata/v1/test_auto_review.py::test_committed_dataset_matches_its_seal`이 CI에서
+  봉인 뒤 test 문항 변경을 잡는다. 봉인 후 정정은 ADR-0010 절차대로 별도 기록한다.

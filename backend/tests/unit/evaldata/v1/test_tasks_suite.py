@@ -654,8 +654,18 @@ def test_v0_manifest_bytes_are_unchanged_by_the_optional_fields(tmp_path: Path) 
 def test_committed_dataset_regenerates_from_its_paraphrase_cache_without_llm(
     tmp_path: Path,
 ) -> None:
-    committed = ds.load_dataset(COMMITTED_V1)
+    committed = ds.load_dataset(COMMITTED_V1, include_excluded=True)
     assert len(committed.tasks) == 240
+    decisions = [
+        json.loads(line)
+        for line in (COMMITTED_V1 / "review.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    excluded = {d["task_id"] for d in decisions if d["decision"] == "exclude"}
+    assert excluded <= {t.task_id for t in committed.tasks}
+    default_ids = {t.task_id for t in ds.load_dataset(COMMITTED_V1).tasks}
+    assert len(default_ids) == 240 - len(excluded)
+    assert default_ids.isdisjoint(excluded)
     assert Counter(derived(t) for t in committed.tasks)["paraphrase"] == 24
     assert (COMMITTED_V1 / pp.PARAPHRASE_FILE).exists()
     out = tmp_path / "regen"

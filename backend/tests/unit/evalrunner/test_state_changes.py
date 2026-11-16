@@ -116,6 +116,19 @@ def test_event_created_mismatch_is_wrong_state_change_and_leaves_actual(
     assert s.change_matches == (False,)
 
 
+def test_event_created_without_end_ignores_end_but_checks_other_fields() -> None:
+    no_end = {k: v for k, v in EVENT_CREATED.items() if k != "end"}
+    assert Gold.model_validate({"expected_changes": [no_end]})
+    for over in ({}, {"end": "2026-11-13T05:00:00Z"}):
+        assert score(gold(no_end), with_event(**over)).success is True
+    assert score(gold(no_end), with_event(start="2026-11-13T02:00:00Z")).success is False
+
+
+def test_event_created_with_end_still_checks_end() -> None:
+    s = score(gold(EVENT_CREATED), with_event(end="2026-11-13T05:00:00Z"))
+    assert s.change_matches == (False,)
+
+
 def test_missing_change_is_wrong_state_change() -> None:
     s = score(gold(EVENT_CREATED), WorldDiff())
     assert (s.success, s.failure_type) == (False, "wrong_state_change")

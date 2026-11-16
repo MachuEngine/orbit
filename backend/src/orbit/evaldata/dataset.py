@@ -100,6 +100,7 @@ def write_manifest(out: Path, manifest: Manifest) -> None:
     for key in (
         "smoke_task_ids",
         "details",
+        "seal",
     ):  # v1 선택 필드는 값이 없으면 쓰지 않는다(v0와 같은 바이트)
         if data.get(key) is None:
             data.pop(key, None)

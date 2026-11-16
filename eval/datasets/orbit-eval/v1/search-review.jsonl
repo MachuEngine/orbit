@@ -1,0 +1,180 @@
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0001-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0001-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0001-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0002-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0002-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0002-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0003-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0003-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0003-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0004-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0004-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0004-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0005-keyword"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0005-paraphrase_question"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0005-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0006-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0006-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0006-person_time"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0007-keyword"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0007-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0007-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0008-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0008-paraphrase_question"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0008-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0009-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0009-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0009-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0010-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0010-paraphrase_question"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0010-person_time"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0011-keyword"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0011-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0011-person_time"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0012-keyword"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0012-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0012-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0013-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0013-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0013-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0014-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0014-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0014-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0015-keyword"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0015-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0015-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0016-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0016-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0016-person_time"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0017-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0017-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0017-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0018-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0018-paraphrase_question"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "query_id": "sc-search-topic-0018-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0019-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0019-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0019-person_time"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0020-keyword"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0020-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0020-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0021-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0021-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0021-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0022-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0022-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0022-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0023-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0023-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0023-person_time"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0024-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0024-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0024-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0025-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0025-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0025-person_time"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0026-keyword"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0026-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0026-person_time"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "query_id": "sc-search-topic-0027-keyword"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0027-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0027-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0028-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0028-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0028-person_time"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0029-keyword"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0029-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0029-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0030-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0030-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0030-person_time"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0031-keyword"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0031-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0031-person_time"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0032-keyword"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0032-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0032-person_time"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0033-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0033-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0033-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0034-keyword"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0034-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0034-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0035-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0035-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0035-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0036-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0036-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0036-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0037-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0037-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0037-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0038-keyword"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0038-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0038-person_time"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0039-keyword"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0039-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0039-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0040-keyword"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0040-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0040-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0041-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0041-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0041-person_time"}
+{"decision": "exclude", "note": "auto: body defect (grade2_estimate)", "query_id": "sc-search-topic-0042-keyword"}
+{"decision": "exclude", "note": "auto: body defect (grade2_estimate)", "query_id": "sc-search-topic-0042-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (grade2_estimate)", "query_id": "sc-search-topic-0042-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0043-keyword"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0043-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0043-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0044-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0044-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0044-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0045-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0045-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0045-person_time"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0046-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0046-paraphrase_question"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0046-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0047-keyword"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0047-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0047-person_time"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0048-keyword"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0048-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (grade1_confirmed_other_value)", "query_id": "sc-search-topic-0048-person_time"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0049-keyword"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0049-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0049-person_time"}
+{"decision": "exclude", "note": "auto: body defect (grade2_placeholder)", "query_id": "sc-search-topic-0050-keyword"}
+{"decision": "exclude", "note": "auto: body defect (grade2_placeholder)", "query_id": "sc-search-topic-0050-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (grade2_placeholder)", "query_id": "sc-search-topic-0050-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0051-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0051-paraphrase_question"}
+{"decision": "approve", "note": "human (재검토 후 승인: 검수 페이지 정보 누락 또는 판정 일관성)", "query_id": "sc-search-topic-0051-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0052-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0052-paraphrase_question"}
+{"decision": "approve", "note": "human", "query_id": "sc-search-topic-0052-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0053-keyword"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0053-paraphrase_question"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0053-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0054-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0054-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0054-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0055-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0055-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0055-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0056-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0056-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0056-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0057-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0057-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0057-person_time"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0058-keyword"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0058-paraphrase_question"}
+{"decision": "exclude", "note": "auto: body defect (foreign_year)", "query_id": "sc-search-topic-0058-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0059-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0059-paraphrase_question"}
+{"decision": "exclude", "note": "human", "query_id": "sc-search-topic-0059-person_time"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0060-keyword"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0060-paraphrase_question"}
+{"decision": "approve", "note": "auto-review pass, not human-sampled", "query_id": "sc-search-topic-0060-person_time"}

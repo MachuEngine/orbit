@@ -45,6 +45,7 @@ class Manifest(_Model):
     LLM이 쓴 세계 v1(ADR-0026 §2)이다.
     `smoke_task_ids`: 스모크 부분집합(dev 과제, ADR-0026 §5).
     `details`: 생성 요약(수량·분할·비용 등).
+    `seal`: test 봉인 기록(ADR-0026 §8, `orbit.evaldata.v1.auto_review seal`). 봉인 전에는 없다.
     """
 
     name: str
@@ -57,6 +58,7 @@ class Manifest(_Model):
     notes: str = ""
     smoke_task_ids: list[str] | None = None
     details: dict[str, Any] | None = None
+    seal: dict[str, Any] | None = None
 
 
 class Turn(_Model):
@@ -193,12 +195,16 @@ ExpectedAnswer = Annotated[
 
 
 class EventCreatedChange(_Model):
-    """일정 하나가 만들어져야 한다. 시각은 순간으로 비교한다."""
+    """일정 하나가 만들어져야 한다. 시각은 순간으로 비교한다.
+
+    `end`가 None이면 종료 시각을 검사하지 않는다(요청에 종료·길이가 없을 때). 종료가 시작보다
+    뒤라는 점은 Sim이 보장한다.
+    """
 
     kind: Literal["event_created"] = "event_created"
     calendar_id: str
     start: AwareDatetime
-    end: AwareDatetime
+    end: AwareDatetime | None = None
     all_day: bool = False
     title_any_of: list[str] = Field(min_length=1)
     attendees_include: list[str] = Field(default_factory=list)

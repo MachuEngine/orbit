@@ -14,6 +14,8 @@ import re
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from orbit.evaldata.v1.search_templates import attach_josa
+
 WEEKDAYS_KO = "월화수목금토일"
 
 # ---------------------------------------------------------------- 날짜 표현
@@ -208,28 +210,52 @@ TZ_EVENT = (
     "{date}에 있는 ‘{title}’ 일정의 시작 시각이 내 시간대로 언제야?",
 )
 MISMATCH = (
-    "{date} ‘{title}’ 일정은 몇 시에 시작해?",
-    "{date}에 있는 ‘{title}’ 일정 시작 시각이 언제로 잡혀 있어?",
-    "{date} ‘{title}’ 일정이 몇 시로 잡혀 있는지 알려줘",
+    "캘린더에 {date} ‘{title}’ 일정이 몇 시에 시작하는 것으로 잡혀 있어?",
+    "{date}에 캘린더에 있는 ‘{title}’ 일정 시작 시각이 언제로 잡혀 있어?",
+    "캘린더에 {date} ‘{title}’ 일정이 몇 시로 잡혀 있는지 알려줘",
 )
+
+# 사실 이름(질문에 쓰는 명사). 템플릿 채움값은 `{name}`(그대로), `{name_i}`(이/가),
+# `{name_eul}`(을/를)이다.
+# 정답 메일·문서 본문에 이름이 실제로 나올 때만 그 이름을 쓴다. 앞쪽일수록 구체적이다.
+FACT_NAMES = {
+    "deadline": ("제출 마감일", "마감일", "기한"),
+    "amount": ("견적 금액", "금액"),
+    "place": ("논의 장소", "장소"),
+}
+# 문서 날짜 사실: 사실 id -> (질문에 쓰는 이름, 본문에 나와야 하는 표현)
+DOC_DATE_NAMES = {
+    "end": ("완료 목표일", "완료 목표"),
+    "start": ("착수일", "착수일"),
+}
+
+
+def name_fields(name: str) -> dict[str, str]:
+    """`{name}`·`{name_i}`·`{name_eul}` 채움값."""
+    return {
+        "name": name,
+        "name_i": attach_josa(name, "이/가"),
+        "name_eul": attach_josa(name, "을/를"),
+    }
+
 
 MAIL_FACT = {
     "deadline": (
-        "{project} 프로젝트 {item} 제출 마감일이 언제로 안내됐어? 그 내용이 담긴 가장 최근 메일도 "
+        "{project} 프로젝트 {item} {name_i} 언제로 안내됐어? 그 내용이 담긴 가장 최근 메일도 "
         "찾아줘",
-        "{project} 프로젝트 {item} 마감일을 가장 최근에 안내한 메일을 찾아서, 마감일이 언제인지 "
+        "{project} 프로젝트 {item} {name_eul} 가장 최근에 안내한 메일을 찾아서, 날짜가 언제인지 "
         "알려줘",
     ),
     "amount": (
-        "{project} 프로젝트 {item} 견적 금액이 얼마로 안내됐어? 그 내용이 담긴 가장 최근 메일도 "
+        "{project} 프로젝트 {item} {name_i} 얼마로 안내됐어? 그 내용이 담긴 가장 최근 메일도 "
         "찾아줘",
-        "{project} 프로젝트 {item} 견적 금액을 가장 최근에 안내한 메일을 찾아서, 금액이 얼마인지 "
+        "{project} 프로젝트 {item} {name_eul} 가장 최근에 안내한 메일을 찾아서, 금액이 얼마인지 "
         "알려줘",
     ),
     "place": (
-        "{project} 프로젝트 {item} 논의 장소가 어디로 안내됐어? 그 내용이 담긴 가장 최근 메일도 "
+        "{project} 프로젝트 {item} {name_i} 어디로 안내됐어? 그 내용이 담긴 가장 최근 메일도 "
         "찾아줘",
-        "{project} 프로젝트 {item} 논의 장소를 가장 최근에 안내한 메일을 찾아서, 장소가 어디인지 "
+        "{project} 프로젝트 {item} {name_eul} 가장 최근에 안내한 메일을 찾아서, 장소가 어디인지 "
         "알려줘",
     ),
     "decision": (
@@ -251,12 +277,12 @@ DOC_FACT = {
         "‘{title}’ 문서에 적힌 결정 사항이 뭐야? 해당 문서도 함께 알려줘",
     ),
     "amount": (
-        "‘{title}’ 문서에 적힌 견적 금액이 얼마야? 어느 문서인지도 같이 알려줘",
-        "‘{title}’ 문서의 견적 금액을 알려주고, 해당 문서도 함께 알려줘",
+        "‘{title}’ 문서에 적힌 {name_i} 얼마야? 어느 문서인지도 같이 알려줘",
+        "‘{title}’ 문서의 {name_eul} 알려주고, 해당 문서도 함께 알려줘",
     ),
     "date": (
-        "‘{title}’ 문서에 적힌 일정이 언제야? 어느 문서인지도 같이 알려줘",
-        "‘{title}’ 문서에 적힌 날짜가 언제야? 해당 문서도 함께 알려줘",
+        "‘{title}’ 문서에 적힌 {name_i} 언제야? 어느 문서인지도 같이 알려줘",
+        "‘{title}’ 문서에 적힌 {name_eul} 알려주고, 해당 문서도 함께 알려줘",
     ),
 }
 DOC_VERSION = (
@@ -317,10 +343,10 @@ AMBIGUOUS = {
 }
 
 MEETING_REQUEST = (
-    "{requester}님이 메일로 요청한 ‘{title}’을 {proposal} 캘린더에 일정으로 만들어줘. "
-    "참석자와 장소도 메일에 나온 대로 넣어줘",
-    "{requester}님이 메일로 보낸 ‘{title}’ 요청을 {proposal} 일정으로 잡아줘. "
-    "참석자와 장소는 메일 내용대로 해줘",
+    "{requester}님이 메일로 요청한 ‘{title}’을 {proposal} 캘린더에 일정으로 만들고 "
+    "{requester}님을 참석자로 넣어줘",
+    "{requester}님이 메일로 보낸 ‘{title}’ 요청을 {proposal} 일정으로 잡고 "
+    "{requester}님을 참석자로 넣어줘",
 )
 EVENT_MOVE = (
     "{requester}님이 메일로 요청한 대로 {date} ‘{title}’ 일정 시간을 옮겨줘",
@@ -363,7 +389,10 @@ MT_MAIL_REPLY = {
         "결정 사항 확인했다고 그 내용을 적어서 그 메일에 답장해줘",
     ),
 }
-MT_DAY_FOLLOWUP = ("그중 오후 일정만 알려줘", "그 일정들 중에서 오후에 시작하는 것만 다시 알려줘")
+MT_DAY_FOLLOWUP = (
+    "그중 낮 12시 이후에 시작하는 일정만 알려줘",
+    "그 일정들 중에서 낮 12시 정각을 포함해 그 이후에 시작하는 것만 다시 알려줘",
+)
 
 
 def pick(rng: random.Random, templates: tuple[str, ...]) -> str:
