@@ -19,9 +19,11 @@
   버전이 다르면 `PreconditionFailed`다. 이때 version·updated_at은 바뀌지 않는다.
 
 계약 해석 규칙 (메인 확정):
-- 종일 일정: `all_day=True`면 `start`·`end`는 UTC 기준 00:00이어야 하고 `end`는 배타적이다
-  (하루짜리면 end = start + 1일). 시각 성분이 00:00이 아니면 `ValueError`.
-  v0 한계: 캘린더 `time_zone`은 쓰지 않고 항상 UTC 날짜 경계로 본다.
+- 종일 일정(ADR-0027): `all_day=True`면 `start`·`end`는 그 캘린더 `time_zone`에서 00:00인 순간이어야
+  하고 `end`는 배타적이다(하루짜리면 end = 다음 날 현지 00:00, 일광 절약 시간 전환일도 현지 00:00).
+  아니면 `ValueError`. 캘린더 `time_zone`이 비었으면 UTC로 본다. 검증은 `check_event_times`
+  (Google 어댑터와 공유)가 한다. 종일 일정은 저장 값이 UTC여도 돌려줄 때 캘린더 시간대 오프셋으로
+  변환한다(날짜 표시가 호출 없이 `start.date()`로 가능하다).
 - 잘못된 `event_id` 형식은 호출자 버그이므로 `ValueError`다. 검증은 `run_tool` 안에서 하므로
   장애 주입 뒤에 일어나고 호출 기록에 오류로 남는다.
 - `update_event`는 병합 결과가 `start < end`가 아니면 `ValueError`(종일이면 날짜 기준)이며
@@ -30,7 +32,7 @@
 """
 
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime
 from typing import Any
 
 from orbit.connectors.contracts import (
@@ -42,6 +44,8 @@ from orbit.connectors.contracts import (
     EventPatch,
     NotFound,
     PreconditionFailed,
+    calendar_zone,
+    check_event_times,
     validate_client_event_id,
 )
 from orbit.connectors.sim.runtime import SimRuntime
@@ -52,16 +56,6 @@ def _require_aware(name: str, value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name}는 시간대 정보가 있어야 한다")
     return value.astimezone(UTC)
-
-
-def _check_times(start: datetime, end: datetime, all_day: bool) -> None:
-    s, e = start.astimezone(UTC), end.astimezone(UTC)
-    if all_day:
-        for name, value in (("start", s), ("end", e)):
-            if value.time() != time(0, 0):
-                raise ValueError(f"종일 일정의 {name}는 UTC 00:00이어야 한다")
-    if not s < e:
-        raise ValueError("end는 start보다 뒤여야 한다")
 
 
 class SimCalendarConnector:
@@ -90,6 +84,21 @@ class SimCalendarConnector:
         if calendar_id not in acct.calendars:
             raise NotFound(f"캘린더 {calendar_id}가 없다")
         return acct.events.setdefault(calendar_id, {})
+
+    def _zone_name(self, calendar_id: str) -> str:
+        try:
+            return self._account.calendars[calendar_id].time_zone
+        except KeyError:
+            raise NotFound(f"캘린더 {calendar_id}가 없다") from None
+
+    def _out(self, event: CalendarEvent) -> CalendarEvent:
+        """종일 일정은 캘린더 시간대 오프셋으로 표기해 돌려준다(순간은 그대로, ADR-0027)."""
+        if not event.all_day:
+            return event
+        zone = calendar_zone(self._zone_name(event.calendar_id))
+        return event.model_copy(
+            update={"start": event.start.astimezone(zone), "end": event.end.astimezone(zone)}
+        )
 
     def _get(self, calendar_id: str, event_id: str) -> CalendarEvent:
         try:
@@ -142,13 +151,15 @@ class SimCalendarConnector:
                     continue
                 found.append(ev)
             found.sort(key=lambda e: (e.start.astimezone(UTC), e.id))
-            return found
+            return [self._out(e) for e in found]
 
         return await self._run("list_events", args, apply)
 
     async def get_event(self, calendar_id: str, event_id: str) -> CalendarEvent:
         args = {"calendar_id": calendar_id, "event_id": event_id}
-        return await self._run("get_event", args, lambda: self._get(calendar_id, event_id))
+        return await self._run(
+            "get_event", args, lambda: self._out(self._get(calendar_id, event_id))
+        )
 
     async def create_event(
         self, calendar_id: str, event_id: str, draft: EventDraft
@@ -157,7 +168,7 @@ class SimCalendarConnector:
 
         def apply() -> CalendarEvent:
             validate_client_event_id(event_id)
-            _check_times(draft.start, draft.end, draft.all_day)
+            check_event_times(draft.start, draft.end, draft.all_day, self._zone_name(calendar_id))
             events = self._events_of(calendar_id)
             if event_id in events:  # 취소된 일정도 존재로 본다
                 raise AlreadyExists(f"일정 {event_id}가 이미 있다")
@@ -168,7 +179,7 @@ class SimCalendarConnector:
                 updated_at=self._world.clock.now(),
                 **draft.model_dump(),
             )
-            return self._store(event)
+            return self._out(self._store(event))
 
         return await self._run("create_event", args, apply)
 
@@ -187,11 +198,13 @@ class SimCalendarConnector:
             if current.version != if_match:
                 raise PreconditionFailed(f"일정 {event_id}의 버전이 다르다")
             merged = current.model_copy(update=patch.changes())
-            _check_times(merged.start, merged.end, merged.all_day)
+            check_event_times(
+                merged.start, merged.end, merged.all_day, self._zone_name(calendar_id)
+            )
             updated = merged.model_copy(
                 update={"version": self._world.ids.version(), "updated_at": self._world.clock.now()}
             )
-            return self._store(updated)
+            return self._out(self._store(updated))
 
         return await self._run("update_event", args, apply)
 
@@ -205,7 +218,7 @@ class SimCalendarConnector:
             if current.version != if_match:
                 raise PreconditionFailed(f"일정 {event_id}의 버전이 다르다")
             if current.status == "cancelled":
-                return current  # 멱등: 변경 없음
+                return self._out(current)  # 멱등: 변경 없음
             cancelled = current.model_copy(
                 update={
                     "status": "cancelled",
@@ -213,6 +226,6 @@ class SimCalendarConnector:
                     "updated_at": self._world.clock.now(),
                 }
             )
-            return self._store(cancelled)
+            return self._out(self._store(cancelled))
 
         return await self._run("cancel_event", args, apply)

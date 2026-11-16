@@ -377,16 +377,20 @@ class TzEventTruth(_Truth):
 
 
 class AllDayTruth(_Truth):
-    """종일 일정. 지금 계약 해석은 UTC 날짜 경계다. `intended_date`가 일정이 가리키는 날짜이고
-    `span`은 계약대로 UTC 00:00~다음 날 00:00이다. 시간대가 UTC가 아닌 사용자는 일정이 현지
-    날짜 경계와 어긋나 보인다(`contract_caveat`)."""
+    """종일 일정(ADR-0027). 계약 해석은 캘린더 시간대 날짜 경계다. `intended_date`는 일정이 가리키는
+    현지 날짜이고 `span`은 그날 현지 00:00~다음 날 현지 00:00인 순간이다(일광 절약 시간 전환일은
+    24시간이 아닐 수 있다).
+
+    `contract_caveat`는 UTC 날짜 경계 시절(ADR-0026 §3)의 표시다. 옛 스킬레톤을 읽을 수 있게 값만
+    받고 새로 만들거나 저장하지 않는다.
+    """
 
     type: Literal["all_day"] = "all_day"
     event: ArtifactRef
     intended_date: date
     span: TimeSpan
     time_zone: str
-    contract_caveat: Literal["utc_date_boundary"] = "utc_date_boundary"
+    contract_caveat: Literal["utc_date_boundary"] | None = Field(default=None, exclude=True)
 
 
 class MailFactTruth(_Truth):

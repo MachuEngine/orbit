@@ -240,7 +240,9 @@ class ReadOnlyTools:
         return moment.astimezone(self._tz).isoformat()
 
     def _event_summary(self, event: CalendarEvent) -> dict[str, Any]:
-        if event.all_day:  # 종일 일정은 UTC 날짜 경계다(계약). 시간대 변환을 하지 않는다.
+        if event.all_day:
+            # 종일 일정의 start·end는 캘린더 시간대 오프셋으로 표기된다(계약, ADR-0027). 그 시각의
+            # 날짜가 캘린더 시간대 날짜다. 추가 호출 없이 읽는다.
             start, end = event.start.date().isoformat(), event.end.date().isoformat()
         else:
             start, end = self._local(event.start), self._local(event.end)

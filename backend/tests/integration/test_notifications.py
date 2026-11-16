@@ -94,7 +94,8 @@ async def test_cancelled_event_cancels_pending_reminder_and_is_not_revived(ix: I
 
 
 async def test_declined_by_me_all_day_and_started_events_are_not_reminded(ix: IndexEnv) -> None:
-    ix.clock.set(NOW.replace(hour=23))  # 종일 일정(UTC 00:00 시작)이 두 시간 창에 들어온다
+    # 종일 일정(캘린더 시간대 Asia/Seoul 00:00 = 15:00Z 시작, ADR-0027)이 두 시간 창에 들어온다
+    ix.clock.set(NOW.replace(hour=14))
     now = ix.clock.now()
     await add_event(
         ix,
@@ -108,7 +109,7 @@ async def test_declined_by_me_all_day_and_started_events_are_not_reminded(ix: In
         now + 40 * MIN,
         attendees=(Attendee(email="bob@example.org", response_status="declined"),),
     )
-    await add_event(ix, "합성 종일 일정", NOW.replace(hour=0) + timedelta(days=1), all_day=True)
+    await add_event(ix, "합성 종일 일정", NOW.replace(hour=15), all_day=True)
     await add_event(ix, "합성 이미 시작한 회의", now - 5 * MIN, minutes=60)
     result = await sync(ix)
     assert result.created == 1

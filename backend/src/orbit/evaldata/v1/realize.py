@@ -11,6 +11,11 @@ uv run python -m orbit.evaldata.v1.realize --skeleton /tmp/w1 --out /tmp/w1 \
   저장하지 않는다.
 - `<out>/realize-manifest.json`에 모델·단가·시드·계열별 집계·비용을 남긴다.
 - `--assemble`이면 `<out>/world.json`(Sim 세계 스냅샷)을 만든다.
+- `--assemble --allow-skeleton-change`: skeleton이 바뀌었어도 `bodies` 구역(본문 명세)이 같으면 이미
+  만든 본문으로 `world.json`을 다시 조립한다(ADR-0027, LLM을 부르지 않는다). 본문 명세가 하나라도
+  다르면 거부하고 다른 body_id 수를 출력한다. 이전 매니페스트에 `bodies_sha256`이 없으면
+  `--previous-skeleton`으로 이전 skeleton을 준다(sha가 매니페스트와 같아야 한다). 매니페스트에는
+  이전·새 skeleton sha와 bodies 해시를 남긴다.
 
 비용 상한: `--max-cost-usd`는 이번 실행, `--max-total-usd`(선택)는 출력 디렉터리 전체 누적 지출
 (bodies.jsonl 행 합과 매니페스트 runs 합 중 큰 쪽)에 건다. 먼저 닿는 쪽에서 멈춘다.
@@ -678,6 +683,19 @@ def cumulative_spend(
     return max(from_rows, from_runs)
 
 
+def bodies_sha256(skeleton: Skeleton) -> str:
+    """skeleton의 `bodies` 구역(본문 명세 전체)의 해시. 명세가 같으면 본문을 재사용할 수 있다."""
+    payload = {bid: spec.model_dump(mode="json") for bid, spec in skeleton.bodies.items()}
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def differing_body_ids(old: Skeleton, new: Skeleton) -> list[str]:
+    """본문 명세가 다르거나 한쪽에만 있는 body_id."""
+    ids = set(old.bodies) | set(new.bodies)
+    return sorted(b for b in ids if old.bodies.get(b) != new.bodies.get(b))
+
+
 def _write_manifest(
     out_dir: Path,
     skeleton: Skeleton,
@@ -700,10 +718,16 @@ def _write_manifest(
     old = previous.get("family_configs")
     if old and old != configs:
         history.append(old)
+    skeleton_history: list[Any] = list(previous.get("previous_skeleton_sha256s", []))
+    old_sha = previous.get("skeleton_sha256")
+    if old_sha and old_sha != skeleton_sha256 and old_sha not in skeleton_history:
+        skeleton_history.append(old_sha)
     manifest: dict[str, Any] = {
         "prompt_version": PROMPT_VERSION,
         "skeleton_schema_version": skeleton.schema_version,
         "skeleton_sha256": skeleton_sha256,
+        "previous_skeleton_sha256s": skeleton_history,
+        "bodies_sha256": bodies_sha256(skeleton),
         "skeleton_seed": skeleton.seed,
         "sample_seed": cfg.sample_seed,
         "family_configs": configs,
@@ -733,8 +757,13 @@ def assemble(
     *,
     allow_template_missing: bool,
     skeleton_sha256: str = "",
+    skeleton_change: Mapping[str, Any] | None = None,
 ) -> int:
-    """`world.json`을 만든다. 본문이 빠진 body_id가 있으면 `allow_template_missing`일 때만 한다."""
+    """`world.json`을 만든다. 본문이 빠진 body_id가 있으면 `allow_template_missing`일 때만 한다.
+
+    `skeleton_change`가 있으면(이전 skeleton과 bodies 구역이 같은 재조립) 매니페스트의 `assembled`에
+    그대로 기록한다.
+    """
     rows = read_rows(out_dir / BODIES_FILE)
     texts = {b: str(r["text"]) for b, r in rows.items() if b in skeleton.bodies}
     missing = sorted(set(skeleton.bodies) - set(texts))
@@ -760,6 +789,7 @@ def assemble(
             "template_substitutions": fallback + len(missing),
             "fallback": fallback,
             "missing_filled_with_template": len(missing),
+            **({"skeleton_change": dict(skeleton_change)} if skeleton_change else {}),
         },
     )
     print(
@@ -866,8 +896,58 @@ def recheck_scan(
     return checked, failed, no_version
 
 
+def check_skeleton_change(
+    out_dir: Path, skeleton: Skeleton, skeleton_sha: str, previous_path: str | None
+) -> tuple[dict[str, Any] | None, str | None]:
+    """`--allow-skeleton-change` 검사. (기록할 변경 정보, 오류 메시지)를 돌려준다.
+
+    매니페스트의 skeleton이 지금과 같으면 변경 정보는 `None`이다. 다르면 이전 `bodies` 구역과
+    지금의 것이 같을 때만 허용한다.
+    """
+    try:
+        prev = load_manifest(out_dir)
+    except ManifestError as exc:
+        return None, str(exc)
+    prev_sha = prev.get("skeleton_sha256")
+    if not prev_sha or prev_sha == skeleton_sha:
+        return None, None
+    new_bodies = bodies_sha256(skeleton)
+    old_bodies = prev.get("bodies_sha256")
+    old_skeleton: Skeleton | None = None
+    if previous_path:
+        try:
+            old_skeleton, old_sha = _load_skeleton(previous_path)
+        except (OSError, ValidationError, ValueError) as exc:
+            return None, f"--previous-skeleton을 읽을 수 없다: {type(exc).__name__}"
+        if old_sha != prev_sha:
+            return None, "--previous-skeleton의 sha가 매니페스트의 skeleton_sha256과 다르다"
+        old_bodies = bodies_sha256(old_skeleton)
+    if not old_bodies:
+        return None, (
+            "이전 매니페스트에 bodies_sha256이 없다. --previous-skeleton으로 이전 skeleton을 준다"
+        )
+    if old_bodies != new_bodies:
+        detail = ""
+        if old_skeleton is not None:
+            diff = differing_body_ids(old_skeleton, skeleton)
+            detail = f" 다른 body_id {len(diff)}개(전체 {len(skeleton.bodies)}개)."
+        else:
+            detail = " 다른 body_id 수는 --previous-skeleton을 주면 센다."
+        return None, "본문 명세(bodies 구역)가 이전 skeleton과 다르다. 재조립하지 않는다." + detail
+    return {
+        "previous_skeleton_sha256": prev_sha,
+        "skeleton_sha256": skeleton_sha,
+        "bodies_sha256": new_bodies,
+        "previous_bodies_sha256": old_bodies,
+    }, None
+
+
 def _check_resume(
-    out_dir: Path, skeleton_sha: str, *, allow_prompt_change: bool = False
+    out_dir: Path,
+    skeleton_sha: str,
+    *,
+    allow_prompt_change: bool = False,
+    allow_skeleton_change: bool = False,
 ) -> str | None:
     manifest = out_dir / MANIFEST_FILE
     if not manifest.exists():
@@ -876,7 +956,11 @@ def _check_resume(
         prev = load_manifest(out_dir)
     except ManifestError as exc:
         return str(exc)
-    if prev.get("skeleton_sha256") and prev["skeleton_sha256"] != skeleton_sha:
+    if (
+        prev.get("skeleton_sha256")
+        and prev["skeleton_sha256"] != skeleton_sha
+        and not allow_skeleton_change
+    ):
         return "출력 디렉터리의 매니페스트가 다른 skeleton으로 만든 것이다. 새 디렉터리를 쓴다"
     if (
         not allow_prompt_change
@@ -907,6 +991,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="비용만 추정하고 호출하지 않는다")
     parser.add_argument("--assemble", action="store_true", help="world.json을 조립한다")
     parser.add_argument("--allow-template-missing", action="store_true")
+    parser.add_argument(
+        "--allow-skeleton-change",
+        action="store_true",
+        help="--assemble과 함께: bodies 구역이 같으면 skeleton이 바뀌어도 기존 본문으로 재조립한다",
+    )
+    parser.add_argument(
+        "--previous-skeleton",
+        default=None,
+        help="이전 skeleton.json(매니페스트에 bodies_sha256이 없거나 다른 body_id 수를 셀 때)",
+    )
     parser.add_argument(
         "--recheck",
         action="store_true",
@@ -1009,7 +1103,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return EXIT_OK
 
-    problem = _check_resume(out_dir, sha, allow_prompt_change=args.recheck)
+    skeleton_change: dict[str, Any] | None = None
+    if args.allow_skeleton_change:
+        if not args.assemble or args.recheck:
+            print(
+                "--allow-skeleton-change는 --assemble에서만 쓴다(--recheck 불가)", file=sys.stderr
+            )
+            return EXIT_USAGE
+        if pending:
+            print(
+                f"본문이 없는 body_id {len(pending)}개가 있어 LLM 호출이 필요하다. "
+                "--allow-skeleton-change는 호출 없이 재조립할 때만 쓴다",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        skeleton_change, change_problem = check_skeleton_change(
+            out_dir, skeleton, sha, args.previous_skeleton
+        )
+        if change_problem:
+            print(change_problem, file=sys.stderr)
+            return EXIT_USAGE
+    problem = _check_resume(
+        out_dir,
+        sha,
+        allow_prompt_change=args.recheck,
+        allow_skeleton_change=args.allow_skeleton_change,
+    )
     if problem:
         print(problem, file=sys.stderr)
         return EXIT_USAGE
@@ -1068,6 +1187,7 @@ def main(argv: list[str] | None = None) -> int:
             cfg,
             allow_template_missing=args.allow_template_missing,
             skeleton_sha256=sha,
+            skeleton_change=skeleton_change,
         )
         if acode != EXIT_OK:
             if code == EXIT_COST_CAP:  # 상한에 닿아 멈춘 사실이 조립 실패보다 먼저다

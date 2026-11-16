@@ -2,7 +2,9 @@
 
 import json
 from collections import Counter
+from datetime import time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -131,13 +133,26 @@ def test_mail_fact_has_latest_and_previous_values(small_sk: Skeleton) -> None:
         assert t.latest_message.id != t.previous_message.id
 
 
-def test_all_day_events_follow_contract_and_carry_caveat(small_sk: Skeleton) -> None:
+def test_all_day_events_start_at_calendar_midnight(small_sk: Skeleton) -> None:
+    """종일 일정은 그 캘린더 시간대 00:00~다음 날 00:00이다(ADR-0027). 한계 표시는 남기지 않는다."""
     truths = [s.truth for s in small_sk.scenarios if isinstance(s.truth, AllDayTruth)]
-    assert truths and all(t.contract_caveat == "utc_date_boundary" for t in truths)
+    assert truths and all(t.contract_caveat is None for t in truths)
+    assert all("contract_caveat" not in t.model_dump(mode="json") for t in truths)
+    zones = {a.time_zone for a in small_sk.accounts.values()}
+    assert "America/Los_Angeles" in zones  # UTC와 다른 시간대 사용자가 있다
+    n = 0
     for a in small_sk.accounts.values():
         for e in a.events:
             if e.all_day:
-                assert e.start.hour == e.end.hour == 0 and e.end > e.start
+                n += 1
+                zone = ZoneInfo(next(c.time_zone for c in a.calendars if c.id == e.calendar_id))
+                start, end = e.start.astimezone(zone), e.end.astimezone(zone)
+                assert start.time() == end.time() == time(0, 0)
+                assert (end.date() - start.date()).days == 1
+    assert n
+    for t in truths:
+        zone = ZoneInfo(t.time_zone)
+        assert t.span.start.astimezone(zone).date() == t.intended_date
 
 
 def test_tz_event_covers_local_and_foreign(small_sk: Skeleton) -> None:

@@ -619,6 +619,100 @@ def test_cli_rejects_mixed_skeleton(small_sk: Skeleton, tmp_path: Path) -> None:
     assert code == 2
 
 
+# ---------------------------------------------------------------- skeleton 변경 재조립 (ADR-0027)
+
+
+async def _realized_out(sk: Skeleton, tmp_path: Path) -> tuple[Path, Path]:
+    """skeleton A로 본문을 모두 만든 출력 디렉터리와 A의 디렉터리(매니페스트에 A의 해시)."""
+    old_dir = write_skeleton(sk, tmp_path / "old")
+    out = tmp_path / "out"
+    await run(sk, out, FakeLLM(sk))
+    path = out / MANIFEST_FILE
+    m = json.loads(path.read_text(encoding="utf-8"))
+    m["skeleton_sha256"] = hashlib.sha256((old_dir / "skeleton.json").read_bytes()).hexdigest()
+    path.write_text(json.dumps(m), encoding="utf-8")
+    return out, old_dir
+
+
+def _changed_outside_bodies(sk: Skeleton) -> Skeleton:
+    return sk.model_copy(update={"seed": sk.seed + 1})  # bodies 구역은 그대로다
+
+
+def _cli(new_dir: Path, out: Path, *extra: str) -> int:
+    return main(
+        ["--skeleton", str(new_dir), "--out", str(out), "--max-cost-usd", "1", "--assemble", *extra]
+    )
+
+
+async def test_skeleton_change_rejected_without_flag(small_sk: Skeleton, tmp_path: Path) -> None:
+    out, _ = await _realized_out(small_sk, tmp_path)
+    new_dir = write_skeleton(_changed_outside_bodies(small_sk), tmp_path / "new")
+    assert _cli(new_dir, out) == 2
+    assert not (out / WORLD_FILE).exists()
+
+
+async def test_skeleton_change_with_same_bodies_reassembles_without_llm(
+    small_sk: Skeleton, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, _ = await _realized_out(small_sk, tmp_path)
+    new_sk = _changed_outside_bodies(small_sk)
+    new_dir = write_skeleton(new_sk, tmp_path / "new")
+    code = _cli(new_dir, out, "--allow-skeleton-change")  # 매니페스트에 bodies_sha256이 있다
+    assert code == EXIT_OK and (out / WORLD_FILE).exists()
+    assert "남은 본문이 없다" in capsys.readouterr().out  # LLM 경로를 지나지 않는다
+    m = json.loads((out / MANIFEST_FILE).read_text(encoding="utf-8"))
+    new_sha = hashlib.sha256((new_dir / "skeleton.json").read_bytes()).hexdigest()
+    change = m["assembled"]["skeleton_change"]
+    assert m["skeleton_sha256"] == new_sha and change["skeleton_sha256"] == new_sha
+    assert change["previous_skeleton_sha256"] != new_sha
+    assert change["previous_skeleton_sha256"] in m["previous_skeleton_sha256s"]
+    assert change["bodies_sha256"] == change["previous_bodies_sha256"] == m["bodies_sha256"]
+
+
+async def test_skeleton_change_legacy_manifest_needs_previous_skeleton(
+    small_sk: Skeleton, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    path = out / MANIFEST_FILE
+    m = json.loads(path.read_text(encoding="utf-8"))
+    del m["bodies_sha256"]  # bodies_sha256을 기록하기 전 매니페스트
+    path.write_text(json.dumps(m), encoding="utf-8")
+    new_dir = write_skeleton(_changed_outside_bodies(small_sk), tmp_path / "new")
+    assert _cli(new_dir, out, "--allow-skeleton-change") == 2
+    assert "bodies_sha256이 없다" in capsys.readouterr().err
+    assert _cli(new_dir, out, "--allow-skeleton-change", "--previous-skeleton", str(old_dir)) == 0
+    assert (out / WORLD_FILE).exists()
+
+
+async def test_skeleton_change_rejects_different_body_spec_and_counts(
+    small_sk: Skeleton, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    ids = sorted(small_sk.bodies)[:3]
+    bodies = dict(small_sk.bodies)
+    for bid in ids:
+        bodies[bid] = bodies[bid].model_copy(update={"template_text": "다른 명세 " + bid})
+    new_dir = write_skeleton(small_sk.model_copy(update={"bodies": bodies}), tmp_path / "new")
+    assert _cli(new_dir, out, "--allow-skeleton-change") == 2  # 해시만으로도 거부한다
+    capsys.readouterr()
+    code = _cli(new_dir, out, "--allow-skeleton-change", "--previous-skeleton", str(old_dir))
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "다른 body_id 3개" in err
+    assert not (out / WORLD_FILE).exists()
+
+
+async def test_skeleton_change_never_calls_llm_when_bodies_missing(
+    small_sk: Skeleton, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, _ = await _realized_out(small_sk, tmp_path)
+    rows = (out / BODIES_FILE).read_text(encoding="utf-8").splitlines()
+    (out / BODIES_FILE).write_text("\n".join(rows[:-1]) + "\n", encoding="utf-8")
+    new_dir = write_skeleton(_changed_outside_bodies(small_sk), tmp_path / "new")
+    assert _cli(new_dir, out, "--allow-skeleton-change") == 2
+    assert "LLM 호출이 필요하다" in capsys.readouterr().err
+
+
 # ---------------------------------------------------------------- 검토 반영
 
 

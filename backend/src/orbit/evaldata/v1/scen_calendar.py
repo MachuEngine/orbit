@@ -551,10 +551,11 @@ def tz_event(b: Builder, s: Scn) -> None:
 def all_day(b: Builder, s: Scn) -> None:
     rng, acct = s.rng, s.account_id
     day = b.pick_day(rng, acct, -15, 20, empty=True, span=3)
-    start = datetime(day.year, day.month, day.day, tzinfo=UTC)
-    end = start + timedelta(days=1)
-    # 계약 해석(UTC 날짜 경계)대로 만든다. 현지 날짜 경계와 어긋나므로 앞뒤 날도 예약한다.
-    days = b.event_days(acct, start, end)
+    # 계약 해석(ADR-0027): 종일 일정은 캘린더 시간대 00:00~다음 날 00:00이다.
+    start = b.local(acct, day, 0)
+    end = b.local(acct, day + timedelta(days=1), 0)
+    # 배치 규칙은 UTC 경계 해석일 때와 같게 둔다(`all_day_footprint`). 앞뒤 날도 예약한다.
+    days = b.event_days(acct, *b.all_day_footprint(day))
     ref = b.add_event(
         acct,
         title=rng.choice(T.ALL_DAY_TITLES),

@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from orbit.connectors.contracts import CalendarEvent
+from orbit.connectors.contracts import CalendarEvent, check_event_times
 from orbit.evaldata.v1.facts import conflicts, fact_in, norm
 from orbit.evaldata.v1.skeleton import (
     AbsentTruth,
@@ -95,10 +95,14 @@ def _refs_and_contract(wm: WorldModel, sk: Skeleton, errors: list[str]) -> None:
                 errors.append(f"{acct}: 일정 {e.id}의 캘린더가 없다")
             if not e.start < e.end:
                 errors.append(f"{acct}: 일정 {e.id}의 시작이 종료보다 앞서지 않는다")
-            if e.all_day:
-                for t in (e.start, e.end):
-                    if t.utcoffset() != timedelta(0) or (t.hour, t.minute, t.second) != (0, 0, 0):
-                        errors.append(f"{acct}: 종일 일정 {e.id}가 UTC 00:00이 아니다")
+            if e.all_day:  # 계약(ADR-0027): 그 캘린더 시간대의 00:00인 순간
+                zone = next(
+                    (c.time_zone for c in a.calendars if c.id == e.calendar_id), a.time_zone
+                )
+                try:
+                    check_event_times(e.start, e.end, True, zone)
+                except ValueError as exc:
+                    errors.append(f"{acct}: 종일 일정 {e.id}가 계약을 어긴다 ({exc})")
             if e.updated_at > snap:
                 errors.append(f"{acct}: 일정 {e.id}의 갱신이 스냅샷 이후다")
             day = e.start.astimezone(tz).date()
@@ -461,7 +465,11 @@ def _check_truth_misc(
         e = _event_of(sk, acct, t.event)
         if e is None or not e.all_day or not _same_event_time(e, t.span.start, t.span.end):
             errors.append(f"{sid}: all_day가 종일 일정과 다르다")
-        if t.intended_date != t.span.start.date() or t.span.end - t.span.start != timedelta(days=1):
+        cal = next((c for c in sk.accounts[acct].calendars if e and c.id == e.calendar_id), None)
+        zone = ZoneInfo(cal.time_zone) if cal else tz  # 이벤트가 속한 캘린더의 시간대
+        if t.intended_date != t.span.start.astimezone(zone).date() or t.span.end.astimezone(
+            zone
+        ).date() != t.intended_date + timedelta(days=1):
             errors.append(f"{sid}: all_day의 날짜가 span과 다르다")
     elif isinstance(t, TzEventTruth):
         e = _event_of(sk, acct, t.event)

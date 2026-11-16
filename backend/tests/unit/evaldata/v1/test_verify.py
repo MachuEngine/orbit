@@ -3,6 +3,7 @@
 import copy
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -180,15 +181,33 @@ def test_family_mismatch_between_scenario_bodies(small_wm: WorldModel, small_sk:
     _expect(small_wm, small_sk, m, "계열")
 
 
-def test_all_day_event_not_at_utc_midnight(small_wm: WorldModel, small_sk: Skeleton) -> None:
+def test_all_day_event_not_at_calendar_midnight(small_wm: WorldModel, small_sk: Skeleton) -> None:
     def m(d: dict[str, Any]) -> None:
         for a in d["accounts"].values():
             for e in a["events"]:
-                if e["all_day"]:
-                    e["start"] = e["start"].replace("T00:00:00", "T01:00:00")
+                if e["all_day"]:  # 한 시간 늦추면 캘린더 시간대 00:00이 아니다(ADR-0027)
+                    moved = datetime.fromisoformat(e["start"]) + timedelta(hours=1)
+                    e["start"] = moved.isoformat()
                     return
 
-    _expect(small_wm, small_sk, m, "UTC 00:00")
+    _expect(small_wm, small_sk, m, "종일 일정")
+
+
+def test_all_day_event_at_utc_midnight_is_rejected_for_non_utc_calendar(
+    small_wm: WorldModel, small_sk: Skeleton
+) -> None:
+    """옛 해석(UTC 00:00)은 UTC가 아닌 캘린더에서 계약 위반이다."""
+
+    def m(d: dict[str, Any]) -> None:
+        for a in d["accounts"].values():
+            for e in a["events"]:
+                if e["all_day"] and a["time_zone"] != "UTC":
+                    day = datetime.fromisoformat(e["start"]).astimezone(UTC).date()
+                    e["start"] = f"{day.isoformat()}T00:00:00+00:00"
+                    e["end"] = f"{(day + timedelta(days=1)).isoformat()}T00:00:00+00:00"
+                    return
+
+    _expect(small_wm, small_sk, m, "종일 일정")
 
 
 def test_search_mailbox_not_subset(small_wm: WorldModel, small_sk: Skeleton) -> None:

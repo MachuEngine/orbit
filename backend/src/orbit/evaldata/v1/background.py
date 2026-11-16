@@ -97,9 +97,10 @@ def add_background_events(b: Builder, user: User) -> None:
             raise WorldBuildError(f"{user.key}: 배경 종일 일정을 놓을 자리가 없다")
         days = b.weekdays(acct, -40, 25)
         day = days[rng.randrange(len(days))]
-        start = datetime(day.year, day.month, day.day, tzinfo=UTC)
-        end = start + timedelta(days=1)
-        if not b.place_ok(acct, start, end):
+        # 캘린더 시간대 00:00(ADR-0027). 이 세계의 캘린더 시간대는 사용자 시간대와 같다.
+        start = b.local(acct, day, 0)
+        end = b.local(acct, day + timedelta(days=1), 0)
+        if not b.place_ok(acct, *b.all_day_footprint(day)):
             continue
         b.add_event(
             acct,

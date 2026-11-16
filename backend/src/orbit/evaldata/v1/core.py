@@ -191,8 +191,28 @@ class Builder:
         last = (e - timedelta(microseconds=1)).date() if e > s else s.date()
         return [s.date() + timedelta(days=i) for i in range((last - s.date()).days + 1)]
 
+    @staticmethod
+    def all_day_footprint(day: date) -> tuple[datetime, datetime]:
+        """종일 일정이 배치 규칙에서 차지하는 구간. UTC 날짜 경계로 본다.
+
+        종일 일정의 실제 시각은 캘린더 시간대 00:00이다(ADR-0027). 다만 v1 본문을 다시 쓰지 않으려고
+        배치 규칙(빈 날 고르기, 예약)은 UTC 경계 해석일 때와 같게 둔다. 그래서 시간대에 따라 현지
+        앞날 또는 뒷날도 비워 둔다. 이 구간은 일정 시각이 아니라 배치 전용이다.
+        """
+        start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+        return start, start + timedelta(days=1)
+
+    def footprint(self, acct: str, event: CalendarEvent) -> tuple[datetime, datetime]:
+        if not event.all_day:
+            return event.start, event.end
+        return self.all_day_footprint(event.start.astimezone(self.acc[acct].tz).date())
+
     def events_on(self, acct: str, day: date) -> list[CalendarEvent]:
-        return [e for e in self.acc[acct].events if day in self.event_days(acct, e.start, e.end)]
+        return [
+            e
+            for e in self.acc[acct].events
+            if day in self.event_days(acct, *self.footprint(acct, e))
+        ]
 
     def place_ok(self, acct: str, start: datetime, end: datetime) -> bool:
         reserved = self.acc[acct].reserved_days
@@ -278,7 +298,10 @@ class Builder:
         start_u, end_u = start.astimezone(UTC), end.astimezone(UTC)
         if not start_u < end_u:
             raise WorldBuildError("일정의 시작이 종료보다 앞서야 한다")
-        if not claim and not self.place_ok(acct, start_u, end_u):
+        place = (
+            self.all_day_footprint(start.astimezone(a.tz).date()) if all_day else (start_u, end_u)
+        )
+        if not claim and not self.place_ok(acct, *place):
             raise WorldBuildError(f"{acct}: 예약된 날짜에 일정을 놓으려 했다 ({title})")
         r = rng or self.rng(f"event:{acct}:{a.n_event}")
         cal = a.calendars[(calendar if calendar is not None else 0) % len(a.calendars)]

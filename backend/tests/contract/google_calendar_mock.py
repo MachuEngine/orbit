@@ -1,10 +1,11 @@
 """Google Calendar API v3의 일부를 상태 있게 흉내 내는 HTTP 모의 서버 (httpx MockTransport).
 
 흉내 내는 범위
-- `calendarList.list`, `events.list`(겹침 기준, `q` 단어 일치, `showDeleted`, 페이지 나눔),
-  `events.get`,
+- `calendarList.list`, `calendars.get`(캘린더 메타, `timeZone`), `events.list`(겹침 기준, `q` 단어
+  일치, `showDeleted`, 페이지 나눔, 응답 최상위 `timeZone`), `events.get`,
   `events.insert`(클라이언트 지정 `id`, 중복 409), `events.patch`(`If-Match` 불일치 412, null은
   필드 삭제, 참석자 배열은 통째 교체되고 응답 상태를 보존하지 않는다).
+  종일 일정의 `date`는 캘린더 시간대의 그날 00:00으로 해석한다.
 - etag는 쓰기마다 바뀐다. 취소는 `status=cancelled`로 남고 `get`은 200, `list`는 `showDeleted`일
   때만 낸다.
 - 모르는 캘린더·일정 404. 잘못된 일정 ID·빈 시간 범위 400. 토큰이 없으면 401.
@@ -17,9 +18,10 @@
 import json
 import re
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 from urllib.parse import unquote
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -47,10 +49,12 @@ def _error(status: int, reason: str) -> httpx.Response:
     return httpx.Response(status, json=body)
 
 
-def _bounds(raw: dict[str, Any]) -> tuple[datetime, datetime]:
+def _bounds(raw: dict[str, Any], zone: tzinfo) -> tuple[datetime, datetime]:
+    """종일 일정의 `date`는 캘린더 시간대 그날 00:00이다(실제 Google 동작)."""
+
     def one(obj: dict[str, Any]) -> datetime:
         if obj.get("date"):
-            return datetime.fromisoformat(obj["date"]).replace(tzinfo=UTC)
+            return datetime.fromisoformat(obj["date"]).replace(tzinfo=zone)
         return datetime.fromisoformat(obj["dateTime"].replace("Z", "+00:00"))
 
     return one(raw["start"]), one(raw["end"])
@@ -82,13 +86,16 @@ class GoogleCalendarMock:
             mock.events[cal.id] = {}
         for cal_id, by_id in account.events.items():
             for ev in by_id.values():
-                mock.events[cal_id][ev.id] = mock._from_model(ev)
+                mock.events[cal_id][ev.id] = mock._from_model(ev, mock._zone(cal_id))
         return mock
 
-    def _from_model(self, ev: CalendarEvent) -> dict[str, Any]:
+    def _zone(self, cal_id: str) -> tzinfo:
+        return ZoneInfo(str(self.calendars[cal_id].get("timeZone") or "UTC"))
+
+    def _from_model(self, ev: CalendarEvent, zone: tzinfo) -> dict[str, Any]:
         def field(value: datetime) -> dict[str, str]:
             if ev.all_day:
-                return {"date": value.astimezone(UTC).date().isoformat()}
+                return {"date": value.astimezone(zone).date().isoformat()}
             return {"dateTime": _iso(value)}
 
         raw: dict[str, Any] = {
@@ -133,15 +140,19 @@ class GoogleCalendarMock:
         method = request.method
         if parts == ["users", "me", "calendarList"] and method == "GET":
             return httpx.Response(200, json={"items": list(self.calendars.values())})
+        if len(parts) == 2 and parts[0] == "calendars" and method == "GET":
+            meta = self.calendars.get(parts[1])
+            return httpx.Response(200, json=meta) if meta else _error(404, "notFound")
         if len(parts) >= 3 and parts[0] == "calendars" and parts[2] == "events":
             cal_id = parts[1]
             if cal_id not in self.calendars:
                 return _error(404, "notFound")
             store = self.events[cal_id]
+            zone = self._zone(cal_id)
             if len(parts) == 3 and method == "GET":
-                return self._list(request, store)
+                return self._list(request, store, zone)
             if len(parts) == 3 and method == "POST":
-                return self._insert(request, store)
+                return self._insert(request, store, zone)
             if len(parts) == 4:
                 raw = store.get(parts[3])
                 if raw is None:
@@ -149,10 +160,12 @@ class GoogleCalendarMock:
                 if method == "GET":
                     return httpx.Response(200, json=raw)
                 if method == "PATCH":
-                    return self._patch(request, raw)
+                    return self._patch(request, raw, zone)
         return _error(404, "notFound")
 
-    def _list(self, request: httpx.Request, store: dict[str, dict[str, Any]]) -> httpx.Response:
+    def _list(
+        self, request: httpx.Request, store: dict[str, dict[str, Any]], zone: tzinfo
+    ) -> httpx.Response:
         q = request.url.params
         lo = datetime.fromisoformat(q["timeMin"].replace("Z", "+00:00"))
         hi = datetime.fromisoformat(q["timeMax"].replace("Z", "+00:00"))
@@ -162,7 +175,7 @@ class GoogleCalendarMock:
         for raw in store.values():
             if raw["status"] == "cancelled" and not show_deleted:
                 continue
-            start, end = _bounds(raw)
+            start, end = _bounds(raw, zone)
             if not start < hi or not (end > lo or (start == end and start >= lo)):
                 continue
             if words:
@@ -174,12 +187,14 @@ class GoogleCalendarMock:
         size = min(int(q.get("maxResults", "250")), self.page_size_cap)
         offset = int(q.get("pageToken", "0"))
         page = [raw for _, _, raw in matched[offset : offset + size]]
-        body: dict[str, Any] = {"items": page}
+        body: dict[str, Any] = {"items": page, "timeZone": str(zone)}
         if offset + size < len(matched):
             body["nextPageToken"] = str(offset + size)
         return httpx.Response(200, json=body)
 
-    def _insert(self, request: httpx.Request, store: dict[str, dict[str, Any]]) -> httpx.Response:
+    def _insert(
+        self, request: httpx.Request, store: dict[str, dict[str, Any]], zone: tzinfo
+    ) -> httpx.Response:
         body = json.loads(request.content)
         event_id = str(body.get("id", ""))
         if not _ID.fullmatch(event_id):
@@ -189,13 +204,13 @@ class GoogleCalendarMock:
         raw = {"status": "confirmed", **body}
         raw["organizer"] = {"email": "owner@example.com"}
         _normalize_attendees(raw)
-        if not _valid_range(raw):
+        if not _valid_range(raw, zone):
             return _error(400, "timeRangeEmpty")
         self._touch(raw)
         store[event_id] = raw
         return httpx.Response(200, json=raw)
 
-    def _patch(self, request: httpx.Request, raw: dict[str, Any]) -> httpx.Response:
+    def _patch(self, request: httpx.Request, raw: dict[str, Any], zone: tzinfo) -> httpx.Response:
         if_match = request.headers.get("If-Match")
         if if_match is not None and if_match != raw["etag"]:
             return _error(412, "conditionNotMet")
@@ -208,7 +223,7 @@ class GoogleCalendarMock:
             else:
                 merged[key] = value
         _normalize_attendees(merged)
-        if not _valid_range(merged):
+        if not _valid_range(merged, zone):
             return _error(400, "timeRangeEmpty")
         raw.clear()
         raw.update(merged)
@@ -225,9 +240,9 @@ def _normalize_attendees(raw: dict[str, Any]) -> None:
         ]
 
 
-def _valid_range(raw: dict[str, Any]) -> bool:
+def _valid_range(raw: dict[str, Any], zone: tzinfo) -> bool:
     try:
-        start, end = _bounds(raw)
+        start, end = _bounds(raw, zone)
     except (KeyError, ValueError):
         return False
     return start < end
