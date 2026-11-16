@@ -2,7 +2,7 @@
   "counts": {
     "events": 867,
     "messages": 8000,
-    "tasks": 216,
+    "tasks": 240,
     "users": 9
   },
   "created_with": "structure+llm",
@@ -175,10 +175,37 @@
       }
     },
     "paraphrase": {
-      "enabled": false,
-      "note": "--skip-paraphrase: 표현 변형 파생 문항 없이 생성했다"
+      "attempts": 25,
+      "candidates_tried": 24,
+      "cost_usd": 0.00175,
+      "cost_usd_by_family": {
+        "anthropic": 0.000757,
+        "google": 0.000404,
+        "openai": 0.000589
+      },
+      "enabled": true,
+      "failed_candidates": 0,
+      "models": {
+        "anthropic": {
+          "model_id": "anthropic/claude-haiku-5.5",
+          "route": "openrouter",
+          "temperature": null
+        },
+        "google": {
+          "model_id": "google/gemini-2.5-flash-lite",
+          "route": "openrouter",
+          "temperature": 0.7
+        },
+        "openai": {
+          "model_id": "openai/gpt-6-luna",
+          "route": "openai",
+          "temperature": 0.7
+        }
+      },
+      "prompt_version": "paraphrase-v1",
+      "used": 24
     },
-    "paraphrase_tasks": 0,
+    "paraphrase_tasks": 24,
     "reject_tasks": 4,
     "scenarios_by_type": {
       "absent": 16,
@@ -207,7 +234,7 @@
     },
     "split_search": {
       "attempts": 40,
-      "cost": 11
+      "cost": 9
     },
     "suite_version": "tasks-v1",
     "tasks_by_type": {
@@ -220,8 +247,8 @@
         "test": 19
       },
       "document": {
-        "dev": 5,
-        "test": 11
+        "dev": 6,
+        "test": 10
       },
       "fault": {
         "dev": 9,
@@ -232,12 +259,16 @@
         "test": 25
       },
       "mismatch": {
-        "dev": 9,
-        "test": 7
+        "dev": 8,
+        "test": 8
       },
       "multi_turn": {
         "dev": 9,
         "test": 11
+      },
+      "paraphrase": {
+        "dev": 10,
+        "test": 14
       },
       "reminder": {
         "dev": 8,
@@ -254,7 +285,7 @@
     },
     "world_sha256": "f873c7f44d770742a63a18b1a7bde99916c1d428242df0bcdece7ca6d41a8835"
   },
-  "generator_git_sha": "54bb888e43682a1a12f5a10181b5e208d3567eb9",
+  "generator_git_sha": "9201764f52bda901bb7b974006c99902e61a7115",
   "name": "orbit-eval",
   "notes": "종단 과제 v1(ADR-0026 §4). 정답은 skeleton.json의 시나리오 기록과 world.json에서 코드가 다시 계산했고 불일치하면 생성이 실패한다. 본문은 LLM이 쓴 합성 데이터라 정답 값이 본문에 있는지만 검사했다(함축된 다른 사실은 사람 검수로 본다, ③). 사용자 질문에서 '메일'은 받은 메일 전체를 가리킨다. mail_fact의 정답 메일은 최신 값이 적힌 메일 하나이며 같은 값을 되풀이하는 다른 메일이 있을 수 있다(검수 항목). 답장·초안 쓰기는 runflow가 `send_mail`(초안 생성 후 발송)만 가지므로 기대 변화를 `draft_sent`로 둔다. test 봉인은 러너의 확인 플래그 수준이고 공개 저장소라 정답은 누구나 읽을 수 있다. 장애 주입 파생은 같은 정답을 기대하고, 표현 변형 파생은 원본과 같은 정답·묶음이다.",
   "seed": 20261116,
@@ -265,23 +296,23 @@
     "t-absent-0034",
     "t-ambiguous-0006",
     "t-ambiguous-0015",
+    "t-day-agenda-0009-para",
     "t-day-agenda-0010-fault",
     "t-deadline-0029",
     "t-deadline-0030",
-    "t-doc-fact-0017",
+    "t-doc-fact-0007",
+    "t-doc-version-0010",
     "t-event-change-target-0010",
     "t-event-change-target-0013",
     "t-free-slot-0008",
-    "t-free-slot-0009",
     "t-mail-fact-0028",
     "t-mail-fact-0039",
     "t-mail-fact-0049",
     "t-mail-fact-0057",
+    "t-mail-fact-0086-para",
     "t-mail-fact-0116-fault",
     "t-mismatch-0006",
     "t-mismatch-0019",
-    "t-mismatch-0019-fault",
-    "t-mismatch-0021",
     "t-person-next-0010",
     "t-reschedule-0005"
   ],
