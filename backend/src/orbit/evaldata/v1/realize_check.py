@@ -12,6 +12,8 @@
 - `phone`·`rrn`·`account_number`: 전화번호·주민등록번호·계좌번호 형식.
 - `code_block`·`meta_prefix`·`wrapped_quotes`: 마크다운 코드블록, "본문:" 같은 접두어,
   전체를 따옴표로 감싼 본문.
+- `real_brand`: 실존 회사·서비스·제품 이름(`REAL_BRANDS_*` 상수 목록). 한국어 일반 단어와
+  겹치는 것은 접미·부정 전방탐색으로 오탐을 줄인다("애플리케이션", "현대 업무", "당근" 단독은 통과).
 - `injection_phrase`: AI·시스템 프롬프트·지시 무시 같은 표현(안전 세트는 따로 만든다).
 
 앞뒤 공백은 정리해서(`CheckResult.text`) 돌려준다. 실패 사유에는 본문 원문을 담지 않는다.
@@ -42,6 +44,7 @@ REASONS: tuple[str, ...] = (
     "code_block",
     "meta_prefix",
     "wrapped_quotes",
+    "real_brand",
     "injection_phrase",
 )
 
@@ -99,6 +102,7 @@ _HINTS = {
     "code_block": "마크다운 코드블록이 있었다",
     "meta_prefix": "본문 앞에 '본문:' 같은 접두어가 있었다",
     "wrapped_quotes": "본문 전체를 따옴표로 감쌌다",
+    "real_brand": "실존 회사·서비스·제품 이름이 있었다. 일반 명사(메신저 등)로 바꾼다",
     "injection_phrase": "AI나 시스템 프롬프트를 가리키는 표현이 있었다",
 }
 
@@ -146,6 +150,68 @@ def _external_refs(text: str) -> list[str]:
     return reasons
 
 
+# 실존 기업·서비스·제품 이름. 평가 데이터는 합성이어야 하므로(ADR-0026 §3) 본문에 쓰면 실패다.
+# 한국어 이름은 부분 문자열로 찾되, 일반 단어와 겹치는 것은 접미·전방탐색 규칙을 붙였다.
+REAL_BRANDS_KO: tuple[str, ...] = (
+    "삼성",
+    "현대(?:자동차|건설|중공업|모비스|백화점|카드|해상|제철|오토에버|상선|차)",
+    "기아자동차|기아차",
+    "롯데",
+    "신세계",
+    "포스코",
+    "한화",
+    "두산",
+    "하이닉스",
+    "셀트리온",
+    "카카오",
+    "네이버",
+    "쿠팡",
+    "토스(?![트터])",
+    "카톡|지메일|아웃룩|링크드인|드롭박스|어도비|디스코드|텔레그램",
+    "(?:신한|KB국민|국민|우리|하나|NH농협|농협)(?:은행|카드|캐피탈|금융|증권)",
+    "배민|배달의\\s*민족",
+    "우아한형제들",
+    "당근마켓|당근\\s*(?:앱|페이)",
+    "라인\\s*(?:메신저|플러스)",
+    "넥슨|엔씨소프트|크래프톤|야놀자|마켓컬리",
+    "구글",
+    "마이크로소프트|팀즈",
+    "애플(?!리케이션)",
+    "아이폰|갤럭시",
+    "아마존",
+    "페이스북|인스타그램|인스타|유튜브|트위터|틱톡|넷플릭스",
+    "슬랙|노션|트렐로|피그마|깃허브",
+    "(?<![가-힣])지라(?![가-힣])",
+    "줌\\s*(?:회의|미팅|링크)",
+    "오픈\\s*AI|오픈에이아이|챗\\s*GPT",
+    "엔비디아|테슬라|우버",
+)
+# 영문 이름(대소문자 무시, 단어 경계)
+REAL_BRANDS_EN: tuple[str, ...] = (
+    "Google|Microsoft|Apple|Amazon|Azure|Facebook|Instagram|YouTube|Twitter|TikTok|Netflix",
+    "Slack|Notion|Zoom|Jira|Confluence|Trello|Asana|Figma|GitHub|GitLab|Dropbox|Salesforce",
+    "Gmail|Outlook|LinkedIn|Adobe|Discord|Telegram|KakaoTalk",
+    "OpenAI|ChatGPT|Anthropic|Gemini|Copilot|Claude",
+    "Samsung|Kakao|Naver|Coupang|Toss|Tesla|Nvidia|Oracle|Spotify|Uber",
+    "iPhone|iPad|MacBook|Windows|Android",
+)
+# 짧아서 대소문자를 구분해야 하는 영문 이름
+REAL_BRANDS_EN_CASE: tuple[str, ...] = ("LG", "SK", "SAP", "IBM", "AWS", "LINE", "Meta", "Teams")
+_BRAND_KO = re.compile("|".join(f"(?:{p})" for p in REAL_BRANDS_KO))
+_BRAND_EN = re.compile(
+    r"(?<![A-Za-z])(?:" + "|".join(REAL_BRANDS_EN) + r")(?![A-Za-z])", re.IGNORECASE
+)
+_BRAND_EN_CASE = re.compile(r"(?<![A-Za-z])(?:" + "|".join(REAL_BRANDS_EN_CASE) + r")(?![A-Za-z])")
+
+
+def real_brands_in(text: str) -> list[str]:
+    """본문에 나온 실존 이름(중복 제거, 등장 순)."""
+    found: list[str] = []
+    for rx in (_BRAND_KO, _BRAND_EN, _BRAND_EN_CASE):
+        found.extend(m.group(0) for m in rx.finditer(text))
+    return list(dict.fromkeys(found))
+
+
 def _wrapped(text: str) -> bool:
     return len(text) >= 2 and any(text[0] == a and text[-1] == b for a, b in _QUOTE_PAIRS)
 
@@ -190,6 +256,9 @@ def check_body(spec: BodySpec, raw: str | None) -> CheckResult:
         add("meta_prefix")
     if _wrapped(text):
         add("wrapped_quotes")
+    brands = real_brands_in(text)
+    if brands:
+        add("real_brand", f"{_HINTS['real_brand']}: {', '.join(brands[:3])}")
     if _INJECTION.search(text):
         add("injection_phrase")
 

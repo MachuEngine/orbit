@@ -33,7 +33,7 @@ import random
 import statistics
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -131,11 +131,11 @@ def select_ids(
     return sorted(out)
 
 
-def read_rows(path: Path) -> dict[str, dict[str, Any]]:
-    """기존 `bodies.jsonl`을 읽는다. 끊겨서 깨진 마지막 줄은 버린다(다시 생성한다)."""
-    rows: dict[str, dict[str, Any]] = {}
+def read_all_rows(path: Path) -> list[dict[str, Any]]:
+    """`bodies.jsonl`의 모든 줄(지출 합계용). 끊겨서 깨진 줄은 버린다."""
+    out: list[dict[str, Any]] = []
     if not path.exists():
-        return rows
+        return out
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -144,7 +144,20 @@ def read_rows(path: Path) -> dict[str, dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(row, dict) and isinstance(row.get("body_id"), str):
-            rows.setdefault(row["body_id"], row)
+            out.append(row)
+    return out
+
+
+def read_rows(path: Path) -> dict[str, dict[str, Any]]:
+    """body_id별 최신 행. 파일은 append-only라 같은 body_id가 여러 줄이면 나중 줄이 이긴다.
+
+    같은 body_id가 여러 줄인 경우는 `--recheck`로 다시 만든 본문이다.
+
+    끊겨서 깨진 마지막 줄은 버린다(다시 생성한다).
+    """
+    rows: dict[str, dict[str, Any]] = {}
+    for row in read_all_rows(path):
+        rows[row["body_id"]] = row
     return rows
 
 
@@ -229,6 +242,7 @@ class _Realizer:
         self.state = state
         self.sleep = sleep
         self.sem = asyncio.Semaphore(cfg.concurrency)
+        self.recheck_reasons: dict[str, list[str]] = {}
 
     def _charge(
         self,
@@ -332,6 +346,11 @@ class _Realizer:
                 "fallback": fallback,
                 "failure_reasons": acc.failures,
                 "transient_retries": acc.transient_retries,
+                **(
+                    {"recheck_reasons": self.recheck_reasons[body_id]}
+                    if body_id in self.recheck_reasons
+                    else {}
+                ),
                 "input_tokens": acc.usage.input_tokens,
                 "cached_input_tokens": acc.usage.cached_input_tokens,
                 "output_tokens": acc.usage.output_tokens,
@@ -454,6 +473,9 @@ async def realize_bodies(
     sleep: Sleep = asyncio.sleep,
     skeleton_sha256: str = "",
     progress: Callable[[str], None] | None = None,
+    targets: Sequence[str] | None = None,
+    recheck_reasons: Mapping[str, list[str]] | None = None,
+    run_extra: Mapping[str, Any] | None = None,
 ) -> RunResult:
     out_dir.mkdir(parents=True, exist_ok=True)
     started = now()
@@ -462,11 +484,15 @@ async def realize_bodies(
     selected = select_ids(skeleton, cfg.families, cfg.limit, cfg.sample_seed)
     rows = read_rows(out_dir / BODIES_FILE)
     texts = {b: str(r["text"]) for b, r in rows.items() if b in skeleton.bodies}
-    pending = [b for b in selected if b not in rows]
+    if targets is None:
+        pending = [b for b in selected if b not in rows]
+    else:  # --recheck: 검사에 실패한 본문만 다시 만든다(새 행이 이전 행을 덮는다)
+        chosen = set(selected)
+        pending = [b for b in targets if b in chosen]
     skipped = len(selected) - len(pending)
 
     state = _State()
-    state.prior_spent = cumulative_spend(rows, manifest)
+    state.prior_spent = cumulative_spend(read_all_rows(out_dir / BODIES_FILE), manifest)
     if cfg.max_total_usd is not None and state.prior_spent >= cfg.max_total_usd:
         state.stop_reason = "total_cap"
     llms: dict[str, LLM] = {}
@@ -476,6 +502,7 @@ async def realize_bodies(
 
     writer = _RowWriter(out_dir / BODIES_FILE)
     realizer = _Realizer(skeleton, models, llms, cfg, writer, texts, state, sleep)
+    realizer.recheck_reasons = dict(recheck_reasons or {})
 
     async def run_group(group: list[str]) -> None:
         for body_id in group:
@@ -530,6 +557,7 @@ async def realize_bodies(
                 "prior_template_used": state.prior_template_used,
                 "limit": cfg.limit,
                 "families": list(cfg.families),
+                **(dict(run_extra) if run_extra else {}),
             },
         )
 
@@ -586,23 +614,31 @@ def _length_distribution(
 
 
 def family_summary(
-    skeleton: Skeleton, rows: Mapping[str, Mapping[str, Any]]
+    skeleton: Skeleton,
+    rows: Mapping[str, Mapping[str, Any]],
+    all_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
+    """계열별 집계. 본문 수·대체 수·사유는 최신 행, 시도·토큰·비용은 모든 행(재생성 포함)이다."""
     out: dict[str, dict[str, Any]] = {}
     for family in FAMILIES:
         mine = [r for b, r in rows.items() if b in skeleton.bodies and r.get("family") == family]
+        spent = (
+            [r for r in all_rows if r.get("family") == family and r["body_id"] in skeleton.bodies]
+            if all_rows is not None
+            else mine
+        )
         reasons = Counter(
             code for r in mine for attempt in r["failure_reasons"] for code in attempt
         )
         out[family] = {
             "generated": len(mine),
-            "attempts": sum(int(r["attempts"]) for r in mine),
+            "attempts": sum(int(r["attempts"]) for r in spent),
             "fallback": sum(1 for r in mine if r["fallback"]),
             "failure_reasons": dict(sorted(reasons.items())),
-            "input_tokens": sum(int(r["input_tokens"]) for r in mine),
-            "cached_input_tokens": sum(int(r["cached_input_tokens"]) for r in mine),
-            "output_tokens": sum(int(r["output_tokens"]) for r in mine),
-            "cost_usd": round(sum(float(r["cost_usd"]) for r in mine), 6),
+            "input_tokens": sum(int(r["input_tokens"]) for r in spent),
+            "cached_input_tokens": sum(int(r["cached_input_tokens"]) for r in spent),
+            "output_tokens": sum(int(r["output_tokens"]) for r in spent),
+            "cost_usd": round(sum(float(r["cost_usd"]) for r in spent), 6),
             "total_in_skeleton": sum(
                 1 for s in skeleton.bodies.values() if s.generator_family == family
             ),
@@ -627,13 +663,17 @@ def load_manifest(out_dir: Path) -> dict[str, Any]:
     return data
 
 
-def cumulative_spend(rows: Mapping[str, Mapping[str, Any]], manifest: Mapping[str, Any]) -> float:
+def cumulative_spend(
+    rows: Mapping[str, Mapping[str, Any]] | Sequence[Mapping[str, Any]],
+    manifest: Mapping[str, Any],
+) -> float:
     """출력 디렉터리의 누적 지출. 본문 기록 합과 실행 기록 합 중 큰 쪽이다.
 
     비정상 종료로 실행 기록이 없으면 본문 기록 합이, 상한 때문에 버려진 요청의 지출은 실행 기록 합이
     더 정확하다.
     """
-    from_rows = sum(float(r.get("cost_usd") or 0) for r in rows.values())
+    values = rows.values() if isinstance(rows, Mapping) else rows
+    from_rows = sum(float(r.get("cost_usd") or 0) for r in values)
     from_runs = sum(float(r.get("cost_usd") or 0) for r in manifest.get("runs", []))
     return max(from_rows, from_runs)
 
@@ -650,6 +690,7 @@ def _write_manifest(
 ) -> dict[str, Any]:
     path = out_dir / MANIFEST_FILE
     previous = load_manifest(out_dir)
+    all_rows = read_all_rows(out_dir / BODIES_FILE)
     rows = read_rows(out_dir / BODIES_FILE)
     runs: list[Any] = list(previous.get("runs", []))
     if run_entry is not None:
@@ -667,11 +708,14 @@ def _write_manifest(
         "sample_seed": cfg.sample_seed,
         "family_configs": configs,
         "previous_family_configs": history,
-        "families": family_summary(skeleton, rows),
+        "families": family_summary(skeleton, rows, all_rows),
+        "prompt_versions_in_rows": dict(
+            sorted(Counter(str(r.get("prompt_version")) for r in rows.values()).items())
+        ),
         "length_chars_by_class": _length_distribution(skeleton, rows),
         "total_bodies_in_skeleton": len(skeleton.bodies),
         "bodies_done": len([b for b in rows if b in skeleton.bodies]),
-        "total_cost_usd": round(cumulative_spend(rows, {"runs": runs}), 6),
+        "total_cost_usd": round(cumulative_spend(all_rows, {"runs": runs}), 6),
         "runs": runs,
         "assembled": dict(assembled) if assembled is not None else previous.get("assembled"),
     }
@@ -798,7 +842,33 @@ def _load_skeleton(path: str) -> tuple[Skeleton, str]:
     return Skeleton.model_validate_json(raw), hashlib.sha256(raw).hexdigest()
 
 
-def _check_resume(out_dir: Path, skeleton_sha: str) -> str | None:
+def recheck_scan(
+    skeleton: Skeleton, rows: Mapping[str, Mapping[str, Any]], selected: set[str]
+) -> tuple[int, dict[str, list[str]], int]:
+    """최신 행을 현재 검사 규칙으로 다시 본다. (검사한 수, {실패 body_id: 사유}, 버전 없는 행 수).
+
+    템플릿으로 대체된 행(fallback)은 LLM이 쓴 본문이 아니라 검사하지 않는다.
+    """
+    checked = 0
+    failed: dict[str, list[str]] = {}
+    no_version = 0
+    for bid in sorted(selected):
+        row = rows.get(bid)
+        spec = skeleton.bodies.get(bid)
+        if row is None or spec is None or row.get("fallback"):
+            continue
+        if not row.get("prompt_version"):
+            no_version += 1
+        checked += 1
+        result = check_body(spec, str(row.get("text", "")))
+        if not result.ok:
+            failed[bid] = list(result.reasons)
+    return checked, failed, no_version
+
+
+def _check_resume(
+    out_dir: Path, skeleton_sha: str, *, allow_prompt_change: bool = False
+) -> str | None:
     manifest = out_dir / MANIFEST_FILE
     if not manifest.exists():
         return None
@@ -808,7 +878,11 @@ def _check_resume(out_dir: Path, skeleton_sha: str) -> str | None:
         return str(exc)
     if prev.get("skeleton_sha256") and prev["skeleton_sha256"] != skeleton_sha:
         return "출력 디렉터리의 매니페스트가 다른 skeleton으로 만든 것이다. 새 디렉터리를 쓴다"
-    if prev.get("prompt_version") and prev["prompt_version"] != PROMPT_VERSION:
+    if (
+        not allow_prompt_change
+        and prev.get("prompt_version")
+        and prev["prompt_version"] != PROMPT_VERSION
+    ):
         return "출력 디렉터리의 본문이 다른 프롬프트 버전으로 만든 것이다. 새 디렉터리를 쓴다"
     return None
 
@@ -833,6 +907,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="비용만 추정하고 호출하지 않는다")
     parser.add_argument("--assemble", action="store_true", help="world.json을 조립한다")
     parser.add_argument("--allow-template-missing", action="store_true")
+    parser.add_argument(
+        "--recheck",
+        action="store_true",
+        help="기존 본문을 현재 검사 규칙으로 다시 검사하고 실패한 것만 다시 생성한다",
+    )
     parser.add_argument("--tokens-per-char", type=float, default=1.0, help="추정 가정")
     parser.add_argument("--attempt-factor", type=float, default=1.3, help="추정 가정(본문당 시도)")
     parser.add_argument("--reasoning-tokens", type=int, default=300, help="추정 가정(openai)")
@@ -883,6 +962,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{exc}. 출력 디렉터리를 확인한다", file=sys.stderr)
         return EXIT_USAGE
     pending = [b for b in selected if b not in rows]
+    recheck_failed: dict[str, list[str]] = {}
+    recheck_extra: dict[str, Any] | None = None
+    if args.recheck:
+        checked, recheck_failed, no_version = recheck_scan(skeleton, rows, set(selected))
+        by_reason = Counter(r for rs in recheck_failed.values() for r in rs)
+        pending = sorted(recheck_failed)
+        print(
+            f"재검사: {checked}건 중 실패 {len(recheck_failed)}건, "
+            f"사유 {dict(sorted(by_reason.items()))}"
+        )
+        if no_version:
+            print(f"경고: prompt_version이 없는 행 {no_version}건", file=sys.stderr)
+        recheck_extra = {
+            "recheck": {
+                "checked": checked,
+                "failed": len(recheck_failed),
+                "failure_reasons": dict(sorted(by_reason.items())),
+                "rows_without_prompt_version": no_version,
+                "prompt_version": PROMPT_VERSION,
+            }
+        }
     est = estimate(
         skeleton,
         pending,
@@ -909,13 +1009,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return EXIT_OK
 
-    problem = _check_resume(out_dir, sha)
+    problem = _check_resume(out_dir, sha, allow_prompt_change=args.recheck)
     if problem:
         print(problem, file=sys.stderr)
         return EXIT_USAGE
 
     code = EXIT_OK
-    if pending:
+    if pending or args.recheck:
         try:
             result = asyncio.run(
                 realize_bodies(
@@ -925,6 +1025,9 @@ def main(argv: list[str] | None = None) -> int:
                     cfg,
                     skeleton_sha256=sha,
                     progress=lambda m: print(m, flush=True),
+                    targets=pending if args.recheck else None,
+                    recheck_reasons=recheck_failed,
+                    run_extra=recheck_extra,
                 )
             )
         except ManifestError as exc:

@@ -28,6 +28,7 @@ from orbit.evaldata.v1.realize import (
     estimate,
     load_manifest,
     main,
+    read_all_rows,
     read_rows,
     realize_bodies,
     select_ids,
@@ -845,3 +846,127 @@ def test_temperature_rejects_other_values(tmp_path: Path, value: str) -> None:
     path.write_text(f"[google]\ntemperature = {value}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="temperature"):
         load_models(path)
+
+
+# ---------------------------------------------------------------- --recheck
+
+
+def _cli_run(
+    monkeypatch: pytest.MonkeyPatch, llm: FakeLLM, sk_dir: Path, out: Path, *extra: str
+) -> int:
+    import orbit.evaldata.v1.realize as realize_mod
+
+    monkeypatch.setattr(realize_mod, "build_family_llm", lambda _m: llm)
+    return main(
+        ["--skeleton", str(sk_dir), "--out", str(out), "--concurrency", "1", *extra],
+    )
+
+
+def _tamper(out: Path, edits: dict[str, dict[str, object]]) -> None:
+    path = out / BODIES_FILE
+    lines = []
+    for line in path.read_text("utf-8").splitlines():
+        row = json.loads(line)
+        row.update(edits.get(row["body_id"], {}))
+        lines.append(json.dumps(row, ensure_ascii=False, sort_keys=True))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_recheck_regenerates_only_failed_bodies(
+    small_sk: Skeleton,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    sk_dir = write_skeleton(small_sk, tmp_path / "sk")
+    out = tmp_path / "out"
+    assert _cli_run(monkeypatch, FakeLLM(small_sk), sk_dir, out, "--max-cost-usd", "5") == 0
+    ids = sorted(small_sk.bodies)
+    bad, old_version, fb = ids[0], ids[1], ids[2]
+    first = read_rows(out / BODIES_FILE)
+    _tamper(
+        out,
+        {
+            bad: {
+                "text": first[bad]["text"] + " 슬랙으로 공유했다.",
+                "prompt_version": "realize-v1",
+            },
+            old_version: {"prompt_version": None},  # 버전 기록이 없는 행
+            fb: {"fallback": True, "text": "토스 템플릿"},  # 대체 본문은 다시 보지 않는다
+        },
+    )
+    n_lines = len((out / BODIES_FILE).read_text("utf-8").splitlines())
+
+    # dry-run: 실패 건수와 비용만 출력하고 아무것도 바꾸지 않는다.
+    llm0 = FakeLLM(small_sk)
+    code = _cli_run(monkeypatch, llm0, sk_dir, out, "--max-cost-usd", "5", "--recheck", "--dry-run")
+    text = capsys.readouterr()
+    assert code == 0 and "실패 1건" in text.out and "real_brand" in text.out
+    assert "prompt_version이 없는 행 1건" in text.err and not llm0.requests
+    assert len((out / BODIES_FILE).read_text("utf-8").splitlines()) == n_lines
+
+    llm = FakeLLM(small_sk)
+    assert _cli_run(monkeypatch, llm, sk_dir, out, "--max-cost-usd", "5", "--recheck") == 0
+    assert list(llm.calls) == [bad] and llm.calls[bad] == 1  # 실패한 본문만 다시 만든다
+    lines = (out / BODIES_FILE).read_text("utf-8").splitlines()
+    assert len(lines) == n_lines + 1  # append-only: 새 행이 추가된다
+    latest = read_rows(out / BODIES_FILE)[bad]
+    assert "슬랙" not in latest["text"] and latest["prompt_version"] == PROMPT_VERSION
+    assert latest["recheck_reasons"] == ["real_brand"]
+    m = load_manifest(out)
+    entry = m["runs"][-1]["recheck"]
+    assert entry["failed"] == 1 and entry["failure_reasons"] == {"real_brand": 1}
+    assert entry["rows_without_prompt_version"] == 1
+    assert m["runs"][-1]["generated"] == 1
+    assert m["prompt_versions_in_rows"][PROMPT_VERSION] >= 1
+    all_cost = sum(float(r["cost_usd"]) for r in read_all_rows(out / BODIES_FILE))
+    assert m["total_cost_usd"] == pytest.approx(all_cost, abs=1e-6)
+
+    # 조립은 최신 행을 쓴다.
+    assert (
+        _cli_run(monkeypatch, FakeLLM(small_sk), sk_dir, out, "--max-cost-usd", "1", "--assemble")
+        == 0
+    )
+    world = (out / WORLD_FILE).read_text("utf-8")
+    assert "슬랙으로 공유했다" not in world and latest["text"].split("\n")[0] in world
+
+
+def test_recheck_keeps_cost_cap(
+    small_sk: Skeleton, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sk_dir = write_skeleton(small_sk, tmp_path / "sk")
+    out = tmp_path / "out"
+    _cli_run(monkeypatch, FakeLLM(small_sk), sk_dir, out, "--max-cost-usd", "5")
+    rows = read_rows(out / BODIES_FILE)
+    bad = sorted(b for b in rows if small_sk.bodies[b].generator_family == "openai")[:6]
+    _tamper(out, {b: {"text": rows[b]["text"] + " Notion 문서"} for b in bad})
+    llm = FakeLLM(small_sk)
+    code = _cli_run(monkeypatch, llm, sk_dir, out, "--max-cost-usd", "0.0005", "--recheck")
+    assert code == EXIT_COST_CAP and 0 < len(llm.requests) < 6
+    latest = read_rows(out / BODIES_FILE)
+    regenerated = [b for b in bad if "Notion" not in latest[b]["text"]]
+    assert len(regenerated) == len(llm.requests)
+    # 남은 것은 다음 recheck에서 이어서 처리한다.
+    llm2 = FakeLLM(small_sk)
+    assert _cli_run(monkeypatch, llm2, sk_dir, out, "--max-cost-usd", "5", "--recheck") == 0
+    assert len(llm2.requests) == 6 - len(regenerated)
+
+
+def test_read_rows_latest_wins_and_spend_counts_all_lines(tmp_path: Path) -> None:
+    path = tmp_path / BODIES_FILE
+    rows = [
+        {"body_id": "a", "text": "old", "cost_usd": 0.1},
+        {"body_id": "a", "text": "new", "cost_usd": 0.2},
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    assert read_rows(path)["a"]["text"] == "new"
+    from orbit.evaldata.v1.realize import read_all_rows
+
+    assert cumulative_spend(read_all_rows(path), {}) == pytest.approx(0.3)
+
+
+def test_prompt_version_and_brand_rule_in_prompt() -> None:
+    from orbit.evaldata.v1.realize_prompt import SYSTEM_PROMPT
+
+    assert PROMPT_VERSION == "realize-v2"
+    assert "협업 도구" in SYSTEM_PROMPT and "일반 명사" in SYSTEM_PROMPT
