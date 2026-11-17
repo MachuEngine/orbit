@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Orbit 답변 근거 검토</title>
+    <style>
+      __TOKENS__ * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: auto;
+      }
+      body {
+        margin: 0;
+        background: var(--color-bg);
+        color: var(--color-text);
+        font: var(--text-md)/var(--leading-body) var(--font-body);
+        word-break: keep-all;
+        overflow-wrap: anywhere;
+      }
+      header {
+        padding: var(--space-6);
+        border-bottom: 1px solid var(--color-divider);
+      }
+      h1 {
+        font: var(--font-weight-semibold) var(--text-2xl)/var(--leading-heading)
+          var(--font-display);
+        margin: 0 0 var(--space-3);
+      }
+      h2 {
+        font-size: var(--text-xl);
+        line-height: var(--leading-heading);
+        margin: 0;
+      }
+      h3 {
+        font-size: var(--text-md);
+        margin: var(--space-5) 0 var(--space-2);
+      }
+      p {
+        margin: 0 0 var(--space-3);
+      }
+      .muted {
+        color: var(--color-text-muted);
+        font-size: var(--text-sm);
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+        max-width: 80rem;
+        margin: auto;
+        align-items: start;
+      }
+      nav {
+        padding: var(--space-5);
+        position: sticky;
+        top: 0;
+        max-height: 100dvh;
+        overflow: auto;
+      }
+      .numbers {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: var(--space-2);
+      }
+      a,
+      button {
+        color: var(--color-text);
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        font: inherit;
+        min-height: 2.75rem;
+        padding: var(--space-2) var(--space-3);
+        text-decoration: none;
+        text-align: center;
+        cursor: pointer;
+      }
+      a:focus-visible,
+      button:focus-visible,
+      summary:focus-visible,
+      textarea:focus-visible {
+        outline: 2px solid var(--color-focus);
+        outline-offset: var(--space-1);
+      }
+      a.answered {
+        background: var(--color-accent);
+        color: var(--color-on-paper);
+      }
+      main {
+        min-width: 0;
+        padding: var(--space-5) var(--space-6);
+      }
+      article {
+        max-width: var(--measure-body);
+        padding: var(--space-6) 0;
+        border-bottom: 1px solid var(--color-divider);
+        scroll-margin-top: var(--space-4);
+      }
+      article:first-child {
+        padding-top: 0;
+      }
+      .answer {
+        background: var(--color-surface);
+        border-left: 3px solid var(--color-accent);
+        padding: var(--space-4);
+        white-space: pre-wrap;
+      }
+      .question {
+        white-space: pre-wrap;
+      }
+      .hint {
+        padding: var(--space-2) 0;
+        border-bottom: 1px solid var(--color-divider);
+        font-size: var(--text-sm);
+        white-space: pre-wrap;
+      }
+      details {
+        margin: var(--space-5) 0;
+      }
+      summary {
+        cursor: pointer;
+        min-height: 2.75rem;
+        padding: var(--space-2) 0;
+      }
+      pre {
+        font: var(--text-sm)/var(--leading-body) var(--font-mono);
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-width: 100%;
+        background: var(--color-surface-sunken);
+        padding: var(--space-4);
+        margin: var(--space-3) 0;
+      }
+      .choices {
+        display: flex;
+        gap: var(--space-3);
+        flex-wrap: wrap;
+      }
+      button[aria-pressed="true"] {
+        background: var(--color-accent);
+        color: var(--color-on-paper);
+      }
+      .toolbar {
+        display: flex;
+        gap: var(--space-3);
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      textarea {
+        display: block;
+        width: 100%;
+        min-height: 5rem;
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+        border: 1px solid var(--color-border);
+        padding: var(--space-3);
+        font: inherit;
+        margin-top: var(--space-3);
+      }
+      .export {
+        max-width: var(--measure-body);
+        padding: var(--space-6) 0;
+      }
+      .legend {
+        margin: var(--space-4) 0;
+        font-size: var(--text-sm);
+      }
+      @media (max-width: 46rem) {
+        header {
+          padding: var(--space-5);
+        }
+        .layout {
+          display: block;
+        }
+        nav {
+          position: static;
+          max-height: none;
+          padding: var(--space-5);
+        }
+        .numbers {
+          grid-template-columns: repeat(10, minmax(0, 1fr));
+          gap: var(--space-1);
+        }
+        .numbers a {
+          padding: var(--space-2) 0;
+          font-size: var(--text-sm);
+        }
+        main {
+          padding: var(--space-4) var(--space-5);
+        }
+      }
+      @media (max-width: 25rem) {
+        .numbers {
+          grid-template-columns: repeat(6, minmax(0, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>답변 근거 검토</h1>
+      <p>질문과 도구 결과를 읽고, 답변의 사실이 근거에 맞는지 판단해 주세요.</p>
+      <p class="muted">
+        계산·단위 환산, 정상 빈 조회의 “없음”, 비서가 작성한 제안, 성공한 작업의
+        완료 보고는 허용합니다. 근거와 다른 사실이나 미실행·실패한 작업의 완료
+        보고가 있으면 “근거 없음”을 고릅니다.
+      </p>
+      <div class="toolbar">
+        <strong id="progress" aria-live="polite"></strong
+        ><button type="button" id="next">미응답으로 이동</button
+        ><button type="button" id="copy">라벨 복사</button
+        ><span id="status" class="muted" aria-live="polite"></span>
+      </div>
+    </header>
+    <div class="layout">
+      <nav aria-label="문항 목차">
+        <p class="legend">선택한 문항은 채워진 배경으로 표시합니다.</p>
+        <div class="numbers" id="numbers"></div>
+      </nav>
+      <main id="items"></main>
+    </div>
+    <script type="application/json" id="review-data">
+      __DATA__
+    </script>
+    <script>
+      const items = JSON.parse(
+        document.getElementById("review-data").textContent,
+      );
+      const storageKey = "__STORAGE__";
+      let labels = {};
+      try {
+        const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+        for (const item of items) {
+          if (typeof saved[item.n] === "boolean")
+            labels[item.n] = saved[item.n];
+        }
+      } catch (e) {}
+      const el = (tag, text, className) => {
+        const node = document.createElement(tag);
+        if (text !== undefined) node.textContent = text;
+        if (className) node.className = className;
+        return node;
+      };
+      function update() {
+        const count = items.filter(
+          (x) => typeof labels[x.n] === "boolean",
+        ).length;
+        document.getElementById("progress").textContent =
+          `${count} / ${items.length} 완료 · 미응답 ${items.length - count}개`;
+        for (const item of items) {
+          const a = document.getElementById("jump-" + item.n);
+          const answered = typeof labels[item.n] === "boolean";
+          a.classList.toggle("answered", answered);
+          a.setAttribute(
+            "aria-label",
+            `${item.n}번 ${answered ? "판정함" : "미응답"}`,
+          );
+          for (const value of [true, false])
+            document
+              .getElementById("choice-" + item.n + "-" + value)
+              .setAttribute("aria-pressed", String(labels[item.n] === value));
+        }
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(labels));
+        } catch (e) {
+          document.getElementById("status").textContent =
+            "이 브라우저는 자동 저장을 허용하지 않습니다. 라벨을 복사해 보관해 주세요.";
+        }
+      }
+      for (const item of items) {
+        const link = el("a", String(item.n));
+        link.href = "#item-" + item.n;
+        link.id = "jump-" + item.n;
+        document.getElementById("numbers").append(link);
+        const article = el("article");
+        article.id = "item-" + item.n;
+        article.setAttribute("aria-labelledby", "heading-" + item.n);
+        const heading = el("h2", item.n + "번");
+        heading.id = "heading-" + item.n;
+        article.append(
+          heading,
+          el("h3", "질문"),
+          el("p", item.question, "question"),
+          el("h3", "답변"),
+          el("div", item.answer, "answer"),
+          el("h3", "근거 후보"),
+        );
+        article.append(
+          el(
+            "p",
+            "답변과 표현이 겹치는 도구 결과 일부입니다. 전체 결과를 함께 확인해 주세요.",
+            "muted",
+          ),
+        );
+        for (const hint of item.hints) article.append(el("div", hint, "hint"));
+        if (!item.hints.length)
+          article.append(
+            el(
+              "p",
+              "답변과 겹치는 근거 후보가 없습니다. 전체 도구 결과를 확인해 주세요.",
+              "muted",
+            ),
+          );
+        const details = el("details");
+        details.append(el("summary", "전체 도구 결과 펼치기"));
+        for (const tool of item.tools)
+          details.append(el("h3", tool.name), el("pre", tool.result));
+        article.append(details);
+        const group = el("div", undefined, "choices");
+        group.setAttribute("role", "group");
+        group.setAttribute("aria-label", item.n + "번 근거 판정");
+        for (const [value, text] of [
+          [true, "근거 있음"],
+          [false, "근거 없음"],
+        ]) {
+          const button = el("button", text);
+          button.type = "button";
+          button.id = "choice-" + item.n + "-" + value;
+          button.setAttribute("aria-pressed", "false");
+          button.addEventListener("click", () => {
+            labels[item.n] = value;
+            update();
+          });
+          group.append(button);
+        }
+        const clear = el("button", "선택 지우기");
+        clear.type = "button";
+        clear.addEventListener("click", () => {
+          delete labels[item.n];
+          update();
+        });
+        group.append(clear);
+        article.append(group);
+        document.getElementById("items").append(article);
+      }
+      const section = el("section", undefined, "export");
+      section.append(el("h2", "라벨 내보내기"));
+      const label = el("label", "복사할 라벨");
+      label.htmlFor = "export";
+      const output = el("textarea");
+      output.id = "export";
+      output.readOnly = true;
+      section.append(label, output);
+      document.getElementById("items").append(section);
+      document.getElementById("next").addEventListener("click", () => {
+        const missing = items.find((x) => typeof labels[x.n] !== "boolean");
+        if (missing) {
+          const heading = document.getElementById("heading-" + missing.n);
+          heading.tabIndex = -1;
+          heading.focus();
+          heading.scrollIntoView();
+        } else
+          document.getElementById("status").textContent =
+            "모든 문항을 판정했습니다.";
+      });
+      document.getElementById("copy").addEventListener("click", async () => {
+        output.value = items
+          .filter((x) => typeof labels[x.n] === "boolean")
+          .map((x) => x.n + (labels[x.n] ? "t" : "f"))
+          .join(",");
+        try {
+          if (!navigator.clipboard) throw new Error("clipboard");
+          await navigator.clipboard.writeText(output.value);
+          document.getElementById("status").textContent =
+            "라벨을 복사했습니다.";
+        } catch (e) {
+          output.focus();
+          output.select();
+          document.getElementById("status").textContent =
+            "아래 라벨을 선택했습니다. 직접 복사해 주세요.";
+        }
+      });
+      update();
+    </script>
+  </body>
+</html>
