@@ -937,7 +937,7 @@ async def test_observe_failure_is_a_harness_error_and_the_experiment_continues(
     assert failure_distribution([r.to_dict() for r in summary.results]) == {"harness_error": 1}
 
 
-async def test_cleanup_failure_is_logged_and_marked_and_the_experiment_continues(
+async def test_cleanup_failure_is_logged_and_marked_and_stops_the_experiment(
     app_url: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     t = task("k-1", ["내일 일정"], gold=read_gold())
@@ -945,6 +945,7 @@ async def test_cleanup_failure_is_logged_and_marked_and_the_experiment_continues
     with caplog.at_level("WARNING", logger="orbit.evalrunner.runner"):
         summary, env, _ = await run(app_url, [t], script, env=FailingCleanupEnv(app_url), seed=9)
     r = only(summary)
+    assert summary.stopped_reason == "database_cleanup_failed"
     assert r.success is True  # 채점은 정리 실패와 무관하다
     assert r.to_dict()["cleanup_failed"] is True
     ws = env.databases[0].workspace_id

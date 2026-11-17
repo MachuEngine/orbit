@@ -58,6 +58,8 @@ from orbit.llm.model_id import is_declared_model
 logger = logging.getLogger(__name__)
 
 UNSPECIFIED_MODEL = "unspecified"
+# 평가 자원 정리는 에피소드 예산과 별도로 이 유예 시간 안에서 시도한다(ADR-0034).
+DATABASE_CLEANUP_SECONDS = 5.0
 
 LLMFactory = Callable[[TaskView, int], LLM]
 SutFactory = Callable[[], SystemUnderTest]
@@ -326,67 +328,76 @@ async def run_episode(
     output: EpisodeOutput | None = None
     observation: DbObservation | None = None
     cleanup_failed = False
+    started = monotonic()
+    latency_ms: int | None = None
     timeout = asyncio.timeout(budget.max_seconds)
     try:
-        if database_env is not None:
-            database = await database_env.prepare(
-                as_of=task.as_of_time, seed=episode_seed(seed, task.task_id, repeat)
+        # DB 준비·SUT·관찰이 같은 절대 기한을 공유한다. 단계마다 예산을 다시 시작하지 않는다.
+        async with timeout:
+            if database_env is not None:
+                database = await database_env.prepare(
+                    as_of=task.as_of_time, seed=episode_seed(seed, task.task_id, repeat)
+                )
+            # 구성 중 예외가 나도 finally가 자원을 정리한다.
+            episode = Episode(
+                task=SutTask(
+                    task_id=task.task_id,
+                    turns=tuple(SutTurn(t.role, t.content) for t in task.turns),
+                    as_of_time=task.as_of_time,
+                    account_id=account,
+                    approval_policy=tuple(task.approval_policy or ()),
+                    time_zone=time_zone,
+                ),
+                connectors=EpisodeConnectors(
+                    mail=connectors.mail[account],
+                    calendar=connectors.calendar[account],
+                    drive=connectors.drive[account],
+                ),
+                clock=ReadOnlyClock(clock),
+                llm=recording_llm,
+                budget=budget,
+                steps=step_counter,
+                database=database,
+                trace=collector,
             )
-        # 구성 중 예외가 나도 아래 `finally`가 정리(잠금 해제·행 삭제)한다.
-        episode = Episode(
-            # 정답(gold)과 분할·태그는 러너만 가진다. SUT에는 아래 네 필드만 준다.
-            task=SutTask(
-                task_id=task.task_id,
-                turns=tuple(SutTurn(t.role, t.content) for t in task.turns),
-                as_of_time=task.as_of_time,
-                account_id=account,
-                approval_policy=tuple(task.approval_policy or ()),
-                time_zone=time_zone,
-            ),
-            connectors=EpisodeConnectors(
-                mail=connectors.mail[account],
-                calendar=connectors.calendar[account],
-                drive=connectors.drive[account],
-            ),
-            clock=ReadOnlyClock(clock),
-            llm=recording_llm,
-            budget=budget,
-            steps=step_counter,
-            database=database,
-            trace=collector,
-        )
-        started = monotonic()
-        try:
-            async with timeout:
+            started = monotonic()  # 정상 결과의 지연 지표는 기존처럼 SUT 실행만 잰다.
+            try:
                 result = await sut.run(episode)
-            if isinstance(result, EpisodeOutput) and isinstance(result.final_text, str):
-                output = result
-            else:
-                error_type, detail = "sut_error", "InvalidOutput"
-        except BudgetExceeded as exc:
-            error_type, detail = "budget_exceeded", exc.reason
-        except TimeoutError as exc:
-            if timeout.expired():
-                error_type, detail = "budget_exceeded", "time"
-            else:
+                if isinstance(result, EpisodeOutput) and isinstance(result.final_text, str):
+                    output = result
+                else:
+                    error_type, detail = "sut_error", "InvalidOutput"
+            except BudgetExceeded as exc:
+                error_type, detail = "budget_exceeded", exc.reason
+            except TimeoutError as exc:
+                # 에피소드 기한의 CancelledError는 바깥에서 TimeoutError로 바뀐다.
                 error_type, detail = "sut_error", type(exc).__name__
-        except EmbedBudgetExceeded:
-            raise  # 에피소드 실패가 아니라 실험 중단이다(`run_experiment`가 받는다)
-        except ConnectorError as exc:
-            error_type, detail = "connector_error_unhandled", type(exc).__name__
-        except Exception as exc:  # SUT의 어떤 오류도 에피소드 실패로 기록한다
-            error_type, detail = "sut_error", type(exc).__name__
-        latency_ms = round((monotonic() - started) * 1000)
-        if database_env is not None and database is not None:
-            try:
-                # 평가 대상이 보고한 값이 아니라 러너가 DB에서 직접 읽는다(ADR-0009 §3).
-                observation = await database_env.observe(database)
-            except Exception as exc:  # 관찰 실패는 이 에피소드만 채점 불가로 두고 실험은 계속한다
-                error_type, detail = "harness_error", type(exc).__name__
+            except EmbedBudgetExceeded:
+                raise  # 에피소드 실패가 아니라 실험 중단이다(`run_experiment`가 받는다)
+            except ConnectorError as exc:
+                error_type, detail = "connector_error_unhandled", type(exc).__name__
+            except Exception as exc:
+                error_type, detail = "sut_error", type(exc).__name__
+            latency_ms = round((monotonic() - started) * 1000)
+            if database_env is not None and database is not None:
+                try:
+                    observation = await database_env.observe(database)
+                except Exception as exc:
+                    error_type, detail = "harness_error", type(exc).__name__
+    except TimeoutError:
+        if not timeout.expired():
+            raise  # 준비 자체의 TimeoutError는 예산 초과와 구분한다.
+        error_type, detail = "budget_exceeded", "time"
+        if database_env is not None and database is None:
+            # prepare가 반환하지 않으면 부분적으로 만든 자원의 상태를 보장할 수 없다.
+            cleanup_failed = True
     finally:
+        if latency_ms is None:
+            latency_ms = round((monotonic() - started) * 1000)
         if database_env is not None and database is not None:
             try:
-                await database_env.cleanup(database)  # 실패·시간 초과 뒤에도 지운다
+                async with asyncio.timeout(DATABASE_CLEANUP_SECONDS):
+                    await database_env.cleanup(database)
             except Exception as exc:
                 # 남은 행은 같은 ID의 다음 `prepare`가 치운다. ID와 예외 이름만 남긴다.
                 cleanup_failed = True
@@ -678,6 +689,10 @@ async def run_experiment(
                     summary.cost_unknown_episodes += 1
                 else:
                     summary.total_cost_usd += result.cost_usd
+                if result.cleanup_failed:
+                    # 정리가 끝나지 않은 워크스페이스·연결을 둔 채 다음 과제를 시작하지 않는다.
+                    summary.stopped_reason = "database_cleanup_failed"
+                    return summary
                 reason = _stop_reason(summary, experiment_budget)
                 if reason is not None:
                     summary.stopped_reason = reason
@@ -685,7 +700,12 @@ async def run_experiment(
         return summary
     finally:
         if database_env is not None:
-            await database_env.aclose()
+            try:
+                async with asyncio.timeout(DATABASE_CLEANUP_SECONDS):
+                    await database_env.aclose()
+            except Exception as exc:
+                summary.stopped_reason = "database_cleanup_failed"
+                logger.warning("평가 DB 종료 실패: error=%s", type(exc).__name__)
 
 
 async def _min_tool_calls(
