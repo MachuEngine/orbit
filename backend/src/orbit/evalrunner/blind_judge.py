@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from orbit.evaldata.v1.auto_review import read_rows, total_cost
 from orbit.evalrunner import judge
 
 DEFAULT_SEED = 20261117
@@ -47,7 +48,7 @@ _MULTIPLIERS = {
 }
 
 
-class BlindError(ValueError):
+class BlindError(judge.JudgeError):
     """공개 오류에는 입력 위치·ID와 검사 종류만 남긴다."""
 
 
@@ -351,6 +352,7 @@ def write_bundle(
     keys: Sequence[Mapping[str, Any]],
     tokens_css: str,
     seed: int,
+    suite_summary: Mapping[str, Any] | None = None,
 ) -> None:
     out = out.resolve()
     if "runs" not in out.parts:
@@ -373,6 +375,7 @@ def write_bundle(
                 "originals": 30,
                 "mutations": 30,
                 "judge_prompt_version": judge.PROMPT_VERSION,
+                **({"suite": dict(suite_summary)} if suite_summary is not None else {}),
                 "input_sha256": hashlib.sha256(
                     json.dumps(list(inputs), sort_keys=True, ensure_ascii=False).encode()
                 ).hexdigest(),
@@ -382,6 +385,10 @@ def write_bundle(
         )
         + "\n",
     }
+    if suite_summary is not None:
+        data["blind60-summary.json"] = (
+            json.dumps(dict(suite_summary), ensure_ascii=False, indent=2) + "\n"
+        )
     if any((out / name).exists() for name in data):
         raise BlindError("이미 생성된 파일이 있다. 다른 출력 디렉터리를 고른다")
     out.mkdir(parents=True, exist_ok=True)
@@ -392,31 +399,80 @@ def write_bundle(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    build = commands.add_parser("build")
-    for field in ("input", "human", "candidates", "out"):
-        build.add_argument(f"--{field}", type=Path, required=True)
-    build.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    build.add_argument(
-        "--tokens", type=Path, default=Path(__file__).resolve().parents[4] / "docs/brand/tokens.css"
-    )
+    for command, seed in (("build", DEFAULT_SEED), ("build-v3", 20261118)):
+        build = commands.add_parser(command)
+        for field in ("input", "human", "candidates", "out"):
+            build.add_argument(f"--{field}", type=Path, required=True)
+        build.add_argument("--seed", type=int, default=seed)
+        build.add_argument(
+            "--tokens",
+            type=Path,
+            default=Path(__file__).resolve().parents[4] / "docs/brand/tokens.css",
+        )
     metrics = commands.add_parser("metrics")
     metrics.add_argument("--key", type=Path, required=True)
     metrics.add_argument("--judge", type=Path, required=True)
     metrics.add_argument("--family")
+    baseline = commands.add_parser("baseline-v3")
+    baseline.add_argument("--input", type=Path, required=True)
+    baseline.add_argument("--key", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "build":
+        if args.command in {"build", "build-v3"}:
             episodes, skipped = judge.load_episodes(args.input)
             if skipped:
                 raise BlindError("답이 없는 원본을 포함할 수 없다")
-            inputs, keys = generate(
-                episodes, judge.load_human(args.human), _rows(args.candidates), args.seed
+            suite_summary = None
+            if args.command == "build-v3":
+                from orbit.evalrunner import blind_judge_v3 as v3
+
+                inputs, keys, suite_summary = v3.generate(
+                    episodes, judge.load_human(args.human), _rows(args.candidates), args.seed
+                )
+            else:
+                inputs, keys = generate(
+                    episodes, judge.load_human(args.human), _rows(args.candidates), args.seed
+                )
+            write_bundle(
+                args.out, inputs, keys, args.tokens.read_text("utf-8"), args.seed, suite_summary
             )
-            write_bundle(args.out, inputs, keys, args.tokens.read_text("utf-8"), args.seed)
             print(json.dumps({"n": 60, "originals": 30, "mutations": 30, "seed": args.seed}))
+        elif args.command == "baseline-v3":
+            from orbit.evalrunner import blind_judge_v3 as v3
+
+            report = v3.score_key(_rows(args.key), v3.baseline_predictions(_rows(args.input)), 0.0)
+            report["baseline_rules"] = v3.BASELINE_RULES
+            print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
             judgments = judge.load_judgments(args.judge, args.family)
-            report = score_key(_rows(args.key), {k: v.grounded for k, v in judgments.items()})
+            keys = _rows(args.key)
+            predictions = {k: v.grounded for k, v in judgments.items()}
+            file = args.judge / judge.JUDGE_FILE if args.judge.is_dir() else args.judge
+            costs = total_cost(
+                [
+                    r
+                    for r in read_rows(file)
+                    if args.family is None or r.get("reviewer_family") == args.family
+                ]
+            )
+            if any(
+                row.get("kind")
+                in {
+                    "surface",
+                    "stale_value",
+                    "role_swap",
+                    "unsupported_addition",
+                    "false_action",
+                    "false_absence",
+                    "meaning_flip",
+                }
+                for row in keys
+            ):
+                from orbit.evalrunner import blind_judge_v3 as v3
+
+                report = v3.score_key(keys, predictions, costs)
+            else:
+                report = {**score_key(keys, predictions), "cost_usd": costs}
             print(json.dumps(report, ensure_ascii=False, indent=2))
     except (BlindError, judge.JudgeError, OSError) as exc:
         print(str(exc), file=sys.stderr)
