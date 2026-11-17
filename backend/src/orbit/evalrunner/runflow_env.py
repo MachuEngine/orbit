@@ -16,6 +16,7 @@
   실패한 호출은 세지 않는다(적용 안 된 호출이다). 한계: 적용된 뒤 오류로 기록된 호출은 세지 못한다.
 """
 
+import asyncio
 import logging
 import random
 import re
@@ -49,6 +50,11 @@ from orbit.records.deletion import CHECKPOINT_TABLES
 from orbit.records.runs import list_messages
 
 logger = logging.getLogger(__name__)
+
+# 취소 처리의 finally에서도 새 기한을 둔다. 바깥 기한은 이미 만료됐을 수 있다(ADR-0034).
+RESOURCE_RELEASE_SECONDS = 1.0
+RESOURCE_CLOSE_SECONDS = 1.0
+ENV_CLOSE_SECONDS = 5.0
 
 _ACTION = TypeAdapter(Annotated[WriteAction, Field(discriminator="kind")])
 
@@ -186,6 +192,7 @@ class RunflowEnvironment:
         self._conninfo = url.set(drivername="postgresql").render_as_string(hide_password=False)
         self._db: AsyncDatabase | None = None
         self._locks: dict[uuid.UUID, psycopg.AsyncConnection[Any]] = {}
+        self._connecting: set[uuid.UUID] = set()
 
     @property
     def db(self) -> AsyncDatabase:
@@ -194,11 +201,23 @@ class RunflowEnvironment:
         return self._db
 
     async def aclose(self) -> None:
-        for ws in list(self._locks):
-            await self._release(ws)
-        if self._db is not None:
-            await self._db.dispose()
-            self._db = None
+        cancelled = False
+        try:
+            async with asyncio.timeout(ENV_CLOSE_SECONDS):
+                for ws in list(self._locks):
+                    await self._release(ws)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        finally:
+            if self._db is not None:
+                db, self._db = self._db, None
+                try:
+                    async with asyncio.timeout(RESOURCE_CLOSE_SECONDS):
+                        await db.dispose()
+                except Exception:
+                    if not cancelled:
+                        raise
 
     # ------------------------------------------------------------ 준비
 
@@ -226,8 +245,12 @@ class RunflowEnvironment:
                     ),
                     {"id": conversation_id, "ws": workspace_id, "now": now},
                 )
-        except BaseException:
-            await self._release(workspace_id)
+        except BaseException as exc:
+            try:
+                await self._release(workspace_id)
+            except Exception:
+                if not isinstance(exc, asyncio.CancelledError):
+                    raise
             raise
         return EpisodeDatabase(
             db=self.db,
@@ -238,7 +261,14 @@ class RunflowEnvironment:
         )
 
     async def _acquire(self, workspace_id: uuid.UUID) -> None:
-        conn = await psycopg.AsyncConnection.connect(self._conninfo, autocommit=True)
+        if workspace_id in self._locks or workspace_id in self._connecting:
+            raise EpisodeInUse(f"같은 환경에서 이미 준비 중이다: workspace_id={workspace_id}")
+        self._connecting.add(workspace_id)
+        try:
+            conn = await psycopg.AsyncConnection.connect(self._conninfo, autocommit=True)
+        finally:
+            self._connecting.discard(workspace_id)
+        self._locks[workspace_id] = conn  # 닫기에 실패해도 aclose가 한 번 더 정리할 수 있다.
         try:
             row = await (
                 await conn.execute(
@@ -246,26 +276,45 @@ class RunflowEnvironment:
                     (lock_key(workspace_id),),
                 )
             ).fetchone()
-        except BaseException:
-            await conn.close()
+        except BaseException as exc:
+            try:
+                await self._close_lock(workspace_id, conn)
+            except Exception:
+                if not isinstance(exc, asyncio.CancelledError):
+                    raise
             raise
         if row is None or not row[0]:
-            await conn.close()
+            await self._close_lock(workspace_id, conn)
             raise EpisodeInUse(
                 f"같은 시드의 에피소드가 다른 프로세스에서 실행 중이다: workspace_id={workspace_id}"
             )
-        self._locks[workspace_id] = conn
 
     async def _release(self, workspace_id: uuid.UUID) -> None:
-        conn = self._locks.pop(workspace_id, None)
+        conn = self._locks.get(workspace_id)
         if conn is None:
             return
+        cancelled = False
         try:
-            await conn.execute(
-                "SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (lock_key(workspace_id),)
-            )
+            async with asyncio.timeout(RESOURCE_RELEASE_SECONDS):
+                await conn.execute(
+                    "SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (lock_key(workspace_id),)
+                )
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            await conn.close()  # 연결을 닫으면 세션 잠금도 풀린다
+            try:
+                await self._close_lock(workspace_id, conn)  # 연결을 닫으면 세션 잠금도 풀린다
+            except Exception:
+                if not cancelled:
+                    raise
+
+    async def _close_lock(
+        self, workspace_id: uuid.UUID, conn: psycopg.AsyncConnection[Any]
+    ) -> None:
+        async with asyncio.timeout(RESOURCE_CLOSE_SECONDS):
+            await conn.close()
+        self._locks.pop(workspace_id, None)
 
     # ------------------------------------------------------------ 관찰
 
@@ -334,10 +383,18 @@ class RunflowEnvironment:
 
     async def cleanup(self, database: EpisodeDatabase) -> None:
         """워크스페이스와 이 워크스페이스 run들의 체크포인트 행을 지우고 잠금을 푼다."""
+        cancelled = False
         try:
             await self._purge(database.workspace_id)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            await self._release(database.workspace_id)
+            try:
+                await self._release(database.workspace_id)
+            except Exception:
+                if not cancelled:
+                    raise
 
     async def _purge(self, ws: uuid.UUID) -> None:
         """워크스페이스 ID 조건으로 워크스페이스(CASCADE)와 그 run들의 체크포인트를 지운다."""
