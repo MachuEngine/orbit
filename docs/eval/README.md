@@ -16,7 +16,7 @@
 | ID | 날짜 | 평가 | 규모 | 핵심 결과 | 결정·상태 | 상세 | 원본 (`runs/` 기준) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | E00 | 2026-11-15 | v0 dev 기준 비교와 원인 ablation (`facts-v1`, `reasoning-rt`) | v0 dev 36문항 × 3회 | 수치를 문서 표로 남기지 않았다 (출처 확인 필요) | v1 평가셋으로 대체 | ADR-0023 §10 | `eval-1/`, `eval-2/`, `ablation-1/` |
-| D01 | 2026-11-16 | 평가셋 v1 생성·자동 검수·사람 검수·봉인 | 과제 240 → 218 (dev 88 / test 130), 검색 질의 180 → 133 (dev 55 / test 78) | 사람 검수 제외 과제 22, 검색 47. 표현 변형 검수 문제 0건. 자동 검수 약 $0.33 | 봉인 완료 (test 130문항·102묶음) | ADR-0026 §6·§8 | `eval/datasets/orbit-eval/v1/` (저장소) |
+| D01 | 2026-11-16 | 평가셋 v1 생성·자동 검수·사람 검수·봉인 | 과제 240 → 218 (dev 88 / test 130), 검색 질의 180 → 133 (dev 55 / test 78) | 본문 7,022개를 LLM 3계열이 작성($1.75). LLM Judge 자동 검수 372항목 중 54항목 표시($0.33). 사람 검수 제외 과제 22, 검색 47. 표현 변형 검수 문제 0건 | 봉인 완료 (test 130문항·102묶음) | ADR-0026 §6·§8, results-v1 "평가셋 구축에 쓴 LLM" | `eval/datasets/orbit-eval/v1/` (저장소) |
 | R01 | 2026-11-17 | 검색 방식 비교 (메일만) | test 51질의·19묶음, 메일함 200/1,000/5,000 | 5,000통 R@10: vector 0.71, hybrid 0.69, bm25 0.67, keyword 0.47, gmail_search 0.14 | 방식 재선정 안 함 (test 선택 편향) | results-v1 "검색 세트 test 결과" | `retrieval/test-openai-v1.json`. dev는 `retrieval/dev-openai-v1.json` (dev 수치는 문서화 안 됨) |
 | B01 | 2026-11-17 | dev 기준선 | 88과제 × 3회 | luna · react · 색인 끔 0.49 [0.39, 0.59], assistant_v0 0.42 | 비교 기준 | results-v1 "dev 설정 비교" | `baseline-v1/` |
 | M01 | 2026-11-17 | dev 모델 비교 | 88 × 3 | haiku 0.67 (+0.186), gemini-3.5-flash-lite 0.39 (−0.102, 답할 수 없는 질문 환각률 0.24) | haiku는 비용 약 6배 | results-v1 "dev 설정 비교" | `models-v1/` |
