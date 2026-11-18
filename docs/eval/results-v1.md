@@ -321,6 +321,467 @@ Lite는 false_action에서 재시도 후에도 파싱하지 못한 1건이 있�
 | `test-v1/haiku.jsonl` | `4c66f201a5e1da2ed4591ba8b7994fed5a8955c2c899c36ceb229290bef28a62` | `fc53397f04801ea4a304b82742cea860b3453b68ed244658baaba5a3af4dc92c` |
 | `test-v1/gemini.jsonl` | `c682835973991c97138bcc7870711e1bd828515876826f13714235a45f4ac4dd` | `5604cb9dd029f0e72c630ff862c36e2fc7d12b1d4c616fa34375de5decc8a5ab` |
 
+## 색인 켬 기준 재비교
+
+2026-11-18 시작. 기준은 기존 Luna react의 색인 켬 원본을 재사용했다. 새 후보는 dev 88과제×3회(73묶음)를 모두 완료하거나 비용 때문에 건너뛴 뒤 test 130과제×1회(102묶음)를 순차 실행했다. seed 0, 에피소드 예산 50단계·200,000토큰·120초, 메일 색인·임베딩 캐시는 기존 설정을 따른다. CI는 기존 `stats`의 과제 묶음 bootstrap 10,000회·seed 0·95% 구간이다. 이 비교는 기준 설정이나 주 성공 판정을 바꾸지 않는다.
+
+### dev 재비교
+
+| 설정 (모두 색인 켬) | 성공률 [95% CI] | Luna 대비 짝 차이 [95% CI] | 유효 과제 / 불채점 에피소드 | 공통 쌍 / 미짝 후보 / 미짝 기준 | pass^3 | 본 실행 LLM USD | 성공 1건당 USD | 지연 p50 / p95 (초) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Luna react (기준) | 0.644 [0.544, 0.736] | 0.000 [0.000, 0.000] | 88 / 0 | 88 / 0 / 0 | 0.5 | 0.19830449 | 0.0011665 | 6.267 / 13.975 |
+| Haiku 5.5 react | 0.617 [0.511, 0.723] | -0.027 [-0.154, 0.100] | 88 / 0 | 88 / 0 / 0 | 0.53409091 | 1.0099416 | 0.00619596 | 6.372 / 16.777 |
+| Flash 3.6 react | 미실행 (추정 상한 초과) | — | — | — | — | — | — | — |
+| Lite 2.5 react | 미실행 (추정 비용 미상) | — | — | — | — | — | — | — |
+| Luna fixed | 0.670 [0.566, 0.769] | 0.027 [-0.049, 0.091] | 88 / 0 | 88 / 0 / 0 | 0.57954545 | 0.16208692 | 0.00091575 | 6.99 / 16.327 |
+| Luna plan | 미실행 (추정 비용 미상) | — | — | — | — | — | — | — |
+
+짝 차이는 후보−기준이다. 불채점은 기존 stats 규칙대로 성공률 분모에서 제외하고 수를 표시했다. 비용 열은 본 실행의 기록 비용이며 사전 추정·임베딩은 아래 실행 비용 표에 분리했다. 미실행 후보를 기준 비교에 포함하지 않는다.
+
+### dev: 모델 × 색인 2×2
+
+| 모델 | 색인 끔 성공률 [95% CI] | 색인 켬 성공률 [95% CI] |
+| --- | --- | --- |
+| Luna | 0.489 [0.386, 0.592] | 0.644 [0.544, 0.736] |
+| Haiku 5.5 | 0.674 [0.568, 0.777] | 0.617 [0.511, 0.723] |
+
+Haiku 내 색인 켬−끔은 -0.057 [-0.104, -0.015]다. Luna와 Haiku의 색인 끔 원본은 기존 실행이므로 코드 SHA·실행 시점 차이가 남고, 이 표만으로 모든 모델·패턴의 상호작용을 일반화하지 않는다.
+
+<details><summary>dev 보조 지표 전열 (기존 stats 출력)</summary>
+
+행 이름은 `stats` JSON 경로다. 비율은 0~1, `*_ms_*`는 밀리초다. `—`는 해당 항목 없음이며 실패 유형의 누락 키는 0건이다. 상세 정의와 해석 한계는 ADR-0029 §2와 이 문서의 기존 보조 지표 절을 따른다.
+
+| 지표 | Luna react (기준) | Haiku 5.5 react | Luna fixed |
+| --- | --- | --- | --- |
+| accuracy_extra.multi_turn.available | true | true | true |
+| accuracy_extra.multi_turn.episodes | 27 | 27 | 27 |
+| accuracy_extra.multi_turn.success_rate | 0.81481481 | 0.81481481 | 0.85185185 |
+| accuracy_extra.write_fields.available | true | true | true |
+| accuracy_extra.write_fields.by_field.attendees.matched | 6 | 6 | 0 |
+| accuracy_extra.write_fields.by_field.attendees.rate | 1 | 1 | 0 |
+| accuracy_extra.write_fields.by_field.attendees.total | 6 | 6 | 6 |
+| accuracy_extra.write_fields.by_field.location.matched | 6 | 6 | 0 |
+| accuracy_extra.write_fields.by_field.location.rate | 1 | 1 | 0 |
+| accuracy_extra.write_fields.by_field.location.total | 6 | 6 | 6 |
+| accuracy_extra.write_fields.by_field.recipient.matched | 25 | 27 | 27 |
+| accuracy_extra.write_fields.by_field.recipient.rate | 0.92592593 | 1 | 1 |
+| accuracy_extra.write_fields.by_field.recipient.total | 27 | 27 | 27 |
+| accuracy_extra.write_fields.by_field.time.matched | 16 | 22 | 7 |
+| accuracy_extra.write_fields.by_field.time.rate | 0.59259259 | 0.81481481 | 0.25925926 |
+| accuracy_extra.write_fields.by_field.time.total | 27 | 27 | 27 |
+| accuracy_extra.write_fields.by_field.title.matched | 6 | 6 | 0 |
+| accuracy_extra.write_fields.by_field.title.rate | 1 | 1 | 0 |
+| accuracy_extra.write_fields.by_field.title.total | 6 | 6 | 6 |
+| accuracy_extra.write_fields.episodes | 63 | 63 | 63 |
+| ambiguity_ignored_by_reading.0 | 7 | 6 | 4 |
+| ambiguity_ignored_by_reading.1 | 4 | 7 | 3 |
+| ambiguity_ignored_by_reading.none | 4 | 2 | 6 |
+| answer_kind_rate | 0.07575758 | 0.04924242 | 0.03787879 |
+| efficiency.connector_calls_per_episode | 3.25 | 4.27272727 | 3.33333333 |
+| efficiency.cost_per_success_usd | 0.0011665 | 0.00619596 | 0.00091575 |
+| efficiency.cost_total_usd | 0.19830449 | 1.0099416 | 0.16208692 |
+| efficiency.episodes_cost_unknown | 0 | 0 | 0 |
+| efficiency.episodes_with_cost | 264 | 264 | 264 |
+| efficiency.latency_ms_p50 | 6267 | 6372 | 6990 |
+| efficiency.latency_ms_p95 | 13975 | 16777 | 16327 |
+| efficiency.successes_with_cost | 170 | 163 | 177 |
+| efficiency.tool_calls_per_episode | 1.78409091 | 2.375 | 1.74242424 |
+| failure_distribution.ambiguity_ignored | 15 | 15 | 13 |
+| failure_distribution.answer_format | 2 | 11 | 2 |
+| failure_distribution.answer_kind | 20 | 13 | 10 |
+| failure_distribution.unexpected_state_change | 4 | 3 | 7 |
+| failure_distribution.unneeded_clarify | 5 | 5 | 6 |
+| failure_distribution.wrong_answer | 30 | 50 | 29 |
+| failure_distribution.wrong_state_change | 18 | 4 | 20 |
+| grounding.abstention.abstain_rate | 0.9047619 | 0.85714286 | 0.95238095 |
+| grounding.abstention.answerable_episodes | 150 | 150 | 150 |
+| grounding.abstention.available | true | true | true |
+| grounding.abstention.hallucination_rate | 0.0952381 | 0 | 0 |
+| grounding.abstention.other_rate | 0 | 0.14285714 | 0.04761905 |
+| grounding.abstention.over_refusal_rate | 0.04666667 | 0 | 0.06 |
+| grounding.abstention.unanswerable_episodes | 21 | 21 | 21 |
+| grounding.citation.available | true | true | true |
+| grounding.citation.episode_mean_precision | 0.98697917 | 0.97709924 | 0.9973545 |
+| grounding.citation.episode_mean_recall | 0.66770833 | 0.70694444 | 0.65381944 |
+| grounding.citation.episodes | 144 | 144 | 144 |
+| grounding.citation.episodes_without_structured_answer | 1 | 11 | 0 |
+| grounding.citation.precision | 0.98125 | 0.95402299 | 0.99354839 |
+| grounding.citation.recall | 0.60852713 | 0.64341085 | 0.59689922 |
+| grounding.fact_support.available | true | true | true |
+| grounding.fact_support.by_kind.amount.facts | 20 | 48 | 20 |
+| grounding.fact_support.by_kind.amount.grounded | 20 | 48 | 20 |
+| grounding.fact_support.by_kind.amount.rate | 1 | 1 | 1 |
+| grounding.fact_support.by_kind.date.facts | 203 | 497 | 195 |
+| grounding.fact_support.by_kind.date.grounded | 202 | 493 | 194 |
+| grounding.fact_support.by_kind.date.rate | 0.99507389 | 0.99195171 | 0.99487179 |
+| grounding.fact_support.by_kind.email.facts | — | 23 | — |
+| grounding.fact_support.by_kind.email.grounded | — | 23 | — |
+| grounding.fact_support.by_kind.email.rate | — | 1 | — |
+| grounding.fact_support.by_kind.name.facts | 67 | 177 | 66 |
+| grounding.fact_support.by_kind.name.grounded | 67 | 177 | 66 |
+| grounding.fact_support.by_kind.name.rate | 1 | 1 | 1 |
+| grounding.fact_support.by_kind.number.facts | 66 | 166 | 49 |
+| grounding.fact_support.by_kind.number.grounded | 63 | 163 | 46 |
+| grounding.fact_support.by_kind.number.rate | 0.95454545 | 0.98192771 | 0.93877551 |
+| grounding.fact_support.by_kind.time.facts | 230 | 577 | 219 |
+| grounding.fact_support.by_kind.time.grounded | 214 | 524 | 204 |
+| grounding.fact_support.by_kind.time.rate | 0.93043478 | 0.90814558 | 0.93150685 |
+| grounding.fact_support.episode_mean_support | 0.9749192 | 0.96000556 | 0.97651515 |
+| grounding.fact_support.episodes | 264 | 264 | 264 |
+| grounding.fact_support.episodes_with_facts | 221 | 258 | 220 |
+| grounding.fact_support.episodes_with_ungrounded_fact | 15 | 27 | 10 |
+| grounding.fact_support.facts | 586 | 1488 | 549 |
+| grounding.fact_support.grounded | 566 | 1428 | 530 |
+| grounding.fact_support.support_rate | 0.96587031 | 0.95967742 | 0.96539162 |
+| model_mismatch_episodes | 0 | 0 | 0 |
+| robustness.fault.available | true | true | true |
+| robustness.fault.episodes | 18 | 18 | 18 |
+| robustness.fault.failed_after_fault_episodes | 6 | 7 | 6 |
+| robustness.fault.hallucination_rate.available | true | true | true |
+| robustness.fault.hallucination_rate.n | 6 | 7 | 6 |
+| robustness.fault.hallucination_rate.rate | 0 | 0.14285714 | 0 |
+| robustness.fault.honest_report_rate.available | true | true | true |
+| robustness.fault.honest_report_rate.n | 6 | 7 | 6 |
+| robustness.fault.honest_report_rate.rate | 1 | 0.71428571 | 1 |
+| robustness.fault.non_fault_success_rate | 0.65447154 | 0.61788618 | 0.69105691 |
+| robustness.fault.success_rate | 0.5 | 0.61111111 | 0.38888889 |
+| robustness.paraphrase.accuracy_gap_original_minus_paraphrase | 0.07407407 | 0 | 0.07407407 |
+| robustness.paraphrase.answer_agreement | 0.85185185 | 0.69565217 | 0.92592593 |
+| robustness.paraphrase.answer_agreement_pairs | 27 | 23 | 27 |
+| robustness.paraphrase.available | true | true | true |
+| robustness.paraphrase.original_success_rate | 0.88888889 | 0.55555556 | 0.96296296 |
+| robustness.paraphrase.pairs | 27 | 27 | 27 |
+| robustness.paraphrase.paraphrase_success_rate | 0.81481481 | 0.55555556 | 0.88888889 |
+| robustness.paraphrase.success_agreement | 0.85185185 | 0.7037037 | 0.92592593 |
+| state_diff_mismatch_episodes | 22 | 7 | 27 |
+| tools.argument_validity.available | true | true | true |
+| tools.argument_validity.invalid_by_kind.invalid_arguments | 1 | — | — |
+| tools.argument_validity.invalid_by_kind.unknown_handle | 1 | — | 2 |
+| tools.argument_validity.invalid_calls | 2 | 0 | 2 |
+| tools.argument_validity.tool_calls | 713 | 854 | 714 |
+| tools.argument_validity.validity_rate | 0.99719495 | 1 | 0.99719888 |
+| tools.excess_calls.available | true | true | true |
+| tools.excess_calls.episodes | 246 | 246 | 246 |
+| tools.excess_calls.mean_calls | 1.77642276 | 2.3699187 | 1.74390244 |
+| tools.excess_calls.mean_excess_calls | 0.84552846 | 1.41869919 | 0.81707317 |
+| tools.excess_calls.mean_min_calls | 0.95121951 | 0.95121951 | 0.95121951 |
+| tools.excess_calls.share_with_excess | 0.55691057 | 0.59756098 | 0.57317073 |
+| tools.selection.available | true | true | true |
+| tools.selection.calls_counted | 453 | 606 | 442 |
+| tools.selection.episode_mean_recall | 0.80420054 | 0.8401084 | 0.73306233 |
+| tools.selection.episodes | 246 | 246 | 246 |
+| tools.selection.recall | 0.75268817 | 0.80645161 | 0.6827957 |
+| tools.selection.recall_by_area.calendar.hit | 108 | 108 | 108 |
+| tools.selection.recall_by_area.calendar.need | 108 | 108 | 108 |
+| tools.selection.recall_by_area.calendar.rate | 1 | 1 | 1 |
+| tools.selection.recall_by_area.document.hit | 19 | 23 | 21 |
+| tools.selection.recall_by_area.document.need | 24 | 24 | 24 |
+| tools.selection.recall_by_area.document.rate | 0.79166667 | 0.95833333 | 0.875 |
+| tools.selection.recall_by_area.mail.hit | 101 | 107 | 75 |
+| tools.selection.recall_by_area.mail.need | 165 | 165 | 165 |
+| tools.selection.recall_by_area.mail.rate | 0.61212121 | 0.64848485 | 0.45454545 |
+| tools.selection.recall_by_area.reminder.hit | 8 | 9 | 12 |
+| tools.selection.recall_by_area.reminder.need | 21 | 21 | 21 |
+| tools.selection.recall_by_area.reminder.rate | 0.38095238 | 0.42857143 | 0.57142857 |
+| tools.selection.recall_by_area.write.hit | 44 | 53 | 38 |
+| tools.selection.recall_by_area.write.need | 54 | 54 | 54 |
+| tools.selection.recall_by_area.write.rate | 0.81481481 | 0.98148148 | 0.7037037 |
+| tools.selection.wrong_area_call_rate | 0.06622517 | 0.1650165 | 0.05429864 |
+| unneeded_clarify_rate | 0.0203252 | 0.0203252 | 0.02439024 |
+| write_tasks.episodes | 63 | 63 | 63 |
+| write_tasks.success_rate | 0.65079365 | 0.88888889 | 0.57142857 |
+| write_tasks.successes | 41 | 56 | 36 |
+
+</details>
+
+### test 재비교
+
+| 설정 (모두 색인 켬) | 성공률 [95% CI] | Luna 대비 짝 차이 [95% CI] | 유효 과제 / 불채점 에피소드 | 공통 쌍 / 미짝 후보 / 미짝 기준 | pass^3 | 본 실행 LLM USD | 성공 1건당 USD | 지연 p50 / p95 (초) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Luna react (기준) | 0.646 [0.551, 0.738] | 0.000 [0.000, 0.000] | 130 / 0 | 130 / 0 / 0 | — | 0.09187418 | 0.00109374 | 5.429 / 10.614 |
+| Haiku 5.5 react | 0.577 [0.481, 0.672] | -0.069 [-0.195, 0.054] | 130 / 0 | 130 / 0 / 0 | — | 0.5423378 | 0.00723117 | 6.914 / 16.436 |
+| Flash 3.6 react | 미실행 (추정 비용 미상) | — | — | — | — | — | — | — |
+| Lite 2.5 react | 미실행 (추정 비용 미상) | — | — | — | — | — | — | — |
+| Luna fixed | 0.631 [0.538, 0.722] | -0.015 [-0.085, 0.058] | 130 / 0 | 130 / 0 / 0 | — | 0.08118989 | 0.00099012 | 6.764 / 15.27 |
+| Luna plan | 0.469 [0.382, 0.556] | -0.177 [-0.270, -0.086] | 130 / 0 | 130 / 0 / 0 | — | ≥0.11035155 | 미상 | 9.416 / 31.224 |
+
+짝 차이는 후보−기준이다. 불채점은 기존 stats 규칙대로 성공률 분모에서 제외하고 수를 표시했다. 비용 열은 본 실행의 기록 비용이며 사전 추정·임베딩은 아래 실행 비용 표에 분리했다. 미실행 후보를 기준 비교에 포함하지 않는다.
+
+### test: 모델 × 색인 2×2
+
+| 모델 | 색인 끔 성공률 [95% CI] | 색인 켬 성공률 [95% CI] |
+| --- | --- | --- |
+| Luna | 0.454 [0.360, 0.549] | 0.646 [0.551, 0.738] |
+| Haiku 5.5 | 0.577 [0.481, 0.669] | 0.577 [0.481, 0.672] |
+
+Haiku 내 색인 켬−끔은 0.000 [-0.066, 0.070]다. Luna와 Haiku의 색인 끔 원본은 기존 실행이므로 코드 SHA·실행 시점 차이가 남고, 이 표만으로 모든 모델·패턴의 상호작용을 일반화하지 않는다.
+
+<details><summary>test 보조 지표 전열 (기존 stats 출력)</summary>
+
+행 이름은 `stats` JSON 경로다. 비율은 0~1, `*_ms_*`는 밀리초다. `—`는 해당 항목 없음이며 실패 유형의 누락 키는 0건이다. 상세 정의와 해석 한계는 ADR-0029 §2와 이 문서의 기존 보조 지표 절을 따른다.
+
+| 지표 | Luna react (기준) | Haiku 5.5 react | Luna fixed | Luna plan |
+| --- | --- | --- | --- | --- |
+| accuracy_extra.multi_turn.available | true | true | true | true |
+| accuracy_extra.multi_turn.episodes | 9 | 9 | 9 | 9 |
+| accuracy_extra.multi_turn.success_rate | 0.66666667 | 0.88888889 | 1 | 0.55555556 |
+| accuracy_extra.write_fields.available | true | true | true | true |
+| accuracy_extra.write_fields.by_field.attendees.matched | 5 | 5 | 1 | 1 |
+| accuracy_extra.write_fields.by_field.attendees.rate | 1 | 1 | 0.2 | 0.2 |
+| accuracy_extra.write_fields.by_field.attendees.total | 5 | 5 | 5 | 5 |
+| accuracy_extra.write_fields.by_field.location.matched | 5 | 5 | 1 | 1 |
+| accuracy_extra.write_fields.by_field.location.rate | 1 | 1 | 0.2 | 0.2 |
+| accuracy_extra.write_fields.by_field.location.total | 5 | 5 | 5 | 5 |
+| accuracy_extra.write_fields.by_field.recipient.matched | 8 | 9 | 9 | 4 |
+| accuracy_extra.write_fields.by_field.recipient.rate | 0.88888889 | 1 | 1 | 0.44444444 |
+| accuracy_extra.write_fields.by_field.recipient.total | 9 | 9 | 9 | 9 |
+| accuracy_extra.write_fields.by_field.time.matched | 8 | 8 | 3 | 2 |
+| accuracy_extra.write_fields.by_field.time.rate | 0.61538462 | 0.61538462 | 0.23076923 | 0.15384615 |
+| accuracy_extra.write_fields.by_field.time.total | 13 | 13 | 13 | 13 |
+| accuracy_extra.write_fields.by_field.title.matched | 5 | 5 | 1 | 1 |
+| accuracy_extra.write_fields.by_field.title.rate | 1 | 1 | 0.2 | 0.2 |
+| accuracy_extra.write_fields.by_field.title.total | 5 | 5 | 5 | 5 |
+| accuracy_extra.write_fields.episodes | 24 | 24 | 24 | 24 |
+| ambiguity_ignored_by_reading.0 | 2 | 2 | 2 | 3 |
+| ambiguity_ignored_by_reading.1 | 2 | 4 | 5 | — |
+| ambiguity_ignored_by_reading.none | 5 | — | 2 | 6 |
+| answer_kind_rate | 0.03076923 | 0.03076923 | 0.02307692 | 0.04615385 |
+| efficiency.connector_calls_per_episode | 2.72307692 | 4.36153846 | 3.07692308 | 3.38461538 |
+| efficiency.cost_per_success_usd | 0.00109374 | 0.00723117 | 0.00099012 | 0.00183919 |
+| efficiency.cost_total_usd | 0.09187418 | 0.5423378 | 0.08118989 | 0.11035155 |
+| efficiency.episodes_cost_unknown | 0 | 0 | 0 | 5 |
+| efficiency.episodes_with_cost | 130 | 130 | 130 | 125 |
+| efficiency.latency_ms_p50 | 5429 | 6914 | 6764 | 9416 |
+| efficiency.latency_ms_p95 | 10614 | 16436 | 15270 | 31224 |
+| efficiency.successes_with_cost | 84 | 75 | 82 | 60 |
+| efficiency.tool_calls_per_episode | 1.70769231 | 2.78461538 | 2.00769231 | 2.33076923 |
+| failure_distribution.ambiguity_ignored | 9 | 6 | 9 | 9 |
+| failure_distribution.answer_format | 1 | 9 | 1 | 0 |
+| failure_distribution.answer_kind | 4 | 4 | 3 | 6 |
+| failure_distribution.unexpected_state_change | 3 | 1 | 2 | 1 |
+| failure_distribution.unneeded_clarify | 0 | 3 | 0 | 0 |
+| failure_distribution.wrong_answer | 22 | 27 | 25 | 36 |
+| failure_distribution.wrong_state_change | 7 | 5 | 8 | 17 |
+| grounding.abstention.abstain_rate | 1 | 0.88888889 | 1 | 1 |
+| grounding.abstention.answerable_episodes | 85 | 85 | 85 | 85 |
+| grounding.abstention.available | true | true | true | true |
+| grounding.abstention.hallucination_rate | 0 | 0 | 0 | 0 |
+| grounding.abstention.other_rate | 0 | 0.11111111 | 0 | 0 |
+| grounding.abstention.over_refusal_rate | 0.12941176 | 0.02352941 | 0.08235294 | 0.15294118 |
+| grounding.abstention.unanswerable_episodes | 9 | 9 | 9 | 9 |
+| grounding.citation.available | true | true | true | true |
+| grounding.citation.episode_mean_precision | 0.98974359 | 0.99061033 | 0.94362745 | 0.90632319 |
+| grounding.citation.episode_mean_recall | 0.51440329 | 0.59382716 | 0.55144033 | 0.47901235 |
+| grounding.citation.episodes | 81 | 81 | 81 | 81 |
+| grounding.citation.episodes_without_structured_answer | 1 | 6 | 1 | 0 |
+| grounding.citation.precision | 0.97468354 | 0.97894737 | 0.91954023 | 0.85057471 |
+| grounding.citation.recall | 0.47530864 | 0.57407407 | 0.49382716 | 0.45679012 |
+| grounding.fact_support.available | true | true | true | true |
+| grounding.fact_support.by_kind.amount.facts | 18 | 41 | 20 | 17 |
+| grounding.fact_support.by_kind.amount.grounded | 18 | 41 | 20 | 17 |
+| grounding.fact_support.by_kind.amount.rate | 1 | 1 | 1 | 1 |
+| grounding.fact_support.by_kind.date.facts | 99 | 338 | 105 | 109 |
+| grounding.fact_support.by_kind.date.grounded | 97 | 326 | 102 | 108 |
+| grounding.fact_support.by_kind.date.rate | 0.97979798 | 0.96449704 | 0.97142857 | 0.99082569 |
+| grounding.fact_support.by_kind.email.facts | — | 11 | — | 4 |
+| grounding.fact_support.by_kind.email.grounded | — | 11 | — | 4 |
+| grounding.fact_support.by_kind.email.rate | — | 1 | — | 1 |
+| grounding.fact_support.by_kind.name.facts | 34 | 100 | 36 | 46 |
+| grounding.fact_support.by_kind.name.grounded | 34 | 100 | 36 | 46 |
+| grounding.fact_support.by_kind.name.rate | 1 | 1 | 1 | 1 |
+| grounding.fact_support.by_kind.number.facts | 47 | 106 | 42 | 59 |
+| grounding.fact_support.by_kind.number.grounded | 41 | 105 | 37 | 51 |
+| grounding.fact_support.by_kind.number.rate | 0.87234043 | 0.99056604 | 0.88095238 | 0.86440678 |
+| grounding.fact_support.by_kind.time.facts | 90 | 274 | 83 | 96 |
+| grounding.fact_support.by_kind.time.grounded | 79 | 253 | 73 | 90 |
+| grounding.fact_support.by_kind.time.rate | 0.87777778 | 0.92335766 | 0.87951807 | 0.9375 |
+| grounding.fact_support.episode_mean_support | 0.955 | 0.95483582 | 0.95555556 | 0.96847604 |
+| grounding.fact_support.episodes | 130 | 130 | 130 | 130 |
+| grounding.fact_support.episodes_with_facts | 110 | 127 | 115 | 109 |
+| grounding.fact_support.episodes_with_ungrounded_fact | 9 | 18 | 10 | 8 |
+| grounding.fact_support.facts | 288 | 870 | 286 | 331 |
+| grounding.fact_support.grounded | 269 | 836 | 268 | 316 |
+| grounding.fact_support.support_rate | 0.93402778 | 0.96091954 | 0.93706294 | 0.95468278 |
+| model_mismatch_episodes | 0 | 0 | 0 | 0 |
+| robustness.fault.available | true | true | true | true |
+| robustness.fault.episodes | 14 | 14 | 14 | 14 |
+| robustness.fault.failed_after_fault_episodes | 7 | 5 | 8 | 7 |
+| robustness.fault.hallucination_rate.available | true | true | true | true |
+| robustness.fault.hallucination_rate.n | 7 | 5 | 8 | 7 |
+| robustness.fault.hallucination_rate.rate | 0 | 0 | 0 | 0 |
+| robustness.fault.honest_report_rate.available | true | true | true | true |
+| robustness.fault.honest_report_rate.n | 7 | 5 | 8 | 7 |
+| robustness.fault.honest_report_rate.rate | 0.85714286 | 0.8 | 0.875 | 0.85714286 |
+| robustness.fault.non_fault_success_rate | 0.67241379 | 0.5862069 | 0.6637931 | 0.48275862 |
+| robustness.fault.success_rate | 0.42857143 | 0.5 | 0.35714286 | 0.35714286 |
+| robustness.paraphrase.accuracy_gap_original_minus_paraphrase | -0.07142857 | 0.14285714 | 0.07142857 | -0.07142857 |
+| robustness.paraphrase.answer_agreement | 0.92857143 | 0.91666667 | 0.92857143 | 0.57142857 |
+| robustness.paraphrase.answer_agreement_pairs | 14 | 12 | 14 | 14 |
+| robustness.paraphrase.available | true | true | true | true |
+| robustness.paraphrase.original_success_rate | 0.71428571 | 0.64285714 | 0.78571429 | 0.5 |
+| robustness.paraphrase.pairs | 14 | 14 | 14 | 14 |
+| robustness.paraphrase.paraphrase_success_rate | 0.78571429 | 0.5 | 0.71428571 | 0.57142857 |
+| robustness.paraphrase.success_agreement | 0.92857143 | 0.85714286 | 0.92857143 | 0.64285714 |
+| state_diff_mismatch_episodes | 10 | 6 | 10 | 18 |
+| tools.argument_validity.available | true | true | true | true |
+| tools.argument_validity.invalid_by_kind.invalid_arguments | 1 | — | — | — |
+| tools.argument_validity.invalid_by_kind.unknown_handle | — | — | — | 1 |
+| tools.argument_validity.invalid_calls | 1 | 0 | 0 | 1 |
+| tools.argument_validity.tool_calls | 341 | 476 | 383 | 436 |
+| tools.argument_validity.validity_rate | 0.99706745 | 1 | 1 | 0.99770642 |
+| tools.excess_calls.available | true | true | true | true |
+| tools.excess_calls.episodes | 116 | 116 | 116 | 116 |
+| tools.excess_calls.mean_calls | 1.68965517 | 2.65517241 | 1.98275862 | 2.30172414 |
+| tools.excess_calls.mean_excess_calls | 0.78448276 | 1.74137931 | 1.0862069 | 1.39655172 |
+| tools.excess_calls.mean_min_calls | 0.9137931 | 0.9137931 | 0.9137931 | 0.9137931 |
+| tools.excess_calls.share_with_excess | 0.59482759 | 0.72413793 | 0.62931034 | 0.68103448 |
+| tools.selection.available | true | true | true | true |
+| tools.selection.calls_counted | 212 | 345 | 249 | 293 |
+| tools.selection.episode_mean_recall | 0.80578512 | 0.82506887 | 0.76859504 | 0.77961433 |
+| tools.selection.episodes | 121 | 121 | 121 | 121 |
+| tools.selection.recall | 0.75 | 0.78409091 | 0.70454545 | 0.70454545 |
+| tools.selection.recall_by_area.calendar.hit | 45 | 45 | 45 | 44 |
+| tools.selection.recall_by_area.calendar.need | 45 | 45 | 45 | 45 |
+| tools.selection.recall_by_area.calendar.rate | 1 | 1 | 1 | 0.97777778 |
+| tools.selection.recall_by_area.document.hit | 18 | 19 | 17 | 18 |
+| tools.selection.recall_by_area.document.need | 20 | 20 | 20 | 20 |
+| tools.selection.recall_by_area.document.rate | 0.9 | 0.95 | 0.85 | 0.9 |
+| tools.selection.recall_by_area.mail.hit | 49 | 53 | 42 | 54 |
+| tools.selection.recall_by_area.mail.need | 84 | 84 | 84 | 84 |
+| tools.selection.recall_by_area.mail.rate | 0.58333333 | 0.63095238 | 0.5 | 0.64285714 |
+| tools.selection.recall_by_area.reminder.hit | 3 | 2 | 6 | 0 |
+| tools.selection.recall_by_area.reminder.need | 7 | 7 | 7 | 7 |
+| tools.selection.recall_by_area.reminder.rate | 0.42857143 | 0.28571429 | 0.85714286 | 0 |
+| tools.selection.recall_by_area.write.hit | 17 | 19 | 14 | 8 |
+| tools.selection.recall_by_area.write.need | 20 | 20 | 20 | 20 |
+| tools.selection.recall_by_area.write.rate | 0.85 | 0.95 | 0.7 | 0.4 |
+| tools.selection.wrong_area_call_rate | 0.03301887 | 0.16521739 | 0.04016064 | 0.08532423 |
+| unneeded_clarify_rate | 0 | 0.02479339 | 0 | 0 |
+| write_tasks.episodes | 24 | 24 | 24 | 24 |
+| write_tasks.success_rate | 0.58333333 | 0.75 | 0.58333333 | 0.25 |
+| write_tasks.successes | 14 | 18 | 14 | 6 |
+
+</details>
+
+### Haiku의 주 점수와 정정 설명의 상호작용
+
+메일 사실 과제(dev 63에피소드)에서 새 Haiku 색인 켬의 wrong_answer 37건 중 33건은 최신 answer_facts와 구조화 답이 맞아도 must_not_contain 검사만 실패했다. 정정 전 값을 부정·비교 설명에 인용한 사례가 여기에 포함된다. 기존 Haiku 색인 끔 성공→새 색인 켬 실패 12건 중 11건도 이 검사만 실패했다. 최신 answer_facts 실패는 기존 Haiku 끔 9건, 새 켬 3건이다.
+
+이 집계는 옛 값의 문자열 출현을 문맥·부정과 관계없이 실패로 보는 기존 채점 규칙과 답변 방식의 상호작용을 보여 준다. 주 점수를 바꾸거나 사후에 성공으로 다시 세지 않았다. 색인으로 사실 검색 성능 자체가 악화됐다고 이 점수만으로 단정하지 않는다. 동일 과제·반복·묶음 및 색인 지문, 전체 완주와 정리 상태를 대조했으며 비교 무결성 문제는 찾지 못했다.
+
+출처: RUNS/complete-v1/haiku-index-diagnostic.json (SHA-256 fb95ee6d242ff997fb4abaebad0f8bb15f767c199208fa251cc8df2931411360). 원본 3개의 경로와 SHA는 이 파일에 있다.
+
+### 실행 비용과 상한
+
+| 분할 | 후보 | 본 실행 추정 USD | 추정 8건 지출 | 본 실행 지출 | LLM 합계 | 비용 미상 에피소드 | 임베딩 합계 | LLM 상한 | 상태 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| dev | haiku-index | 1.0877394 | 0.0329618 | 1.0099416 | 1.0429034 | 0 | 0.00000832 | 1.6 | completed |
+| dev | gflash36-index | ≥5.06273625 | ≥0.15341625 | 미실행 | ≥0.15341625 | 2 | 0.00000034 | 3.5 | skipped_estimate_over_cap |
+| dev | glite25-index | ≥0.20827356 | ≥0.00631132 | 미실행 | ≥0.00631132 | 3 | 0.00000044 | 0.9 | skipped_estimate_cost_unknown |
+| dev | fixed-index | 0.2112693 | 0.0064021 | 0.16208692 | 0.16848902 | 0 | 0.0000202 | 0.4 | completed |
+| dev | plan-index | ≥0.17403177 | ≥0.00527369 | 미실행 | ≥0.00527369 | 2 | 0 | 0.4 | skipped_estimate_cost_unknown |
+| test | haiku-index | 0.52981662 | 0.0326041 | 0.5423378 | 0.5749419 | 0 | 0.00001208 | 0.9 | completed |
+| test | gflash36-index | ≥1.79155641 | ≥0.11024962 | 미실행 | ≥0.11024962 | 2 | 0 | 1.8 | skipped_estimate_cost_unknown |
+| test | glite25-index | ≥0.1010529 | ≥0.00621864 | 미실행 | ≥0.00621864 | 2 | 0 | 0.5 | skipped_estimate_cost_unknown |
+| test | fixed-index | 0.07237523 | 0.00445386 | 0.08118989 | 0.08564375 | 0 | 0.0000216 | 0.2 | completed |
+| test | plan-index | 0.1112215 | 0.0068444 | ≥0.11035155 | ≥0.11719595 | 5 | 0.00000452 | 0.2 | completed_cost_unknown |
+
+B의 확인 가능한 LLM 비용 합계는 $2.270644이고 미기록 비용 에피소드는 16건이다. 미기록 비용은 0으로 간주하지 않으며 총 지출은 이 합계 이상이다. 임베딩 합계는 $0.00006750다. test 봉인 분할 호출은 사전 추정과 본 실행을 각각 세어 8회다. 각 사전 추정은 8건, 본 실행은 130건이다. Gemini·Haiku의 단가는 2026-11-18 OpenRouter 모델 API 스냅샷(`RUNS/complete-v1/model-prices-20261118.json`)을 따르며 입력/캐시/출력 MTok당 Haiku 0.10/0.01/0.50, Flash 0.75/0.075/3.75, Lite 0.10/0.01/0.40 USD다. Luna는 0.10/0.01/0.50이다.
+
+비용 미상 추정의 ≥값은 알려진 에피소드 비용만 선형 외삽한 추정치의 하한이며 실제 전체 실행 비용의 보장된 하한이 아니다. 총 비용을 확인할 수 없는 추정으로는 본 실행을 시작하지 않았다. 8건 추정치는 표본 오차가 있고 실제 비용은 토큰 사용량과 설정 단가로 계산한 기록값이다. 기존 러너의 누적 비용 검사는 에피소드 경계에서 수행하므로 사전 추정 비용과 여유분을 뺀 상한으로 본 실행을 시작했다. 임베딩은 추정과 본 실행을 합쳐 후보·분할당 $0.05 이하로 제한하고 최종 통계 파일로 확인했다.
+
+시작 직전 macOS Bash 3.2의 빈 배열 확장 오류로 Haiku dev 본 실행의 첫 시작이 실패했다. API·DB 진입 전 오류여서 비용은 0이며 로그를 `RUNS/complete-v1/launch-failure-bash-empty-array/`에 보존했다. 동일한 CLI 인자를 비지 않은 배열로 전달하도록 수정하고 완료된 사전 추정은 재사용했다.
+
+### 결정과 비교 한계
+
+Plan test는 130건을 완주했으나 5건의 비용이 미기록돼 completed_cost_unknown으로 구분했다. 추정 포함 관측 비용 하한은 $0.11719595이며 $0.20 상한 준수는 미검증이다. 원본 성공률에는 130건을 모두 쓰되 총 비용·성공 1건당 전체 비용은 확정하지 않았다. 기존 러너는 비용 미기록이 생기면 USD 누적 상한을 확인할 수 없어 총 토큰 상한을 방어로 쓰므로, 이 완주를 실제 지출 상한 검증으로 해석하지 않는다. 보조 지표의 efficiency.cost_per_success_usd는 비용이 관측된 성공만의 값이므로 전체 성공 1건당 비용과 구분한다.
+
+비용 누락 추정을 처음 만났을 때 감독을 중단한 뒤, 비용을 0으로 보지 않고 해당 후보의 본 실행을 생략하는 보수적 처리 절차를 추가했다. 추정은 재실행하지 않았다. 마지막 Plan test는 실행 자체가 이미 완료된 후 비용 완전성 검사에서 멈췄으므로, 원본·상태·행 수를 읽기 전용 검토하고 재실행 없이 비용 미상 완주로 마감했다.
+
+Google 추정의 비용 미기록은 dev 5건·test 4건이다. 그중 7건은 빈 최종 답·구조화 답 없음에도 run_status=succeeded로 끝나 answer_format 실패가 됐다. 나머지 Lite test 2건은 답 문장이 있었고 한 건은 성공이었다. 비용이 누락된 정확한 호출·재시도·제공자 응답은 저장 자료만으로 확정할 수 없다. Plan dev 추정의 비용 미기록 2건도 정상 종료 상태였으며, 본 실행을 시작하지 않았다.
+
+Google 상세 집계 출처: RUNS/complete-v1/google-estimate-diagnostic.json (SHA-256 69e4d58bc30e518bf8132808a43508db202077fd84fc97aef1c53d98a8c8a7f6).
+
+완료된 후보 비교 중 짝 차이 CI 전체가 0보다 큰 후보는 없었다. 기준 설정은 유지한다.
+
+이전 원본과 코드 SHA·전체 실험 비용/토큰 상한·가격 출처 날짜가 다르다. 설정 지문 전체 차이는 `RUNS/complete-v1/{dev,test}-<후보>.stats.json`의 `config_diff_vs_luna_index`에 남겼다. Haiku의 LLM 설정은 기존 Haiku와 가격 출처 날짜 외에 같고, 색인 지문은 기준과 같다. 새로운 Google 모델의 ID·단가·제공자 경로, fixed/plan의 패턴 및 내부 지문은 의도한 변경이다. test 반복 사용과 dev 다중 비교의 선택 편향, 코드·실행 시점 차이는 남는다. Flash 후보를 같은 Flash Judge로 채점하는 계획에는 자기 계열 편향 가능성이 있다. 이번 신규 Google 본 실행과 Judge 채점은 미완료이므로 해당 효과를 실측했다고 해석하지 않는다.
+
+### 새 원본과 재현 정보
+
+아래 경로는 `RUNS/` 기준이다. 코드 SHA는 12자리 축약이며 설정·파일 SHA-256은 전체 값이다. 본 실행 통계는 `complete-v1/{dev,test}-<후보>.stats.json`, 각 실행의 비용·시각·프로세스 기록은 같은 폴더의 `*.status.json`·`*.complete.json`에 있다.
+
+| 분할 | 파일 | 에피소드 | 코드 SHA | 설정 지문 | 파일 SHA-256 |
+| --- | --- | --- | --- | --- | --- |
+| dev | compare-v1/index-on.jsonl | 264 | fda3bf3ed748 | c5b09f479a94e5b8b8a93154c1484a74ff9040b3bcd2acdd008f289faf26302a | 5264d7cba29aced0b4e2e0f008d94e8926f71f75596f5547094a5eae400ec0d8 |
+| dev | compare-v2/haiku-index.jsonl | 264 | 35b95d6d75ea | fdc9457641061619e6914baebbd997b6bffde34e5974b6c47b69314b602f6a89 | 2052cdbc1b8d20391389b98dd985fa7e78cc668c29f04ba024d9298c42f12d2a |
+| dev | compare-v2/fixed-index.jsonl | 264 | 35b95d6d75ea | 413ade133cad707b3bd01ec579b19668a4a1dbbf04cee90e6ae22e6b559e915c | c820118d339d0a616f3865be6e6ff9e995a1f233b631325d36abd42b1c4e68da |
+| test | test-v1/luna-index.jsonl | 130 | fda3bf3ed748 | db2a048617122f6fefe03d5605adb0e70e423c74eda1cbf46b8bcbb0b11c55d8 | 261dfd10fd9f1e4bec655ae2c25be944a570df63bb3a0475620c810cc8ea946c |
+| test | test-v1/haiku-index.jsonl | 130 | 35b95d6d75ea | 947a0834e9315a220a27c3760aa20b22d09d8b7203abce516c10705a5aa274c9 | 2587ba7d943b1fdc37858fec316ec3dded5ee07c00a4208dd9991bf163ce4435 |
+| test | test-v1/fixed-index.jsonl | 130 | 35b95d6d75ea | dee17f87dd2d70e5f27264563e5bcc7f4f9321ac21cda9a0b5f185197809b35d | 7df786ff819d8c83e2fc347bcb7a16b406d575df538a519908f6a429638e9baa |
+| test | test-v1/plan-index.jsonl | 130 | 35b95d6d75ea | f50a08e1e00e15a12edc7e907469ba2d7a3adbaa692dfa105cdc19230a6eb039 | 8e1ccdbe450d8d6c793c84fcea65ff5a62f605f7f973e64c5af7e37d723a9834 |
+| dev | compare-v2/haiku-index.estimate.jsonl | 8 | 35b95d6d75ea | d865b50a1be2fe1808835911f69bbe70cedd02ccdeb7e83901ef6eb7922c3524 | 656da4b3d33672f1c8208c2f3ae959e28e1221cacaabc7af1fb9c9eeb2ab0796 |
+| dev | compare-v2/gflash36-index.estimate.jsonl | 8 | 35b95d6d75ea | 52f344b26baccd34b03e8bceaec97799875398ed3f47b7f4eb6130ddfd59ce4c | 0edc537c33dc9a51db89799d9351f8ee9565225e28839cd6c0fdc567da4eaec3 |
+| dev | compare-v2/glite25-index.estimate.jsonl | 8 | 35b95d6d75ea | 0584282c1512b30bd0bc5d03670a5d7290a7b14bf2b2891b14f62fb905f3c076 | cdf289b57dd210fa19979c88027a763ec180a0f77e9a6eb4d89af85c56919266 |
+| dev | compare-v2/fixed-index.estimate.jsonl | 8 | 35b95d6d75ea | 9835c61227ac1962894d550fa28c360e574de9af9fff36c0adc333d97ab8e330 | 9deece592a13d94d6c7169ae65622c546c2b177ed75fb3b18e7b2ba167705ce6 |
+| dev | compare-v2/plan-index.estimate.jsonl | 8 | 35b95d6d75ea | 39874cb12383aea7b393ce0e57ba1710d382bf74e3be548d79187c10693ed699 | f4c3f1addacb29ad20164d085d74b7478891623d0d80ed0534862078dd4e52a8 |
+| test | test-v1/haiku-index.estimate.jsonl | 8 | 35b95d6d75ea | a19fc43b3f831a1b0b5c82320f4fc47c6f1291857c2e47c659365e094cd0ee03 | 1571f02f91ec7ea64671c958f804b1ef62237248e810f3072ee2b2cc4e82da9b |
+| test | test-v1/gflash36-index.estimate.jsonl | 8 | 35b95d6d75ea | 54827dfc2fa74fe485c4b8a6d2ae4e203718ffaa388bb37f485bf4d8ad5e7d42 | 249db0fdc93b3fd03d3bbb63909ef190cdc88676d8d3370332acf7eab7c3c2a8 |
+| test | test-v1/glite25-index.estimate.jsonl | 8 | 35b95d6d75ea | 2cc141cf1bbfb87a8f8e403e21dd251d304ebab9b8428cd7ddb8eed4c224ab02 | 067c92678fb5a2e28fab3040f07c4ad084885e1802ccf023f012c8013dcfc9a5 |
+| test | test-v1/fixed-index.estimate.jsonl | 8 | 35b95d6d75ea | 9f3c91b2caabeb6534cd87060a82d9e76a5c4cde2c85ae6281c0e871d7d9ae3b | 86441c4e4cf9f7a83822e1cf6d74c9620a244dad2f65de135502f7a4206e3c87 |
+| test | test-v1/plan-index.estimate.jsonl | 8 | 35b95d6d75ea | fbc7792aafeeb842056e0e36d7e45057796985e8b83d3eb601f5f62a0c3c7891 | 60bbce43a89fa193598bea1a4b789668ddd89e42996858e7b05c63d574554357 |
+
+가격 출처 스냅샷: RUNS/complete-v1/model-prices-20261118.json, SHA-256 ff65842310266158fd7a011c5ed83170dc1765ce98939ae6de0615d3fadcd797.
+
+
+<a id="test-judge-v3"></a>
+## test 근거성 채점과 엄격 성공률(judge-v3)
+
+요청 범위는 12설정×130=1,560건이다. B에서 완료된 원본이 있는 10설정 1300건 중 답·Judge 기록이 있는 1267건을 대상으로 준비했고 33건을 제외했다. 신규 후보 중 본 실행이 없는 2설정 260건은 이 제외 수와 구분한다. dev는 채점하지 않는다.
+
+| test 원본 미생성 후보 | 이유 |
+| --- | --- |
+| gflash36-index | skipped_estimate_cost_unknown |
+| glite25-index | skipped_estimate_cost_unknown |
+
+Judge-v3는 기존 계산값·빈 조회·제안·성공한 쓰기 보고 규칙을 유지하면서, 근거 없는 기능 부재 단정을 unsupported로, 미실행·실패를 사실대로 알린 보고를 supported로 명시했다. 과거 v2·v3 blind60 표본은 모두 judge-v2로 판정한 기록이며 다시 실행하지 않았다.
+
+전체 최초 dry-run은 1267건에 $6.121430였다(1글자=1토큰, 시도 1.1회, 출력 350토큰, 캐시 없음). 모델은 google/gemini-3.6-flash, MTok당 입력/캐시/출력 $0.75/$0.075/$3.75, 출력 상한 6,000·temperature 0·동시성 4다. 사용자 누적 상한은 $6이며 CLI 상한은 진행 중 배치의 여유분을 두어 $5.30으로 설정했다. 이는 미관측 청구액까지 절대적으로 보장한다는 뜻은 아니다.
+
+**실제 Judge 호출은 하지 않았다.** 전체 추정 합계가 $5.50을 넘어 지시한 비용 조건에 따라 중단했다. 근거성·엄격 성공률과 그 차이는 미측정이며 0으로 기입하지 않는다. 추가 예산 또는 범위 변경은 개발자 결정이 필요하다.
+
+| 설정 | 원본 | eligible | 답 없음 제외 | Judge 기록 없음 제외 | 근거성 / 엄격 성공률 |
+| --- | --- | --- | --- | --- | --- |
+| assistant (읽기 전용) | 130 | 130 | 0 | 0 | 미측정 / 미측정 |
+| Luna react · 끔 | 130 | 130 | 0 | 0 | 미측정 / 미측정 |
+| Luna plan · 끔 | 130 | 125 | 5 | 0 | 미측정 / 미측정 |
+| Luna react · 켬 (기준) | 130 | 130 | 0 | 0 | 미측정 / 미측정 |
+| Haiku 5.5 react · 끔 | 130 | 130 | 0 | 0 | 미측정 / 미측정 |
+| Gemini 3.5 Lite react · 끔 | 130 | 105 | 25 | 0 | 미측정 / 미측정 |
+| Luna fixed · 끔 | 130 | 127 | 3 | 0 | 미측정 / 미측정 |
+| Haiku 5.5 react · 켬 | 130 | 130 | 0 | 0 | 미측정 / 미측정 |
+| Luna fixed · 켬 | 130 | 130 | 0 | 0 | 미측정 / 미측정 |
+| Luna plan · 켬 | 130 | 130 | 0 | 0 | 미측정 / 미측정 |
+
+입력 제외 33건은 기존 Plan 5건·Gemini 3.5 Lite 25건·Fixed 3건의 답 없음이다. 신규 Google test 원본 미생성 260건은 입력 제외와 구분한다. 판정 자체를 시작하지 않았으므로 이 1,267건을 모델의 판정 실패로 세지 않는다. 엄격 정의에서도 Haiku의 우위가 유지되는지는 검증하지 못했다.
+
+사람 검증은 라벨러 1명의 judge-v2 표본에서 κ 0.636 [0.446, 0.805]였다. 새 judge-v3를 독립된 사람 표본으로 검증한 값은 아니다. 입력에는 에이전트 전체 도구 목록이 없어 기능 부재 단정 규칙의 오탐 가능성이 있고, dev도 미채점이다. 향후 Flash Judge로 Google·Flash 후보를 채점하면 자기 계열 편향 가능성도 남는다. 이번 미실행 자료로 이 효과를 측정했다고 해석하지 않는다.
+
+Judge 도구 본문 합계 상한은 12,000자이며 여러 도구에 균등 상한으로 배분한다. 이 한도로 일부 도구 결과가 잘린 에피소드는 15건이다. 실제 오판에 미친 영향은 측정하지 않았다. 도구가 많이 필요했던 설정에서 근거가 누락될 가능성이 있으므로 이 점도 함께 해석한다.
+
+### Judge 출처와 재현 정보
+
+코드 SHA 35b95d6d75ea, 프롬프트 judge-v3, 실행 계획의 모델 설정 지문 8d9b6d4e1b851de7ed217c8cea6ce3d0ec23a846d8eff864e6f33b1e5fc3a79b. 원본 결과 SHA·설정 지문은 settings manifest, 합친 입력의 해시는 execution plan에 있다. 이번에는 judge.jsonl을 생성하지 않았다. 준비 단계에서 원본 bytes SHA→manifest→전체 입력 JSON→CLI 에피소드의 일치를 확인하고, 배타잠금 아래 같은 계획만 재개하도록 했다.
+
+| 파일 (RUNS 기준) | SHA-256 |
+| --- | --- |
+| complete-v1/judge-v3-flash36.toml | 3c0480fb5171a34385c719bd02ca45625a334d9e3054ad93ee29a16969f85ed5 |
+| complete-v1/judge-input-coverage.json | b5fa9ebf03c1565cf0fdb9abca4d0b6205cb02396f153415c91f712d4226efcf |
+| complete-v1/test-settings-final.json | 1019eaffae0c71c31e9e98b19c19cba8794f1976bebcad5975aafec98e7ea7f2 |
+| complete-v1/test-judge-final-input.jsonl | 8e386de3e36db28242867a92eaed7bbdaa396b7af8ce506a312c45d736730ba8 |
+| complete-v1/judge-execution-plan.json | fe2235878906b27c9240b9dabaec9bd0731246f5525c109b0425a0a085e4b16b |
+| complete-v1/judge-final-preparation.json | 1cebe23d8a525788ef53939291b6c71dfdff2027e2c3a1ae8bbb591754041c97 |
+
+
 ## 수치 출처와 재현 정보
 
 원본은 로컬 평가 worktree의 `runs/`에 있으며 git에서 제외한다. 아래는 `runs/` 기준 상대 경로다. 메일·문서 원문은 이 문서에 싣지 않았다.
@@ -360,7 +821,7 @@ Lite는 false_action에서 재시도 후에도 파싱하지 못한 1건이 있�
 | `retrieval/test-openai-v1.json` | `12754a47ac6b77fe1cb66c6a1ab0d0e6e27d20284b20a7b63f2bb0ec845db820` |
 | `judge/agreement-ab.json` | `9267ef8de3240b1317023c6fb7389a24ea19d96f4f5f9198cc6b9751344dab12` |
 
-## 이번 후속 작업의 지출
+## 2026-11-17 low·fixed 후속 작업의 과거 지출
 
 | 작업 | 사전 측정 LLM(USD) | 본 실행 LLM(USD) | 기록된 LLM 합계(USD) |
 | --- | --- | --- | --- |
@@ -369,4 +830,4 @@ Lite는 false_action에서 재시도 후에도 파싱하지 못한 1건이 있�
 | fixed test 재확인 | $0.00502711 | $0.07280940 | $0.07783651 |
 | 합계 | $0.01206060 | $0.27074600 | **$0.28280660** |
 
-low의 임베딩은 사전/본 각각 $0.01 상한을 적용했으나 종료 시 질의 임베딩 실측 비용이 별도 보존되지 않아 위 표에 포함하지 않았다. 따라서 이 표를 임베딩까지 포함한 총 청구액으로 부르지 않는다. 새 평가를 추가로 반복하지 않고, 기존 통계·코드 검사·CI는 유료 모델 호출 없이 수행했다.
+이 표는 2026-11-17의 low·fixed 후속 작업만 다룬다. low의 임베딩은 사전/본 각각 $0.01 상한을 적용했으나 종료 시 질의 임베딩 실측 비용이 별도 보존되지 않아 위 표에 포함하지 않았다. 따라서 이 표를 임베딩까지 포함한 총 청구액으로 부르지 않는다. 당시 기존 통계·코드 검사·CI에는 유료 모델을 호출하지 않았다. 이후 새로 실행한 색인 켬 재비교의 비용 하한 $2.270643545와 임베딩 $0.00006750, Judge-v3 준비의 실제 지출 $0은 이 과거 합계에 포함하지 않으며 [새 실행 비용 표](#실행-비용과-상한)를 따른다.

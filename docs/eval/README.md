@@ -33,20 +33,24 @@
 | J02 | 2026-11-17 | Judge–사람 일치 (judge-v1, 사람 60건) | 60 | 일치율 haiku 0.70, lite 0.85, sonnet 0.82, gemini-3.6-flash 0.92. 사람 라벨이 거의 모두 근거 있음이라 탐지 능력은 입증하지 못함 | 과거 기록 | results-v1 | `judge/agreement-human.json`, `judge/agreement-strong60.json`, `judge/human-labels.jsonl` | [J02](experiments.md#j02) |
 | J03 | 2026-11-17 | Judge 변형 탐지 v2 (표면 치환 30 + 원본 30) | 60 | 3종 모두 재현율 0.86 이상. 문자열 대조로도 잡히는 변형이라 Judge 고유 가치 측정 불가 | 한계 기록 후 v3로 대체 | results-v1 "v2 세트" | `judge/blind60-*`, `judge/v2-blind60-*/` | [J03](experiments.md#j03) |
 | J04 | 2026-11-17 | Judge 변형 탐지 v3 (의미 변형 24 + 표면 6 + 원본 30) + 사람 라벨 | 60 | surface 외 탐지: 코드 대조 1/24, Flash 24/24, Haiku 24/24, Lite 18/24. 사람 kappa: Flash 0.636 [0.446, 0.805], Haiku 0.575, Lite 0.454 | **Judge = gemini-3.6-flash 채택**, 보조 지표로 보고 | results-v1 "v3 세트", ADR-0029 §3 | `judge/v3-blind60-set/`, `judge/v3-blind60-*/` | [J04](experiments.md#j04) |
+| M02 | 2026-11-18 | 색인 켬 후보 재비교 | dev 2후보×264, test 3후보×130, 사전 추정 10×8 | dev Haiku/fixed 0.617/0.670, test Haiku/fixed/plan 0.577/0.631/0.469. 기준을 유의하게 웃도는 후보 없음 | 기준 유지. Google dev/test·Plan dev 미실행. 관측 LLM ≥$2.270643545, 비용 미기록 16건 | [색인 켬 기준 재비교](results-v1.md#색인-켬-기준-재비교) | `compare-v2/`, `test-v1/*-index.jsonl`, `complete-v1/` | [M02](experiments.md#m02) |
+| J05 | 2026-11-19 | test Judge-v3 입력 준비·비용 조건 확인 | 가용 10설정 1,300건→eligible 1,267 (답 없음 33 제외) | 전체 dry-run $6.121430 > 실행 조건 $5.50 | 실제 호출 0·지출 $0, 근거성·엄격 성공률 미측정. 추가 결정 필요 | [Judge-v3 준비 결과](results-v1.md#test-judge-v3) | `complete-v1/test-judge-final-input.jsonl`, `judge-execution-plan.json` | [J05](experiments.md#j05) |
 
-중단·폐기 실행은 [I01](experiments.md#i01)·[I02](experiments.md#i02)·[I03](experiments.md#i03)에 원인·조치·영향·기록 비용을 분리했다. 새 색인 켬 재비교와 전체 test Judge는 각각 [M02](experiments.md#m02)·[J05](experiments.md#j05)의 실행 전 계획에 따라 진행한다.
+중단·폐기 실행은 [I01](experiments.md#i01)·[I02](experiments.md#i02)·[I03](experiments.md#i03)에 원인·조치·영향·기록 비용을 분리했다. 새 비교의 완료·공백·비용 불확실성은 [M02](experiments.md#m02), Judge의 비용 조건 중단은 [J05](experiments.md#j05)에 기록했다.
 
 ## 아직 측정하지 않은 것
 
 - 검수 자기 일치도 재검수(약 10%): 진행을 막지 않는 후속 작업 (ADR-0026 §8)
-- 남은 에피소드 전체의 Judge 근거성 채점(약 1,300건, Flash 기준 예상 약 $4.4)과 기능 부재 단정 규칙을 반영한 프롬프트 버전 갱신
-- haiku + 색인 조합, low의 test 확인
+- dev 근거성은 미채점이다. test Judge-v3도 전체 추정 $6.121430이 실행 조건을 넘어 미실행이며, 재개에는 추가 예산 또는 범위에 관한 개발자 결정이 필요하다. 프롬프트 두 규칙은 구현했다.
+- 문항 품질·문장 품질·유용성 Judge: 사람 검증을 거쳐야 하는 후속 작업
+- low의 test 확인, 비용 조건 때문에 빠진 Google 색인 켬 dev/test와 Plan 색인 켬 dev
+- 임베딩 모델·800자 청크·RRF k=60의 대안 비교
 - 맥락 구성 실험과 안전·가드레일 세트: 초안 ADR-0032·0033 (PR #37, 미실행)
 
 ## 원본 보관
 
 - 실행 원본(`runs/`)은 합성 메일·문서 본문과 개별 판정을 담고 있어 git에서 제외한다. 평가 worktree가 정리돼도 남도록 저장소 밖 로컬 보관소 `../orbit-eval-archive/v1/runs/`(메인 체크아웃 기준 상대 경로)에 복사했다. 임베딩 캐시(`embed-cache/`)는 다시 만들 수 있어 제외했다.
-- 보관 시점(2026-11-17) 파일 164개의 SHA-256 목록은 `../orbit-eval-archive/v1/SHA256SUMS`에 있다. 그 목록 파일 자체의 SHA-256은 `0359757e5a7866828d042f0213676d106c2db5c2870540835d38a824f7a6972a`다.
+- 보관 시점(2026-11-19) 파일 289개의 SHA-256 목록은 `../orbit-eval-archive/v1/SHA256SUMS`에 있다. 그 목록 파일 자체의 SHA-256은 `c38d2a2ef1fb76fd2d2a63c24a1b8e0d7ab252b9c21993ac842e27302df44e06`다. 이번에 새 결과·추정·비용/상태·입력 준비·진단·재현 스크립트 125개를 추가했다. Judge 출력 경로에는 비용 조건 중단 상태만 보존했고 판정 파일은 생성하지 않았다.
 - 개별 결과 파일의 설정 지문과 SHA-256은 `results-v1.md`의 "수치 출처와 재현 정보"와 "test 출처"에 있다.
 
 ## 새 평가를 추가할 때
