@@ -13,22 +13,28 @@
 
 비교 기준을 꼭 함께 읽는다. dev 비교의 기준은 `luna · react · 색인 끔`이고, ADR-0031 이후 기준 설정은 `luna · react · 색인 켬`이다. 괄호 안 차이는 기준 대비 짝 차이이며 CI는 cluster bootstrap 95%다.
 
-| ID | 날짜 | 평가 | 규모 | 핵심 결과 | 결정·상태 | 상세 | 원본 (`runs/` 기준) |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| E00 | 2026-11-15 | v0 dev 기준 비교와 원인 ablation (`facts-v1`, `reasoning-rt`) | v0 dev 36문항 × 3회 | 수치를 문서 표로 남기지 않았다 (출처 확인 필요) | v1 평가셋으로 대체 | ADR-0023 §10 | `eval-1/`, `eval-2/`, `ablation-1/` |
-| D01 | 2026-11-16 | 평가셋 v1 생성·자동 검수·사람 검수·봉인 | 과제 240 → 218 (dev 88 / test 130), 검색 질의 180 → 133 (dev 55 / test 78) | 본문 7,022개를 LLM 3계열이 작성($1.75). LLM Judge 자동 검수 372항목 중 54항목 표시($0.33). 사람 검수 제외 과제 22, 검색 47. 표현 변형 검수 문제 0건 | 봉인 완료 (test 130문항·102묶음) | ADR-0026 §6·§8, results-v1 "평가셋 구축에 쓴 LLM" | `eval/datasets/orbit-eval/v1/` (저장소) |
-| R01 | 2026-11-17 | 검색 방식 비교 (메일만) | test 51질의·19묶음, 메일함 200/1,000/5,000 | 5,000통 R@10: vector 0.71, hybrid 0.69, bm25 0.67, keyword 0.47, gmail_search 0.14 | 방식 재선정 안 함 (test 선택 편향) | results-v1 "검색 세트 test 결과" | `retrieval/test-openai-v1.json`. dev는 `retrieval/dev-openai-v1.json` (dev 수치는 문서화 안 됨) |
-| B01 | 2026-11-17 | dev 기준선 | 88과제 × 3회 | luna · react · 색인 끔 0.49 [0.39, 0.59], assistant_v0 0.42 | 비교 기준 | results-v1 "dev 설정 비교" | `baseline-v1/` |
-| M01 | 2026-11-17 | dev 모델 비교 | 88 × 3 | haiku 0.67 (+0.186), gemini-3.5-flash-lite 0.39 (−0.102, 답할 수 없는 질문 환각률 0.24) | haiku는 비용 약 6배 | results-v1 "dev 설정 비교" | `models-v1/` |
-| A01 | 2026-11-17 | dev 에이전트 패턴 비교 | 88 × 3 | fixed_workflow 0.55 (+0.061, CI 0 포함), plan_execute 0.39 (−0.098) | react 유지 | results-v1, ADR-0030 | `compare-v1/pattern-*.jsonl` |
-| G01 | 2026-11-17 | dev 메일 색인 검색(RAG) 켬 | 88 × 3 | 0.64 (+0.155 [+0.072, +0.244]) | **채택** (ADR-0031) | results-v1, ADR-0031 | `compare-v1/index-on.jsonl` |
-| G02 | 2026-11-17 | dev 추론 강도 low vs none (색인 켬) | 88 × 3 | low 0.602, low − none −0.042 [−0.109, +0.020] | none 유지, 우열 미확정 | results-v1 "추론 강도 low 비교" | `compare-v1/index-on-low.jsonl`, `followup-20261117/` |
-| T01 | 2026-11-17 | 봉인 test 확인 | 130과제 × 1회, 102묶음 | react 0.454, 색인 켬 0.646 (+0.192), haiku 0.577 (+0.123), plan 0.392, gemini 0.446, assistant 0.400 | dev 방향 재확인 | results-v1 "종단 test 확인" | `test-v1/` |
-| T02 | 2026-11-17 | fixed_workflow 정지 수정 후 test 재확인 | 130 × 1 | 0.492 (+0.038, CI 0 포함), 130/130 완주 | 정지 원인 미확정 | results-v1, ADR-0034 | `test-v1/luna-fixed.jsonl`, 중단 기록 `crashed/` |
-| J01 | 2026-11-17 | Judge 간 일치도 (저가 2계열) | 기준선 528에피소드 | kappa 0.10 [0.003, 0.203] | 기준 미달 | results-v1 "Judge 근거성 비교" | `judge/agreement-ab.json` |
-| J02 | 2026-11-17 | Judge–사람 일치 (judge-v1, 사람 60건) | 60 | 일치율 haiku 0.70, lite 0.85, sonnet 0.82, gemini-3.6-flash 0.92. 사람 라벨이 거의 모두 근거 있음이라 탐지 능력은 입증하지 못함 | 과거 기록 | results-v1 | `judge/agreement-human.json`, `judge/agreement-strong60.json`, `judge/human-labels.jsonl` |
-| J03 | 2026-11-17 | Judge 변형 탐지 v2 (표면 치환 30 + 원본 30) | 60 | 3종 모두 재현율 0.86 이상. 문자열 대조로도 잡히는 변형이라 Judge 고유 가치 측정 불가 | 한계 기록 후 v3로 대체 | results-v1 "v2 세트" | `judge/blind60-*`, `judge/v2-blind60-*/` |
-| J04 | 2026-11-17 | Judge 변형 탐지 v3 (의미 변형 24 + 표면 6 + 원본 30) + 사람 라벨 | 60 | surface 외 탐지: 코드 대조 1/24, Flash 24/24, Haiku 24/24, Lite 18/24. 사람 kappa: Flash 0.636 [0.446, 0.805], Haiku 0.575, Lite 0.454 | **Judge = gemini-3.6-flash 채택**, 보조 지표로 보고 | results-v1 "v3 세트", ADR-0029 §3 | `judge/v3-blind60-set/`, `judge/v3-blind60-*/` |
+| ID | 날짜 | 평가 | 규모 | 핵심 결과 | 결정·상태 | 상세 | 원본 (`runs/` 기준) | 설계·선정 기록 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| P01 | 2026-11-11 | 모델 파일럿 | v0 dev 36×3·6묶음 | luna none/low 74.1/75.9%, terra low 100% | 실험 luna low, 실사용 terra→luna로 변경 | docs/pilot/results-2026-11-11.md, ADR-0015 | MAIN_RUNS/pilot/ | [P01](experiments.md#p01) |
+| RG01 | 2026-11-12 | 7단계 정리 뒤 회귀 | v0 dev 36×1 | 72.2% | 회귀 관찰 | docs/implementation-plan.md §7, experiments.md | MAIN_RUNS/regress/stage7-luna-low.jsonl | [RG01](experiments.md#rg01) |
+| RG02 | 2026-11-12 | 데이터 봉투 회귀 | v0 dev 36×1, 전후 2회 | 88.9%→77.8%, dirty 코드·동일 지문 | 인과 효과 확정 안 함 | ADR-0018, experiments.md | MAIN_RUNS/regress/sep*.jsonl | [RG02](experiments.md#rg02) |
+| RG03 | 2026-11-12 | 인젝션 선행 동작 확인 | 6행×3실행 | 쓰기 호출·지침 문장 노출 0, 독립 ASR 아님 | 안전 세트 평가와 구분 | ADR-0018, experiments.md | MAIN_RUNS/regress/injection-*.jsonl | [RG03](experiments.md#rg03) |
+| E00 | 2026-11-15 | v0 dev 기준 비교와 원인 ablation (`facts-v1`, `reasoning-rt`) | v0 dev 36문항 × 3회 | 1차 runflow−assistant −22.2%p, 2차 −11.1%p. ablation 개선 불확정 (파일럿 문서에 상세표 있음) | v1 평가셋으로 대체 | docs/pilot의 runflow 비교·ablation 결과, ADR-0023 §10 | `eval-1/`, `eval-2/`, `ablation-1/` | [P02](experiments.md#p02)·[P03](experiments.md#p03) |
+| D01 | 2026-11-16 | 평가셋 v1 생성·자동 검수·사람 검수·봉인 | 과제 240 → 218 (dev 88 / test 130), 검색 질의 180 → 133 (dev 55 / test 78) | 본문 7,022개를 LLM 3계열이 작성($1.75). LLM Judge 자동 검수 372항목 중 54항목 표시($0.33). 사람 검수 제외 과제 22, 검색 47. 표현 변형 검수 문제 0건 | 봉인 완료 (test 130문항·102묶음) | ADR-0026 §6·§8, results-v1 "평가셋 구축에 쓴 LLM" | `eval/datasets/orbit-eval/v1/` (저장소) | [D01](experiments.md#d01) |
+| R01 | 2026-11-17 | 검색 방식 비교 (메일만) | dev 37질의·13묶음 / test 51·19, 메일함 200/1,000/5,000 | 5,000통 R@10: vector 0.71, hybrid 0.69, bm25 0.67, keyword 0.47, gmail_search 0.14 | 방식 재선정 안 함 (test 선택 편향) | results-v1 "검색 세트 test 결과" | `retrieval/test-openai-v1.json`. dev는 `retrieval/dev-openai-v1.json` (이번에 dev 표 추가) | [R01](experiments.md#r01) |
+| B01 | 2026-11-17 | dev 기준선 | 88과제 × 3회 | luna · react · 색인 끔 0.49 [0.39, 0.59], assistant_v0 0.42 | 비교 기준 | results-v1 "dev 설정 비교" | `baseline-v1/` | [B01](experiments.md#b01) |
+| M01 | 2026-11-17 | dev 모델 비교 | 88 × 3 | haiku 0.67 (+0.186), gemini-3.5-flash-lite 0.39 (−0.102, 답할 수 없는 질문 환각률 0.24) | haiku는 비용 약 6배 | results-v1 "dev 설정 비교" | `models-v1/` | [M01](experiments.md#m01) |
+| A01 | 2026-11-17 | dev 에이전트 패턴 비교 | 88 × 3 | fixed_workflow 0.55 (+0.061, CI 0 포함), plan_execute 0.39 (−0.098) | react 유지 | results-v1, ADR-0030 | `compare-v1/pattern-*.jsonl` | [A01](experiments.md#a01) |
+| G01 | 2026-11-17 | dev 메일 색인 검색(RAG) 켬 | 88 × 3 | 0.64 (+0.155 [+0.072, +0.244]) | **채택** (ADR-0031) | results-v1, ADR-0031 | `compare-v1/index-on.jsonl` | [G01](experiments.md#g01) |
+| G02 | 2026-11-17 | dev 추론 강도 low vs none (색인 켬) | 88 × 3 | low 0.602, low − none −0.042 [−0.109, +0.020] | none 유지, 우열 미확정 | results-v1 "추론 강도 low 비교" | `compare-v1/index-on-low.jsonl`, `followup-20261117/` | [G02](experiments.md#g02) |
+| T01 | 2026-11-17 | 봉인 test 확인 | 130과제 × 1회, 102묶음 | react 0.454, 색인 켬 0.646 (+0.192), haiku 0.577 (+0.123), plan 0.392, gemini 0.446, assistant 0.400 | dev 방향 재확인 | results-v1 "종단 test 확인" | `test-v1/` | [T01](experiments.md#t01) |
+| T02 | 2026-11-17 | fixed_workflow 정지 수정 후 test 재확인 | 130 × 1 | 0.492 (+0.038, CI 0 포함), 130/130 완주 | 정지 원인 미확정 | results-v1, ADR-0034 | `test-v1/luna-fixed.jsonl`, 중단 기록 `crashed/` | [T02](experiments.md#t02) |
+| J01 | 2026-11-17 | Judge 간 일치도 (저가 2계열) | 기준선 528에피소드 | kappa 0.10 [0.003, 0.203] | 기준 미달 | results-v1 "Judge 근거성 비교" | `judge/agreement-ab.json` | [J01](experiments.md#j01) |
+| J02 | 2026-11-17 | Judge–사람 일치 (judge-v1, 사람 60건) | 60 | 일치율 haiku 0.70, lite 0.85, sonnet 0.82, gemini-3.6-flash 0.92. 사람 라벨이 거의 모두 근거 있음이라 탐지 능력은 입증하지 못함 | 과거 기록 | results-v1 | `judge/agreement-human.json`, `judge/agreement-strong60.json`, `judge/human-labels.jsonl` | [J02](experiments.md#j02) |
+| J03 | 2026-11-17 | Judge 변형 탐지 v2 (표면 치환 30 + 원본 30) | 60 | 3종 모두 재현율 0.86 이상. 문자열 대조로도 잡히는 변형이라 Judge 고유 가치 측정 불가 | 한계 기록 후 v3로 대체 | results-v1 "v2 세트" | `judge/blind60-*`, `judge/v2-blind60-*/` | [J03](experiments.md#j03) |
+| J04 | 2026-11-17 | Judge 변형 탐지 v3 (의미 변형 24 + 표면 6 + 원본 30) + 사람 라벨 | 60 | surface 외 탐지: 코드 대조 1/24, Flash 24/24, Haiku 24/24, Lite 18/24. 사람 kappa: Flash 0.636 [0.446, 0.805], Haiku 0.575, Lite 0.454 | **Judge = gemini-3.6-flash 채택**, 보조 지표로 보고 | results-v1 "v3 세트", ADR-0029 §3 | `judge/v3-blind60-set/`, `judge/v3-blind60-*/` | [J04](experiments.md#j04) |
+
+중단·폐기 실행은 [I01](experiments.md#i01)·[I02](experiments.md#i02)·[I03](experiments.md#i03)에 원인·조치·영향·기록 비용을 분리했다. 새 색인 켬 재비교와 전체 test Judge는 각각 [M02](experiments.md#m02)·[J05](experiments.md#j05)의 실행 전 계획에 따라 진행한다.
 
 ## 아직 측정하지 않은 것
 
