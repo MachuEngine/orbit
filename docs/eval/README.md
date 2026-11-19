@@ -3,7 +3,9 @@
 ## 메일 RAG 패턴 비교 (ADR-0035)
 
 생성 모델 Luna·추론 강도 none·에이전트 ReAct를 고정하고 도구 호출형 RAG, Retrieve-once,
-질의 재작성 후 Retrieve-once를 dev 메일 21과제와 별도 스모크에서 비교한다.
+질의 재작성 후 Retrieve-once를 dev 메일 21과제와 별도 스모크에서 비교했다.
+성공률은 76.2% / 74.6% / 81.0%이며 짝 차이 CI는 모두 0을 포함해 기준을 유지한다.
+사전 추정 포함 LLM+임베딩 기록 비용은 $0.22854392, 비용 미상 0건이다.
 설정·지표·실행 상태·비용과 출처는 [메일 RAG 패턴 비교 v1](rag-patterns-v1.md)을 따른다.
 기존 종단 dev/test 전체 점수와 이번 부분집합 점수를 직접 순위 비교하지 않는다.
 
@@ -25,6 +27,7 @@
 | E00 | 2026-11-15 | v0 dev 기준 비교와 원인 ablation (`facts-v1`, `reasoning-rt`) | v0 dev 36문항 × 3회 | 수치를 문서 표로 남기지 않았다 (출처 확인 필요) | v1 평가셋으로 대체 | ADR-0023 §10 | `eval-1/`, `eval-2/`, `ablation-1/` |
 | D01 | 2026-11-16 | 평가셋 v1 생성·자동 검수·사람 검수·봉인 | 과제 240 → 218 (dev 88 / test 130), 검색 질의 180 → 133 (dev 55 / test 78) | 본문 7,022개를 LLM 3계열이 작성($1.75). LLM Judge 자동 검수 372항목 중 54항목 표시($0.33). 사람 검수 제외 과제 22, 검색 47. 표현 변형 검수 문제 0건 | 봉인 완료 (test 130문항·102묶음) | ADR-0026 §6·§8, results-v1 "평가셋 구축에 쓴 LLM" | `eval/datasets/orbit-eval/v1/` (저장소) |
 | R01 | 2026-11-17 | 검색 방식 비교 (메일만) | test 51질의·19묶음, 메일함 200/1,000/5,000 | 5,000통 R@10: vector 0.71, hybrid 0.69, bm25 0.67, keyword 0.47, gmail_search 0.14 | 방식 재선정 안 함 (test 선택 편향) | results-v1 "검색 세트 test 결과" | `retrieval/test-openai-v1.json`. dev는 `retrieval/dev-openai-v1.json` (dev 수치는 문서화 안 됨) |
+| R02 | 2026-11-19 | 메일 RAG 검색 정책·질의 재작성 비교 | dev 메일 21과제·17묶음 × 3, 별도 스모크 21 × 1 | R0 76.2%, R1 74.6%, R2 81.0%; R2−R0 +4.8 pp [−3.3, +12.3] | 기준 유지·개선 미확정, test 미실행 | [rag-patterns-v1](rag-patterns-v1.md), ADR-0035 | 별도 worktree의 `runs/rag-patterns-v1/` |
 | B01 | 2026-11-17 | dev 기준선 | 88과제 × 3회 | luna · react · 색인 끔 0.49 [0.39, 0.59], assistant_v0 0.42 | 비교 기준 | results-v1 "dev 설정 비교" | `baseline-v1/` |
 | M01 | 2026-11-17 | dev 모델 비교 | 88 × 3 | haiku 0.67 (+0.186), gemini-3.5-flash-lite 0.39 (−0.102, 답할 수 없는 질문 환각률 0.24) | haiku는 비용 약 6배 | results-v1 "dev 설정 비교" | `models-v1/` |
 | A01 | 2026-11-17 | dev 에이전트 패턴 비교 | 88 × 3 | fixed_workflow 0.55 (+0.061, CI 0 포함), plan_execute 0.39 (−0.098) | react 유지 | results-v1, ADR-0030 | `compare-v1/pattern-*.jsonl` |
