@@ -83,12 +83,16 @@ function clickDevLogin(): boolean {
   return true;
 }
 
-/** 목록이나 버튼이 그려질 때까지 기다렸다가 한 번 누른다. 5초 안에 못 찾으면 포기한다. */
-export function runSceneActions(scene: Scene): void {
+/** 목록이나 버튼이 그려질 때까지 기다린다. 5초 안에 못 찾으면 포기하며, 반환 함수로 대기를 취소한다. */
+export function runSceneActions(scene: Scene): () => void {
   const { open } = scene;
-  if (open === undefined) return;
+  if (open === undefined) return () => undefined;
+  let cancelled = false;
+  let timer: number | undefined;
   let deadline = Date.now() + GIVE_UP_MS;
   const tick = () => {
+    if (cancelled) return;
+    timer = undefined;
     const done =
       (open.conversation === undefined ||
         openConversation(open.conversation, () => {
@@ -102,7 +106,12 @@ export function runSceneActions(scene: Scene): void {
         openDrawer(() => {
           deadline = Date.now() + GIVE_UP_MS;
         }));
-    if (!done && Date.now() < deadline) window.setTimeout(tick, POLL_MS);
+    if (!done && Date.now() < deadline) timer = window.setTimeout(tick, POLL_MS);
   };
   tick();
+  return () => {
+    cancelled = true;
+    if (timer !== undefined) window.clearTimeout(timer);
+    timer = undefined;
+  };
 }

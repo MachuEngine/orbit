@@ -14,8 +14,10 @@
 import argparse
 import asyncio
 import json
+import os
 import subprocess  # noqa: S404  git SHA 조회에만 쓴다
 import sys
+import tempfile
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -174,6 +176,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--embed-cache-dir", default=None, help="임베딩 캐시 폴더(기본 runs/embed-cache)"
     )
+    run.add_argument(
+        "--embedding-stats-out", default=None,
+        help="--index on의 최종 임베딩 통계를 별도 JSON에 저장한다(색인+질의, 덮어쓰기 금지). "
+        "dry-run에서는 쓰지 않는다. 강제 종료로 파일이 없으면 비용은 미관측이다",
+    )  # fmt: skip
     run.add_argument(
         "--index-dry-run", action="store_true",
         help="--index on의 색인 비용만 추정해 출력하고 끝낸다(임베딩 호출·DB 접근 없음). "
@@ -370,7 +377,68 @@ def _print_index_summary(
     )
 
 
+@dataclass
+class _EmbeddingStatsOutput:
+    path: Path | None
+    embedder: CachingEmbedder | None = None
+
+
+def _write_embedding_stats(path: Path, embedder: CachingEmbedder) -> None:
+    """같은 폴더의 임시 파일을 완성한 뒤 exclusive hard link로 원자 게시한다."""
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(embedder.stats(), handle, ensure_ascii=False, sort_keys=True, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, path)  # 같은 파일시스템에서 완성본만 게시하며 기존 파일은 덮지 않는다.
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def _run(args: argparse.Namespace) -> int:
+    requested = getattr(args, "embedding_stats_out", None)
+    path = Path(requested) if requested is not None else None
+    if path is not None:
+        if args.index != "on" or args.index_dry_run:
+            print("--embedding-stats-out은 --index on의 실제 실행에서만 쓴다", file=sys.stderr)
+            return 2
+        out = Path(args.out)
+        sink = out.with_name(out.stem + ".estimate.jsonl") if args.estimate is not None else out
+        if path.exists() or path.is_symlink() or path.resolve() in {out.resolve(), sink.resolve()}:
+            print("이미 있는 파일이나 평가 결과 경로에 임베딩 통계를 쓰지 않는다", file=sys.stderr)
+            return 2
+        path.parent.mkdir(parents=True, exist_ok=True)  # 쓰기 불가 경로는 유료 호출 전에 거절한다.
+        with tempfile.TemporaryFile(dir=path.parent):
+            pass  # mkdir(exist_ok)만으로 알 수 없는 부모의 실제 파일 생성 권한도 먼저 확인한다.
+    observation = _EmbeddingStatsOutput(path)
+    result: int | None = None
+    try:
+        result = _run_evaluation(args, observation)
+        return result
+    finally:
+        original_error = sys.exception()
+        if observation.path is not None and observation.embedder is not None:
+            try:
+                _write_embedding_stats(observation.path, observation.embedder)
+            except Exception as exc:
+                if original_error is None and result == 0:
+                    raise
+                # 관측 저장 실패로 원래 예외·종료 코드를 덮지 않는다. 원문은 출력하지 않는다.
+                print(f"임베딩 통계 저장 실패: {type(exc).__name__} (비용 미관측)", file=sys.stderr)
+
+
+def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput) -> int:
     if args.split == "test" and not args.allow_test:
         raise SealedSplitError("test 분할 봉인")  # 출력 파일을 만들기 전에 거부한다
     dataset = load_dataset(args.dataset)
@@ -437,6 +505,7 @@ def _run(args: argparse.Namespace) -> int:
     if (
         index_setup is not None
     ):  # 출력 파일을 만들기 전에 색인을 준비한다(실패해도 파일이 남지 않는다)
+        observation.embedder = index_setup.embedder
         provider, seconds = asyncio.run(index_setup.build())
         sut_options["index"] = provider
         _print_index_summary(provider, index_setup.embedder, seconds)
