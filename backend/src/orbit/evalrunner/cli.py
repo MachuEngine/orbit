@@ -196,14 +196,16 @@ def _parser() -> argparse.ArgumentParser:
         help="--index on의 임베딩 누적 비용 상한(색인 + 질의 임베딩). 넘을 것 같으면 중단(코드 3)",
     )  # fmt: skip
     run.add_argument(
-        "--embedding-stats-out", default=None, help="최종 색인·질의 임베딩 통계 JSON(덮어쓰기 금지)"
-    )
-    run.add_argument(
         "--price-per-mtok", type=float, default=None, help="임베딩 1M 토큰당 달러(재정의)"
     )
     run.add_argument(
         "--embed-cache-dir", default=None, help="임베딩 캐시 폴더(기본 runs/embed-cache)"
     )
+    run.add_argument(
+        "--embedding-stats-out", default=None,
+        help="--index on의 최종 임베딩 통계를 별도 JSON에 저장한다(색인+질의, 덮어쓰기 금지). "
+        "dry-run에서는 쓰지 않는다. 강제 종료로 파일이 없으면 비용은 미관측이다",
+    )  # fmt: skip
     run.add_argument(
         "--index-dry-run", action="store_true",
         help="--index on의 색인 비용만 추정해 출력하고 끝낸다(임베딩 호출·DB 접근 없음). "

@@ -6,6 +6,7 @@ import { runSceneActions } from "./sceneActions";
 import { buildSceneData, findScene, type SceneId } from "./scenes";
 
 const realEventSource = Object.getOwnPropertyDescriptor(window, "EventSource");
+const sceneCleanups: (() => void)[] = [];
 
 /** jsdom에는 matchMedia가 없다. 화면 너비 조건을 흉내 낸다. */
 function stubViewport(wide: boolean) {
@@ -25,10 +26,11 @@ function show(id: SceneId) {
   vi.stubGlobal("fetch", vi.fn());
   installPreviewBackend(new PreviewBackend(buildSceneData(scene, Date.now())));
   render(<App />);
-  runSceneActions(scene);
+  sceneCleanups.push(runSceneActions(scene));
 }
 
 afterEach(() => {
+  for (const stop of sceneCleanups.splice(0)) stop();
   vi.unstubAllGlobals();
   if (realEventSource === undefined) Reflect.deleteProperty(window, "EventSource");
   else Object.defineProperty(window, "EventSource", realEventSource);
