@@ -83,6 +83,7 @@ class Transcript:
         항목이다. 있으면 해당 step의 assistant 메시지에만 붙인다. 저장소에서 읽은 값이 아니다.
         """
         messages = [Message(role="system", content=system_prompt), *self.prior.messages(boundary)]
+        rag_reserved = any(r.content.get("origin") == "rag_initial" for r in self.rows)
         for row in self.rows:
             content = row.content
             if row.role == "user":
@@ -90,7 +91,9 @@ class Transcript:
             elif row.role == "assistant":
                 calls = tuple(
                     ToolCall(
-                        id=_wire_id(str(c["id"])),
+                        id=str(c["id"])
+                        if content.get("origin") == "rag_initial"
+                        else _wire_id(str(c["id"]), rag_reserved=rag_reserved),
                         name=str(c["name"]),
                         arguments=dict(c["arguments"]),
                     )
@@ -117,7 +120,9 @@ class Transcript:
                             source=safe_source(str(content.get("name", ""))),
                             boundary=boundary,
                         ),
-                        tool_call_id=_wire_id(str(content["tool_call_id"])),
+                        tool_call_id=str(content["tool_call_id"])
+                        if content.get("step") == -1
+                        else _wire_id(str(content["tool_call_id"]), rag_reserved=rag_reserved),
                     )
                 )
         return messages
@@ -137,9 +142,12 @@ class Transcript:
         return emails, texts
 
 
-def _wire_id(call_id: str) -> str:
+def _wire_id(call_id: str, *, rag_reserved: bool = False) -> str:
     """모델이 낸 호출 ID가 서버 전용 접두어로 시작하면 합성 호출과 겹치지 않게 바꾼다(전송용)."""
-    return f"model_{call_id}" if call_id.startswith(CALL_ID_PREFIX) else call_id
+    reserved = call_id.startswith(CALL_ID_PREFIX) or (
+        rag_reserved and call_id.startswith("orbit_rag_")
+    )
+    return f"model_{call_id}" if reserved else call_id
 
 
 def _collect(node: Any, emails: list[str], texts: list[str], *, in_structured: bool) -> None:

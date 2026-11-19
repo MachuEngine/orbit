@@ -44,6 +44,7 @@ from orbit.mailindex.deps import MailIndexDeps
 from orbit.runflow.answer import AnswerSink
 from orbit.runflow.eval_variants import ReasoningCache
 from orbit.runflow.patterns import PATTERNS, REACT, PatternMemory
+from orbit.runflow.rag import RagPolicy
 
 DEFAULT_MAX_STEPS = 12  # 한 run의 LLM 호출 상한
 DEFAULT_LEASE_SECONDS = 300.0  # 커넥터 호출 타임아웃 x (1 + 재호출 1회)보다 길게(ADR-0012 §3)
@@ -256,6 +257,7 @@ class RunDeps:
     # `pattern_memory`(메모리)에만 둔다. 패턴을 켜고 메모리를 안 주면 새로 만든다.
     pattern: str | None = None
     pattern_memory: PatternMemory | None = None
+    rag: RagPolicy | None = None  # 평가 CLI에서만 주입(ADR-0035)
 
     def __post_init__(self) -> None:
         if self.pattern is None:

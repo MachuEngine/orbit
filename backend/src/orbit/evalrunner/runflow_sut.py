@@ -50,6 +50,7 @@ from orbit.runflow.fingerprint import PATTERN, config_fingerprint
 from orbit.runflow.graph import advance_run
 from orbit.runflow.patterns import PATTERN_VERSIONS, PATTERNS, REACT, PatternMemory
 from orbit.runflow.prompt import PROMPT_VERSION
+from orbit.runflow.rag import AGENTIC, RAG_PATTERNS, RAG_VERSION, RagPolicy
 from orbit.runflow.repo import latest_approval_for_run, lock_run
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ class _TraceLLM:
     async def complete(self, request: LLMRequest) -> LLMResponse:
         response = await self._inner.complete(request)
         kind = request.metadata.get("step_kind")
-        if kind:
+        if kind and kind != "rag_rewrite":  # 재작성 응답·질의는 trace에 복제하지 않는다.
             self._trace.record_pattern_step(str(kind), response.text)
         return response
 
@@ -156,6 +157,7 @@ class RunflowV0SUT:
         variants: Iterable[str] = (),
         pattern: str = REACT,
         index: EvalIndexProvider | None = None,
+        rag_pattern: str = AGENTIC,
     ) -> None:
         if index_mode not in INDEX_MODES:
             raise ValueError(f"지원하지 않는 색인 모드: {index_mode!r} (지원: {INDEX_MODES})")
@@ -168,6 +170,11 @@ class RunflowV0SUT:
             raise ValueError(f"지원하지 않는 변형: {sorted(unknown)} (지원: {sorted(VARIANTS)})")
         if pattern not in PATTERNS:
             raise ValueError(f"지원하지 않는 패턴: {pattern!r} (지원: {PATTERNS})")
+        if rag_pattern not in RAG_PATTERNS:
+            raise ValueError("지원하지 않는 RAG 패턴")
+        if rag_pattern != AGENTIC and (pattern != REACT or index_mode != "on" or chosen):
+            raise ValueError("RAG 변형은 index on·react·추가 변형 없음에서만 쓴다")
+        self._rag_pattern = rag_pattern
         self._pattern = pattern
         self._index_mode = index_mode
         self._facts = "facts" in chosen
@@ -192,6 +199,8 @@ class RunflowV0SUT:
             if n in self.variant_names
         ]
         extra = [] if self._pattern == REACT else [PATTERN_VERSIONS[self._pattern]]
+        if self._rag_pattern != AGENTIC:
+            extra.append(f"{RAG_VERSION}-{self._rag_pattern}")
         return "".join([base, *(f"+{n}" for n in ordered), *(f"+{n}" for n in extra)])
 
     def config_info(
@@ -206,6 +215,7 @@ class RunflowV0SUT:
                 facts_extension=self._facts,
                 reasoning_roundtrip=self._reasoning_rt,
                 agent_pattern=self._pattern,
+                rag_pattern=self._rag_pattern,
             ),
             "answer_extension": ANSWER_EXTENSION_VERSION,
             "variants": self.variant_names,
@@ -217,6 +227,9 @@ class RunflowV0SUT:
         if self._pattern != REACT:  # react는 키를 더하지 않는다(기존 결과와 같게 둔다)
             info["pattern"] = self._pattern
             info["pattern_version"] = PATTERN_VERSIONS[self._pattern]
+        if self._rag_pattern != AGENTIC:
+            info["rag_pattern"] = self._rag_pattern
+            info["rag_version"] = RAG_VERSION
         return info
 
     async def run(self, episode: Episode) -> EpisodeOutput:
@@ -225,6 +238,11 @@ class RunflowV0SUT:
             raise RuntimeError("runflow_v0에는 러너가 준비한 평가 DB 핸들이 필요하다")
         submission = _Submission()
         memory = PatternMemory() if self._pattern != REACT else None
+        rag = (
+            RagPolicy(self._rag_pattern, before_search=episode.steps.consume)
+            if self._rag_pattern != AGENTIC
+            else None
+        )
         clock = FixedClock(episode.task.as_of_time)
         resolver = EpisodeResolver(
             calendar=episode.connectors.calendar,
@@ -249,12 +267,14 @@ class RunflowV0SUT:
             reasoning_cache=ReasoningCache() if self._reasoning_rt else None,
             pattern=None if self._pattern == REACT else self._pattern,
             pattern_memory=memory,
+            rag=rag,
         )
         fingerprint = config_fingerprint(
             answer_extension=True,
             facts_extension=self._facts,
             reasoning_roundtrip=self._reasoning_rt,
             agent_pattern=self._pattern,
+            rag_pattern=self._rag_pattern,
         )
         decisions = 0  # 에피소드 전체의 승인 결정 수(정책 순번)
         last_run: uuid.UUID | None = None
@@ -272,6 +292,9 @@ class RunflowV0SUT:
         except Exception:
             self._raise_budget_error()  # 도구가 삼킨 질의 임베딩 상한 초과를 우선한다
             raise
+        finally:
+            if rag is not None:
+                episode.trace.pattern_steps.extend(rag.steps)
         self._raise_budget_error()
         return EpisodeOutput(
             final_text=text,

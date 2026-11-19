@@ -13,9 +13,12 @@
 
 import argparse
 import asyncio
+import hashlib
 import json
+import os
 import subprocess  # noqa: S404  git SHA 조회에만 쓴다
 import sys
+import tempfile
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -58,6 +61,7 @@ from orbit.evalrunner.suts import DATABASE_SUTS, UnknownSutError, create_sut, su
 from orbit.evalrunner.task_source import Dataset, DatasetError, load_dataset
 from orbit.llm.factory import build_llm, llm_config_info
 from orbit.runflow.patterns import PATTERNS
+from orbit.runflow.rag import AGENTIC, RAG_PATTERNS
 
 SEAL_FLAG = "--i-understand-this-uses-the-sealed-test-split"
 
@@ -140,6 +144,29 @@ def _smoke_subset(dataset: Dataset, skip: Collection[str] = frozenset()) -> Data
     return replace(dataset, tasks=tasks)
 
 
+def _mail_content_subset(dataset: Dataset) -> Dataset:
+    """검수로 남은 dev 메일 사실 과제만 선택한다. 단서는 러너 설정에만 둔다."""
+    tasks = tuple(t for t in dataset.tasks if t.split == "dev" and "scenario:mail_fact" in t.tags)
+    if not tasks:
+        raise DatasetError("mail-content 부분집합에 과제가 없다")
+    manifest_bytes = json.dumps(
+        dict(dataset.manifest), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    selection = {
+        "name": "mail-content",
+        "version": "mail-content-v1",
+        "split": "dev",
+        "tag": "scenario:mail_fact",
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "task_ids": sorted(t.task_id for t in tasks),
+        "clusters": sorted({t.cluster_id for t in tasks}),
+        "multiturn_tasks": sum(sum(x.role == "user" for x in t.turns) > 1 for t in tasks),
+    }
+    return replace(
+        dataset, tasks=tasks, manifest={**dataset.manifest, "evaluation_subset": selection}
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m orbit.evalrunner")
     sub = p.add_subparsers(dest="command", required=True)
@@ -148,7 +175,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--dataset", required=True)
     run.add_argument("--split", required=True, choices=["dev", "test"])
     run.add_argument(
-        "--subset", choices=["smoke"], default=None,
+        "--subset", choices=["smoke", "mail-content"], default=None,
         help="smoke: manifest의 smoke_task_ids만 실행한다(dev 분할만, "
         "ADR-0026 §5). CI 회귀 확인용이며 "
         "비교 실험의 판단 근거로 쓰지 않는다",
@@ -168,6 +195,9 @@ def _parser() -> argparse.ArgumentParser:
         "--max-embed-cost-usd", type=float, default=None,
         help="--index on의 임베딩 누적 비용 상한(색인 + 질의 임베딩). 넘을 것 같으면 중단(코드 3)",
     )  # fmt: skip
+    run.add_argument(
+        "--embedding-stats-out", default=None, help="최종 색인·질의 임베딩 통계 JSON(덮어쓰기 금지)"
+    )
     run.add_argument(
         "--price-per-mtok", type=float, default=None, help="임베딩 1M 토큰당 달러(재정의)"
     )
@@ -193,6 +223,12 @@ def _parser() -> argparse.ArgumentParser:
         "runflow_v0가 아니면 오류",
     )  # fmt: skip
     run.add_argument("--repeats", type=int, default=3)
+    run.add_argument(
+        "--rag-pattern",
+        choices=RAG_PATTERNS,
+        default=AGENTIC,
+        help="평가 전용 검색 정책(ADR-0035). 기본 agentic은 현재 경로 그대로",
+    )
     run.add_argument("--out", required=True)
     run.add_argument("--seed", type=int, default=0, help="실험 시드이자 표본 추출 시드")
     run.add_argument("--sample", type=int, default=None, help="과제 N개만 시드 고정으로 뽑는다")
@@ -370,10 +406,97 @@ def _print_index_summary(
     )
 
 
+@dataclass
+class _EmbeddingStatsOutput:
+    path: Path | None
+    embedder: CachingEmbedder | None = None
+
+
+def _write_embedding_stats(path: Path, embedder: CachingEmbedder) -> None:
+    """같은 폴더의 임시 파일을 완성한 뒤 exclusive hard link로 원자 게시한다."""
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(embedder.stats(), handle, ensure_ascii=False, sort_keys=True, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, path)  # 같은 파일시스템에서 완성본만 게시하며 기존 파일은 덮지 않는다.
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def _run(args: argparse.Namespace) -> int:
+    if args.rag_pattern != AGENTIC:
+        if (
+            args.sut != "runflow_v0"
+            or args.index != "on"
+            or args.pattern not in (None, "react")
+            or args.runflow_variant
+        ):
+            print("RAG 변형은 runflow_v0·index on·react·추가 변형 없음에서만 쓴다", file=sys.stderr)
+            return 2
+        if args.live_llm:
+            settings = get_llm_settings()
+            valid_model = (
+                settings.llm_model_id == "openai/gpt-6-luna"
+                and settings.llm_reasoning_effort == "none"
+                and args.model_id in ("unspecified", settings.llm_model_id)
+            )
+        else:
+            valid_model = args.model_id == "openai/gpt-6-luna"
+        if not valid_model:
+            print("RAG 변형은 Luna·reasoning none 설정에서만 쓴다", file=sys.stderr)
+            return 2
+    requested = getattr(args, "embedding_stats_out", None)
+    path = Path(requested) if requested is not None else None
+    if path is not None:
+        if args.index != "on" or args.index_dry_run:
+            print("--embedding-stats-out은 --index on의 실제 실행에서만 쓴다", file=sys.stderr)
+            return 2
+        out = Path(args.out)
+        sink = out.with_name(out.stem + ".estimate.jsonl") if args.estimate is not None else out
+        if path.exists() or path.is_symlink() or path.resolve() in {out.resolve(), sink.resolve()}:
+            print("이미 있는 파일이나 평가 결과 경로에 임베딩 통계를 쓰지 않는다", file=sys.stderr)
+            return 2
+        path.parent.mkdir(parents=True, exist_ok=True)  # 쓰기 불가 경로는 유료 호출 전에 거절한다.
+        with tempfile.TemporaryFile(dir=path.parent):
+            pass  # mkdir(exist_ok)만으로 알 수 없는 부모의 실제 파일 생성 권한도 먼저 확인한다.
+    observation = _EmbeddingStatsOutput(path)
+    result: int | None = None
+    try:
+        result = _run_evaluation(args, observation)
+        return result
+    finally:
+        original_error = sys.exception()
+        if observation.path is not None and observation.embedder is not None:
+            try:
+                _write_embedding_stats(observation.path, observation.embedder)
+            except Exception as exc:
+                if original_error is None and result == 0:
+                    raise
+                # 관측 저장 실패로 원래 예외·종료 코드를 덮지 않는다. 원문은 출력하지 않는다.
+                print(f"임베딩 통계 저장 실패: {type(exc).__name__} (비용 미관측)", file=sys.stderr)
+
+
+def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput) -> int:
     if args.split == "test" and not args.allow_test:
         raise SealedSplitError("test 분할 봉인")  # 출력 파일을 만들기 전에 거부한다
     dataset = load_dataset(args.dataset)
+    if args.subset == "mail-content":
+        if args.split != "dev":
+            print("--subset mail-content는 dev 분할에서만 쓴다", file=sys.stderr)
+            return 2
+        dataset = _mail_content_subset(dataset)
     smoke_excluded: int | None = None
     if args.subset == "smoke":
         if args.split != "dev":
@@ -431,12 +554,15 @@ def _run(args: argparse.Namespace) -> int:
     sut_options: dict[str, Any] = {"index_mode": args.index} if args.sut in DATABASE_SUTS else {}
     if args.sut == "runflow_v0":
         sut_options["variants"] = tuple(args.runflow_variant)
+        if args.rag_pattern != AGENTIC:
+            sut_options["rag_pattern"] = args.rag_pattern
         if args.pattern is not None:
             sut_options["pattern"] = args.pattern
     provider: EvalIndexProvider | None = None
     if (
         index_setup is not None
     ):  # 출력 파일을 만들기 전에 색인을 준비한다(실패해도 파일이 남지 않는다)
+        observation.embedder = index_setup.embedder
         provider, seconds = asyncio.run(index_setup.build())
         sut_options["index"] = provider
         _print_index_summary(provider, index_setup.embedder, seconds)
