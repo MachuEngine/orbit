@@ -23,6 +23,7 @@ from orbit.runflow.eval_variants import (
 from orbit.runflow.nodes import TEMPERATURE
 from orbit.runflow.patterns import fingerprint_payload
 from orbit.runflow.prompt import PROMPT_VERSION
+from orbit.runflow.rag import fingerprint_payload as rag_payload
 from orbit.runflow.write_tools import run_tool_specs
 from orbit.voice.limits import VOICE_CONFIG
 
@@ -38,6 +39,7 @@ def config_fingerprint(
     facts_extension: bool = False,
     reasoning_roundtrip: bool = False,
     agent_pattern: str | None = None,
+    rag_pattern: str | None = None,
 ) -> str:
     """`model_id`는 고정 모델 ID(D9-3). 없거나 비어 있으면 "unset"으로 넣는다.
 
@@ -83,6 +85,8 @@ def config_fingerprint(
         payload["reasoning_roundtrip"] = {"version": REASONING_ROUNDTRIP_VERSION}
     if agent_pattern is not None and agent_pattern != "react":
         payload["agent_pattern"] = fingerprint_payload(agent_pattern)
+    if rag_pattern is not None and rag_pattern != "agentic":
+        payload["rag_pattern"] = rag_payload(rag_pattern)
     if llm_info is not None:
         del payload["temperature"]
         # 워커 경로는 provider_items를 저장하지 않아 추론 항목을 되돌리지 않는다. 평가 전용

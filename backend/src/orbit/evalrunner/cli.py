@@ -13,6 +13,7 @@
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import subprocess  # noqa: S404  git SHA 조회에만 쓴다
@@ -60,6 +61,7 @@ from orbit.evalrunner.suts import DATABASE_SUTS, UnknownSutError, create_sut, su
 from orbit.evalrunner.task_source import Dataset, DatasetError, load_dataset
 from orbit.llm.factory import build_llm, llm_config_info
 from orbit.runflow.patterns import PATTERNS
+from orbit.runflow.rag import AGENTIC, RAG_PATTERNS
 
 SEAL_FLAG = "--i-understand-this-uses-the-sealed-test-split"
 
@@ -142,6 +144,29 @@ def _smoke_subset(dataset: Dataset, skip: Collection[str] = frozenset()) -> Data
     return replace(dataset, tasks=tasks)
 
 
+def _mail_content_subset(dataset: Dataset) -> Dataset:
+    """검수로 남은 dev 메일 사실 과제만 선택한다. 단서는 러너 설정에만 둔다."""
+    tasks = tuple(t for t in dataset.tasks if t.split == "dev" and "scenario:mail_fact" in t.tags)
+    if not tasks:
+        raise DatasetError("mail-content 부분집합에 과제가 없다")
+    manifest_bytes = json.dumps(
+        dict(dataset.manifest), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    selection = {
+        "name": "mail-content",
+        "version": "mail-content-v1",
+        "split": "dev",
+        "tag": "scenario:mail_fact",
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "task_ids": sorted(t.task_id for t in tasks),
+        "clusters": sorted({t.cluster_id for t in tasks}),
+        "multiturn_tasks": sum(sum(x.role == "user" for x in t.turns) > 1 for t in tasks),
+    }
+    return replace(
+        dataset, tasks=tasks, manifest={**dataset.manifest, "evaluation_subset": selection}
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m orbit.evalrunner")
     sub = p.add_subparsers(dest="command", required=True)
@@ -150,7 +175,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--dataset", required=True)
     run.add_argument("--split", required=True, choices=["dev", "test"])
     run.add_argument(
-        "--subset", choices=["smoke"], default=None,
+        "--subset", choices=["smoke", "mail-content"], default=None,
         help="smoke: manifest의 smoke_task_ids만 실행한다(dev 분할만, "
         "ADR-0026 §5). CI 회귀 확인용이며 "
         "비교 실험의 판단 근거로 쓰지 않는다",
@@ -200,6 +225,12 @@ def _parser() -> argparse.ArgumentParser:
         "runflow_v0가 아니면 오류",
     )  # fmt: skip
     run.add_argument("--repeats", type=int, default=3)
+    run.add_argument(
+        "--rag-pattern",
+        choices=RAG_PATTERNS,
+        default=AGENTIC,
+        help="평가 전용 검색 정책(ADR-0035). 기본 agentic은 현재 경로 그대로",
+    )
     run.add_argument("--out", required=True)
     run.add_argument("--seed", type=int, default=0, help="실험 시드이자 표본 추출 시드")
     run.add_argument("--sample", type=int, default=None, help="과제 N개만 시드 고정으로 뽑는다")
@@ -407,6 +438,27 @@ def _write_embedding_stats(path: Path, embedder: CachingEmbedder) -> None:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.rag_pattern != AGENTIC:
+        if (
+            args.sut != "runflow_v0"
+            or args.index != "on"
+            or args.pattern not in (None, "react")
+            or args.runflow_variant
+        ):
+            print("RAG 변형은 runflow_v0·index on·react·추가 변형 없음에서만 쓴다", file=sys.stderr)
+            return 2
+        if args.live_llm:
+            settings = get_llm_settings()
+            valid_model = (
+                settings.llm_model_id == "openai/gpt-6-luna"
+                and settings.llm_reasoning_effort == "none"
+                and args.model_id in ("unspecified", settings.llm_model_id)
+            )
+        else:
+            valid_model = args.model_id == "openai/gpt-6-luna"
+        if not valid_model:
+            print("RAG 변형은 Luna·reasoning none 설정에서만 쓴다", file=sys.stderr)
+            return 2
     requested = getattr(args, "embedding_stats_out", None)
     path = Path(requested) if requested is not None else None
     if path is not None:
@@ -442,6 +494,11 @@ def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput
     if args.split == "test" and not args.allow_test:
         raise SealedSplitError("test 분할 봉인")  # 출력 파일을 만들기 전에 거부한다
     dataset = load_dataset(args.dataset)
+    if args.subset == "mail-content":
+        if args.split != "dev":
+            print("--subset mail-content는 dev 분할에서만 쓴다", file=sys.stderr)
+            return 2
+        dataset = _mail_content_subset(dataset)
     smoke_excluded: int | None = None
     if args.subset == "smoke":
         if args.split != "dev":
@@ -499,6 +556,8 @@ def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput
     sut_options: dict[str, Any] = {"index_mode": args.index} if args.sut in DATABASE_SUTS else {}
     if args.sut == "runflow_v0":
         sut_options["variants"] = tuple(args.runflow_variant)
+        if args.rag_pattern != AGENTIC:
+            sut_options["rag_pattern"] = args.rag_pattern
         if args.pattern is not None:
             sut_options["pattern"] = args.pattern
     provider: EvalIndexProvider | None = None

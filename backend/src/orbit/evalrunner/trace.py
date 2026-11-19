@@ -35,6 +35,7 @@ class ToolCallTrace:
     result: str
     is_error: bool
     turn: int | None = None  # 몇 번째 사용자 발화 처리 중인가(0부터). 한 번에 받는 평가 대상은 None
+    origin: str | None = None
 
 
 @dataclass
@@ -94,7 +95,7 @@ def error_kind(is_error: bool, result: str) -> str | None:
 
 def _call_dict(call: ToolCallTrace) -> dict[str, Any]:
     text = call.result
-    return {
+    result = {
         "turn": call.turn,
         "name": call.name,
         "arguments": call.arguments,
@@ -104,6 +105,9 @@ def _call_dict(call: ToolCallTrace) -> dict[str, Any]:
         "is_error": call.is_error,
         "error_kind": error_kind(call.is_error, text),
     }
+    if call.origin is not None:
+        result["origin"] = call.origin
+    return result
 
 
 def _handle_values(arguments: Any) -> list[str]:
@@ -159,7 +163,7 @@ def build_trace(
             for i, t in enumerate(transcript)
         ]
         calls = [
-            ToolCallTrace(c.name, c.arguments, c.result, c.is_error, i)
+            ToolCallTrace(c.name, c.arguments, c.result, c.is_error, i, c.origin)
             for i, t in enumerate(transcript)
             for c in t.tool_calls
         ]

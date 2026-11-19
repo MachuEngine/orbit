@@ -145,6 +145,8 @@ def _config_dict(
     }
     if smoke_excluded is not None:  # 스모크 목록에서 검수 제외로 빠진 과제 수(ADR-0026 §5)
         config["smoke_excluded"] = smoke_excluded
+    if "evaluation_subset" in dataset.manifest:
+        config["subset"] = dataset.manifest["evaluation_subset"]
     if llm_config is not None:  # 실제 LLM 제공자 설정(ADR-0014). 스크립트 실행에는 없다.
         config["llm"] = dict(llm_config)
     sut_info = getattr(sut, "config_info", None)

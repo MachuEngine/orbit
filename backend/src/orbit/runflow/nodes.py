@@ -67,6 +67,7 @@ from orbit.runflow.index_tool import SEARCH_INDEXED_MAIL, IndexedMailSearch
 from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
 from orbit.runflow.patterns import PatternDriver
 from orbit.runflow.prompt import build_system_prompt
+from orbit.runflow.rag import INITIAL_STEP, initial_call_id
 from orbit.runflow.reminder_tool import CREATE_REMINDER, ReminderTool
 from orbit.runflow.repo import get_approval_by_tool_call, get_tool_call, lock_run
 from orbit.runflow.state import RunState, validate_state
@@ -303,6 +304,23 @@ class RunNodes:
 
     # ------------------------------------------------------------ agent
 
+    async def _claim_rag_stage(self, ws: uuid.UUID, run_id: uuid.UUID, kind: str) -> bool:
+        """불확실한 비용성 호출은 재진입 때 자동 반복하지 않는다."""
+        async with self._d.db.workspace_session(ws) as s:
+            await lock_run(s, ws, run_id)
+            events = await list_events(s, workspace_id=ws, run_id=run_id)
+            if any(e.type == kind for e in events):
+                return False
+            await append_event(
+                s,
+                workspace_id=ws,
+                run_id=run_id,
+                type=kind,
+                payload={"step": INITIAL_STEP},
+                clock=self._d.clock,
+            )
+            return True
+
     async def agent(self, state: RunState) -> dict[str, Any]:
         d = self._d
         ws, run_id, step = self._ids(state)
@@ -318,11 +336,64 @@ class RunNodes:
 
         prior = await self._prior(ws, run_id)
         transcript = await self._transcript(ws, run_id, prior)
+        if d.rag is not None:
+            initial_id = initial_call_id(str(run_id))
+            initial = transcript.assistant_for_step(INITIAL_STEP)
+            if initial is None:
+                if d.rag.pattern == "rewrite_retrieve_once" and not await self._claim_rag_stage(
+                    ws, run_id, "rag_rewrite_started"
+                ):
+                    return await self._fail(ws, run_id, "rag_rewrite_interrupted")
+                try:
+                    query = await d.rag.query(transcript, d.llm)
+                except LLMError as exc:
+                    return await self._fail(ws, run_id, type(exc).__name__)
+                initial = await self._store_assistant_content(
+                    ws,
+                    run_id,
+                    INITIAL_STEP,
+                    {
+                        "step": INITIAL_STEP,
+                        "text": None,
+                        "origin": "rag_initial",
+                        "tool_calls": [
+                            {
+                                "id": initial_id,
+                                "name": SEARCH_INDEXED_MAIL,
+                                "arguments": {"query": query, "max_results": 5},
+                            }
+                        ],
+                    },
+                )
+            if initial_id not in transcript.tool_results(INITIAL_STEP):
+                if d.rag.before_search is not None:
+                    d.rag.before_search()
+                # 비용이 생긴 읽기 호출의 결과가 불확실하면 자동 재호출하지 않는다.
+                if not await self._claim_rag_stage(ws, run_id, "rag_search_started"):
+                    return await self._fail(ws, run_id, "rag_search_interrupted")
+                d.rag.steps.append({"kind": "rag_initial", "synthetic": True})
+                try:
+                    calendar, mail = await d.resolver.connectors_for(ws)
+                except NoConnection:
+                    return await self._fail(ws, run_id, "no_connection")
+                await self._run_calls(
+                    ws,
+                    run_id,
+                    INITIAL_STEP,
+                    list(initial["tool_calls"]),
+                    transcript,
+                    transcript.workset(),
+                    calendar,
+                    mail,
+                )
+            transcript = await self._transcript(ws, run_id, prior)
         assistant = transcript.assistant_for_step(step)
         if assistant is None:
             boundary = boundary_for(f"run:{run_id}")
             system = build_system_prompt(d.clock.now(), d.tz, boundary)
             tools = run_tool_specs()
+            if d.rag is not None:
+                tools = tuple(spec for spec in tools if spec.name != SEARCH_INDEXED_MAIL)
             metadata: dict[str, str] = {}
             if d.facts_extension:  # 평가 전용 [사실 확인] 단락(ADR-0023 §10). 답 제출 안내보다 앞
                 system = with_facts_prompt(system)
@@ -394,23 +465,40 @@ class RunNodes:
         return self._out({"step": step, "tool_call_id": str(pending), "next_node": route})
 
     async def _store_assistant(
-        self, ws: uuid.UUID, run_id: uuid.UUID, step: int, response: LLMResponse
+        self,
+        ws: uuid.UUID,
+        run_id: uuid.UUID,
+        step: int,
+        response: LLMResponse,
     ) -> dict[str, Any]:
         """step의 assistant 행을 저장한다. 이미 있으면(동시 재실행) 저장된 것을 돌려준다."""
-        async with self._d.db.workspace_session(ws) as s:
-            await lock_run(s, ws, run_id)
-            rows = await list_messages(s, workspace_id=ws, run_id=run_id)
-            existing = Transcript(tuple(rows)).assistant_for_step(step)
-            if existing is not None:
-                return existing
-            content: dict[str, Any] = {
+        return await self._store_assistant_content(
+            ws,
+            run_id,
+            step,
+            {
                 "step": step,
                 "text": response.text,
                 "tool_calls": [
                     {"id": c.id, "name": c.name, "arguments": c.arguments}
                     for c in response.tool_calls
                 ],
-            }
+            },
+        )
+
+    async def _store_assistant_content(
+        self,
+        ws: uuid.UUID,
+        run_id: uuid.UUID,
+        step: int,
+        content: dict[str, Any],
+    ) -> dict[str, Any]:
+        async with self._d.db.workspace_session(ws) as s:
+            await lock_run(s, ws, run_id)
+            rows = await list_messages(s, workspace_id=ws, run_id=run_id)
+            existing = Transcript(tuple(rows)).assistant_for_step(step)
+            if existing is not None:
+                return existing
             await append_message(
                 s,
                 workspace_id=ws,
@@ -450,6 +538,16 @@ class RunNodes:
         )
         for index, call in enumerate(calls):
             llm_id, name = str(call["id"]), str(call["name"])
+            if (
+                self._d.rag is not None
+                and name == SEARCH_INDEXED_MAIL
+                and not (step == INITIAL_STEP and llm_id == initial_call_id(str(run_id)))
+            ):
+                if llm_id not in done:
+                    await self._store_tool_result(
+                        ws, run_id, step, llm_id, name, {"error": "tool_not_allowed"}, is_error=True
+                    )
+                continue
             if allowed is not None and name not in allowed:
                 if llm_id not in done:
                     await self._store_tool_result(

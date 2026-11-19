@@ -449,6 +449,7 @@ def _transcript_turn(rows: Sequence[Any]) -> TranscriptTurn:
                 arguments=c.get("arguments"),
                 result=str(got.get("text", "")),
                 is_error=bool(got.get("is_error", False)),
+                origin="rag_initial" if step == -1 else None,
             )
         )
     return TranscriptTurn(user, "\n\n".join(texts), tuple(traced), handles)
