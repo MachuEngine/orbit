@@ -229,6 +229,11 @@ def test_config_repeats_must_exist_and_agree() -> None:
         stats.success_rate([bare])
 
 
+def test_empty_records_raise_results_error() -> None:
+    with pytest.raises(stats.ResultsError):
+        stats._expected_repeats([])
+
+
 def _clustered(n_clusters: int, per_cluster: int = 2) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for c in range(n_clusters):

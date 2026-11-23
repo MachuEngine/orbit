@@ -100,7 +100,7 @@ async def test_assistant_rows_carry_trace_and_every_section_has_values() -> None
     assert out["grounding"]["citation"]["episodes"] >= 2
     assert out["grounding"]["abstention"]["abstain_rate"] == 1.0
     # 기권 과제는 도구를 쓰지 않아 기대 영역(메일)을 놓친 것으로 센다
-    assert 0 < out["tools"]["selection"]["recall"] < 1
+    assert 0 < out["tools"]["selection"]["micro_recall"] < 1
     assert out["tools"]["argument_validity"]["validity_rate"] is not None
     assert out["tools"]["excess_calls"]["available"] is True
     assert out["robustness"]["fault"]["episodes"] == 1

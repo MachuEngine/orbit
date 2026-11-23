@@ -94,7 +94,7 @@ async def test_runflow_rows_carry_trace_and_every_section_has_values(app_url: st
     assert out["accuracy_extra"]["multi_turn"]["episodes"] == 2
     assert out["grounding"]["fact_support"]["episodes"] == len(rows)
     assert out["grounding"]["citation"]["available"] is True
-    assert out["tools"]["selection"]["recall"] is not None
+    assert out["tools"]["selection"]["micro_recall"] is not None
     assert out["tools"]["argument_validity"]["tool_calls"] > 0
     assert out["tools"]["excess_calls"]["available"] is True
     assert out["robustness"]["fault"]["episodes"] == 1

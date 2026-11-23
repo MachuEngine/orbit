@@ -217,6 +217,8 @@ class EpisodeResult:
     llm_calls_by_kind: Mapping[str, int] | None = None
     # 패턴의 계획·분류 합계(분류 파싱 실패 수 등). 패턴이 없으면 None. 오류로 끝난 에피소드는 None.
     pattern_stats: Mapping[str, Any] | None = None
+    # RAG 아키텍처 비교 진단(ADR-0036). 맥락에 닿은 메일 ID·절단 여부·검색 횟수. 본문은 없다.
+    rag_diag: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         row = self._base_dict()
@@ -224,6 +226,8 @@ class EpisodeResult:
             row["usage"]["llm_calls_by_kind"] = dict(sorted(self.llm_calls_by_kind.items()))
         if self.pattern_stats is not None:
             row["pattern_stats"] = dict(self.pattern_stats)
+        if self.rag_diag is not None:
+            row["rag_diag"] = dict(self.rag_diag)
         if self.cleanup_failed is not None:  # DB를 쓴 에피소드(관찰이 실패하면 turns가 없다)
             row["approval_violations"] = self.approval_violations
             row["turns"] = None if self.turns is None else [dict(t) for t in self.turns]
@@ -424,6 +428,7 @@ async def run_episode(
         output.structured if output is not None else None,
         reminders_created=len(observation.reminders) if observation is not None else 0,
         reminders=observation.reminders if observation is not None else (),
+        rag_norm=any(t.startswith("rag:") for t in task.tags),
     )
     violations = approval_violations(observation, calls) if observation is not None else 0
     failure: FailureType | None
@@ -533,6 +538,7 @@ async def run_episode(
         min_tool_calls=min_calls,
         llm_calls_by_kind=_calls_by_kind(recorder),
         pattern_stats=output.pattern_stats if output is not None else None,
+        rag_diag=output.rag_diag if output is not None else None,
     )
 
 

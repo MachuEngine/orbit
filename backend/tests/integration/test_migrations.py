@@ -22,7 +22,8 @@ def _tables(owner_url: str) -> set[str]:
                     " 'sync_state', 'source_item', 'chunk', 'notification',"
                     " 'notification_setting', 'voice_usage', 'desktop_login_code',"
                     " 'desktop_connect_ticket',"
-                    " 'desktop_connect_pending'))"
+                    " 'desktop_connect_pending', 'mail_graph_entity', 'mail_graph_relation',"
+                    " 'mail_graph_community', 'mail_graph_extraction', 'mail_graph_build'))"
                 )
             )
             return {r[0] for r in rows}
@@ -96,6 +97,11 @@ def test_upgrade_downgrade_upgrade(owner_url: str) -> None:
         "desktop_login_code",
         "desktop_connect_ticket",
         "desktop_connect_pending",
+        "mail_graph_entity",
+        "mail_graph_relation",
+        "mail_graph_community",
+        "mail_graph_extraction",
+        "mail_graph_build",
         "procrastinate_jobs",
         "procrastinate_events",
         "procrastinate_workers",

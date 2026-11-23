@@ -31,6 +31,8 @@ from orbit.evaldata.v1.realize import (
     read_all_rows,
     read_rows,
     realize_bodies,
+    recheck_scan,
+    recheck_skeleton_problem,
     select_ids,
 )
 from orbit.evaldata.v1.realize_check import check_body
@@ -1064,3 +1066,163 @@ def test_prompt_version_and_brand_rule_in_prompt() -> None:
 
     assert PROMPT_VERSION == "realize-v2"
     assert "협업 도구" in SYSTEM_PROMPT and "일반 명사" in SYSTEM_PROMPT
+
+
+def _with_bodies(sk: Skeleton, **update: object) -> Skeleton:
+    bid = next(iter(sk.bodies))
+    bodies = {**sk.bodies, bid: sk.bodies[bid].model_copy(update=update)}
+    return sk.model_copy(update={"bodies": bodies})
+
+
+async def test_recheck_allows_skeleton_change_only_in_forbidden_rules(
+    small_sk: Skeleton, tmp_path: Path
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    new_dir = write_skeleton(
+        _with_bodies(small_sk, forbidden_patterns=["절대나오지않는표현XYZ"]), tmp_path / "new"
+    )
+    args = ["--recheck", "--previous-skeleton", str(old_dir)]
+    assert _cli(new_dir, out) == 2  # --previous-skeleton 없이는 거부
+    assert (
+        await asyncio.to_thread(_cli, new_dir, out, *args) == EXIT_OK
+    )  # main이 asyncio.run을 쓴다
+    m = json.loads((out / MANIFEST_FILE).read_text(encoding="utf-8"))
+    new_sha = hashlib.sha256((new_dir / "skeleton.json").read_bytes()).hexdigest()
+    old_sha = hashlib.sha256((old_dir / "skeleton.json").read_bytes()).hexdigest()
+    assert m["skeleton_sha256"] == new_sha and old_sha in m["previous_skeleton_sha256s"]
+
+
+def _change_fact(sk: Skeleton, bid: str, *, template: bool) -> Skeleton:
+    spec = sk.bodies[bid]
+    fact = spec.required_facts[0].model_copy(update={"surface_forms": ["새로운결정문구XYZ"]})
+    update: dict[str, object] = {"required_facts": [fact, *spec.required_facts[1:]]}
+    if template:
+        update["template_text"] = spec.template_text + " 새로운결정문구XYZ"
+    return sk.model_copy(update={"bodies": {**sk.bodies, bid: spec.model_copy(update=update)}})
+
+
+async def test_recheck_allows_required_facts_and_template_text_change(
+    small_sk: Skeleton, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    bid = next(b for b, s in small_sk.bodies.items() if s.required_facts)
+    changed = _change_fact(small_sk, bid, template=True)
+    # 바뀐 필수 사실은 기존 본문이 충족하지 못해 재생성 대상이 된다.
+    _, failed, _ = recheck_scan(changed, read_rows(out / BODIES_FILE), {bid})
+    assert bid in failed
+    rule_changed, why = recheck_skeleton_problem(out, changed, str(old_dir))
+    assert why is None and rule_changed == [bid]
+    assert f"검사 규칙이 바뀐 body_id 1개: {bid}" in capsys.readouterr().out
+
+
+async def test_recheck_rejects_template_text_only_change(
+    small_sk: Skeleton, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    new_dir = write_skeleton(
+        _with_bodies(small_sk, template_text="바뀐 대체 본문"), tmp_path / "new"
+    )
+    assert _cli(new_dir, out, "--recheck", "--previous-skeleton", str(old_dir)) == 2
+    assert "template_text만" in capsys.readouterr().err
+
+
+async def test_recheck_rejects_skeleton_change_in_other_spec_fields(
+    small_sk: Skeleton, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    bid = next(b for b, s in small_sk.bodies.items() if s.required_facts)
+    changed = _change_fact(small_sk, bid, template=True)
+    spec = changed.bodies[bid]
+    ctx = spec.context.model_copy(update={"subject": "바뀐 제목"})
+    changed = changed.model_copy(
+        update={"bodies": {**changed.bodies, bid: spec.model_copy(update={"context": ctx})}}
+    )
+    new_dir = write_skeleton(changed, tmp_path / "new")
+    assert (
+        _cli(new_dir, out, "--recheck", "--previous-skeleton", str(old_dir)) == 2
+    )  # 거부라 run 전
+    assert "검사 규칙" in capsys.readouterr().err
+    m = json.loads((out / MANIFEST_FILE).read_text(encoding="utf-8"))
+    assert (
+        m["skeleton_sha256"] != hashlib.sha256((new_dir / "skeleton.json").read_bytes()).hexdigest()
+    )
+
+
+async def test_recheck_rejects_manifest_without_skeleton_sha(
+    small_sk: Skeleton, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    path = out / MANIFEST_FILE
+    m = json.loads(path.read_text(encoding="utf-8"))
+    m["skeleton_sha256"] = ""
+    path.write_text(json.dumps(m), encoding="utf-8")
+    new_dir = write_skeleton(_with_bodies(small_sk, forbidden_patterns=["zzz"]), tmp_path / "new")
+    assert _cli(new_dir, out, "--recheck", "--previous-skeleton", str(old_dir)) == 2
+    assert "skeleton_sha256이 없어" in capsys.readouterr().err
+
+
+def _with_world_sha(sk: Skeleton) -> Skeleton:
+    return sk.model_copy(update={"world_model_sha256": "f" * 64})
+
+
+async def test_recheck_allows_world_sha_change_with_rule_change(
+    small_sk: Skeleton, tmp_path: Path
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    bid = next(iter(small_sk.bodies))
+    changed = _with_world_sha(_with_bodies(small_sk, forbidden_patterns=["zzz"]))
+    new_dir = write_skeleton(changed, tmp_path / "new")
+    args = ["--recheck", "--previous-skeleton", str(old_dir)]
+    # dry-run도 skeleton 검사를 먼저 해서 실제 실행 전에 거부 여부를 알 수 있다.
+    assert await asyncio.to_thread(_cli, new_dir, out, *args, "--dry-run") == EXIT_OK
+    assert await asyncio.to_thread(_cli, new_dir, out, *args) == EXIT_OK
+    m = json.loads((out / MANIFEST_FILE).read_text(encoding="utf-8"))
+    assert m["runs"][-1]["recheck"]["rule_changed_body_ids"] == [bid]
+
+
+async def test_recheck_rejects_world_sha_change_without_rule_change(
+    small_sk: Skeleton, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    new_dir = write_skeleton(_with_world_sha(small_sk), tmp_path / "new")
+    args = ["--recheck", "--previous-skeleton", str(old_dir)]
+    assert _cli(new_dir, out, *args, "--dry-run") == 2
+    assert "world_model_sha256만" in capsys.readouterr().err
+
+
+async def test_recheck_allows_forbidden_facts_only_change(
+    small_sk: Skeleton, tmp_path: Path
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    bid = next(iter(small_sk.bodies))
+    spec = small_sk.bodies[bid]
+    fact = spec.required_facts[0] if spec.required_facts else None
+    forbidden = [*spec.forbidden_facts, fact] if fact else spec.forbidden_facts
+    new = _with_bodies(small_sk, forbidden_facts=forbidden)
+    if fact is None:
+        pytest.skip("필수 사실이 없는 body")
+    assert recheck_skeleton_problem(out, new, str(old_dir)) == ([bid], None)
+
+
+async def test_recheck_rejects_added_or_removed_bodies(small_sk: Skeleton, tmp_path: Path) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    bid = next(iter(small_sk.bodies))
+    removed = small_sk.model_copy(
+        update={"bodies": {b: s for b, s in small_sk.bodies.items() if b != bid}}
+    )
+    assert recheck_skeleton_problem(out, removed, str(old_dir))[1]
+    added = small_sk.model_copy(
+        update={"bodies": {**small_sk.bodies, "extra_body": small_sk.bodies[bid]}}
+    )
+    assert recheck_skeleton_problem(out, added, str(old_dir))[1]
+
+
+async def test_recheck_rejects_rule_change_on_fallback_body(
+    small_sk: Skeleton, tmp_path: Path
+) -> None:
+    out, old_dir = await _realized_out(small_sk, tmp_path)
+    bid = next(iter(small_sk.bodies))
+    _tamper(out, {bid: {"fallback": True}})
+    new = _with_bodies(small_sk, forbidden_patterns=["zzz"])
+    changed, why = recheck_skeleton_problem(out, new, str(old_dir))
+    assert changed == [] and why and bid in why and "fallback" in why

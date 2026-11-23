@@ -304,8 +304,8 @@ def fact_support(records: Sequence[Record]) -> dict[str, Any]:
         "episodes_with_ungrounded_fact": ungrounded_episodes,
         "facts": n,
         "grounded": g,
-        "support_rate": _rate(g, n),
-        "episode_mean_support": _mean(per_episode),
+        "faithfulness": _rate(g, n),
+        "macro_faithfulness": _mean(per_episode),
         "by_kind": {
             k: {"facts": total[k], "grounded": grounded[k], "rate": _rate(grounded[k], total[k])}
             for k in sorted(total)
@@ -371,10 +371,10 @@ def citation(records: Sequence[Record]) -> dict[str, Any]:
         "available": True,
         "episodes": n,
         "episodes_without_structured_answer": no_answer,
-        "precision": _rate(hits, cited_n),
-        "recall": _rate(hits, ref_n),
-        "episode_mean_precision": _mean(precisions),
-        "episode_mean_recall": _mean(recalls),
+        "micro_precision": _rate(hits, cited_n),
+        "micro_recall": _rate(hits, ref_n),
+        "macro_precision": _mean(precisions),
+        "macro_recall": _mean(recalls),
         "note": "근거 태그는 정답 외 근거도 포함하므로 recall 상한이 1보다 작을 수 있다",
     }
 
@@ -481,8 +481,8 @@ def _tool_selection(rows: Sequence[Record]) -> dict[str, Any]:
     return {
         "available": True,
         "episodes": n,
-        "recall": _rate(hit, need),
-        "episode_mean_recall": _mean(macro),
+        "micro_recall": _rate(hit, need),
+        "macro_recall": _mean(macro),
         "recall_by_area": {
             a: {
                 "hit": per_area_hit[a],

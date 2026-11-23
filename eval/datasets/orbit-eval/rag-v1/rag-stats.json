@@ -1,0 +1,54 @@
+{
+  "all_evidence_length": {
+    "max": 1457,
+    "n": 236,
+    "p50": 655,
+    "p90": 1167,
+    "p95": 1250
+  },
+  "by_split": {
+    "dev": 64,
+    "test": 96
+  },
+  "by_type": {
+    "aggregate": 40,
+    "multihop": 40,
+    "single": 40,
+    "unanswerable": 40
+  },
+  "by_type_split": {
+    "aggregate/dev": 16,
+    "aggregate/test": 24,
+    "multihop/dev": 16,
+    "multihop/test": 24,
+    "single/dev": 16,
+    "single/test": 24,
+    "unanswerable/dev": 16,
+    "unanswerable/test": 24
+  },
+  "clusters": 40,
+  "dev_evidence_length": {
+    "max": 1284,
+    "n": 91,
+    "p50": 688,
+    "p90": 1069,
+    "p95": 1121
+  },
+  "evidence_mails": 236,
+  "fact_late_position": "미검증: 사실이 본문 후반부에 있는지는 확인하지 않았다(첫 등장 위치만 측정)",
+  "fact_position_p50": 0.805,
+  "generator_git_sha": "c9e2a8f478766edd04554151ff7dc40eda65dce8",
+  "long_evidence_ratio": 0.3898,
+  "long_threshold_chars": 800,
+  "mails_per_account": {
+    "acct-r1": 400,
+    "acct-r2": 400,
+    "acct-r3": 400,
+    "acct-r4": 400
+  },
+  "planned_long_evidence_ratio": 0.5085,
+  "realized": true,
+  "schema_version": "orbit-rag-v1/3",
+  "seed": 20261121,
+  "tasks": 160
+}

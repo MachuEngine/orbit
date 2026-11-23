@@ -508,7 +508,7 @@ def summarize(
                     "cost_usd_all_history": 0.0,
                 },
             ),
-            "code_fact_grounded_rate": code.get("support_rate"),
+            "code_faithfulness": code.get("faithfulness"),
             "code_fact_support": code,
             **{
                 name: _rate(rows, resamples, seed, primary=name == "primary_success")

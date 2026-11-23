@@ -228,6 +228,8 @@ class EpisodeOutput:
     text_skipped: bool = False
     # 평가 전용 Agent 패턴(ADR-0030)의 계획·분류 합계(`PatternStats.to_dict()`). 패턴이 없으면 None.
     pattern_stats: dict[str, Any] | None = None
+    # RAG 아키텍처 비교(ADR-0036)의 에피소드 진단. 메일 ID·핸들·숫자만 담는다. 아니면 None.
+    rag_diag: dict[str, Any] | None = None
 
 
 class SystemUnderTest(Protocol):

@@ -45,6 +45,7 @@ from orbit.runflow.answer import AnswerSink
 from orbit.runflow.eval_variants import ReasoningCache
 from orbit.runflow.patterns import PATTERNS, REACT, PatternMemory
 from orbit.runflow.rag import RagPolicy
+from orbit.runflow.tool_limits import ToolLimits
 
 DEFAULT_MAX_STEPS = 12  # 한 run의 LLM 호출 상한
 DEFAULT_LEASE_SECONDS = 300.0  # 커넥터 호출 타임아웃 x (1 + 재호출 1회)보다 길게(ADR-0012 §3)
@@ -258,6 +259,7 @@ class RunDeps:
     pattern: str | None = None
     pattern_memory: PatternMemory | None = None
     rag: RagPolicy | None = None  # 평가 CLI에서만 주입(ADR-0035)
+    tool_limits: ToolLimits | None = None  # 평가 전용 도구 제한·맥락 상한(ADR-0036 A2)
 
     def __post_init__(self) -> None:
         if self.pattern is None:
@@ -268,3 +270,6 @@ class RunDeps:
             self.pattern = None  # react는 변형이 아니다
         elif self.pattern_memory is None:
             self.pattern_memory = PatternMemory()
+
+    # 평가 전용(ADR-0036). `answer_sink`가 있을 때만 답 제출 안내 뒤에 붙는다. 제품 경로는 None이다.
+    answer_note: str | None = None

@@ -12,6 +12,7 @@
 `UsageRecorder`에서 직접 읽는다(ADR-0009 §3).
 """
 
+import hashlib
 import logging
 import uuid
 from collections.abc import Callable, Iterable
@@ -52,6 +53,7 @@ from orbit.runflow.patterns import PATTERN_VERSIONS, PATTERNS, REACT, PatternMem
 from orbit.runflow.prompt import PROMPT_VERSION
 from orbit.runflow.rag import AGENTIC, RAG_PATTERNS, RAG_VERSION, RagPolicy
 from orbit.runflow.repo import latest_approval_for_run, lock_run
+from orbit.runflow.tool_limits import ToolLimits
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +144,10 @@ class _Submission:
         self.answer = answer
 
 
+def _note_sha(note: str) -> str:
+    return hashlib.sha256(note.encode("utf-8")).hexdigest()[:16]
+
+
 def decision_for(policy: tuple[str, ...], index: int) -> bool:
     """n번째(0부터) 승인 요청의 결정. 정책 밖은 승인이다(ADR-0023 §3)."""
     return index >= len(policy) or policy[index] != "reject"
@@ -158,6 +164,8 @@ class RunflowV0SUT:
         pattern: str = REACT,
         index: EvalIndexProvider | None = None,
         rag_pattern: str = AGENTIC,
+        limits_factory: Callable[[], ToolLimits] | None = None,
+        answer_note: str | None = None,
     ) -> None:
         if index_mode not in INDEX_MODES:
             raise ValueError(f"지원하지 않는 색인 모드: {index_mode!r} (지원: {INDEX_MODES})")
@@ -175,6 +183,8 @@ class RunflowV0SUT:
         if rag_pattern != AGENTIC and (pattern != REACT or index_mode != "on" or chosen):
             raise ValueError("RAG 변형은 index on·react·추가 변형 없음에서만 쓴다")
         self._rag_pattern = rag_pattern
+        self._answer_note = answer_note  # 평가 전용 답 제출 추가 단락(ADR-0036)
+        self._limits_factory = limits_factory  # 평가 전용 도구 제한(ADR-0036 A2)
         self._pattern = pattern
         self._index_mode = index_mode
         self._facts = "facts" in chosen
@@ -201,6 +211,8 @@ class RunflowV0SUT:
         extra = [] if self._pattern == REACT else [PATTERN_VERSIONS[self._pattern]]
         if self._rag_pattern != AGENTIC:
             extra.append(f"{RAG_VERSION}-{self._rag_pattern}")
+        if self._answer_note is not None:  # None이면 기존 지문과 같다
+            extra.append(f"answer-note-{_note_sha(self._answer_note)}")
         return "".join([base, *(f"+{n}" for n in ordered), *(f"+{n}" for n in extra)])
 
     def config_info(
@@ -222,6 +234,8 @@ class RunflowV0SUT:
             "index_mode": self._index_mode,
             "max_approvals_per_run": MAX_APPROVALS_PER_RUN,
         }
+        if self._answer_note is not None:
+            info["answer_note_sha"] = _note_sha(self._answer_note)
         if self._index is not None:  # off는 키를 더하지 않는다(기존 결과와 같게 둔다)
             info["index"] = self._index.config_info()
         if self._pattern != REACT:  # react는 키를 더하지 않는다(기존 결과와 같게 둔다)
@@ -243,6 +257,7 @@ class RunflowV0SUT:
             if self._rag_pattern != AGENTIC
             else None
         )
+        limits = self._limits_factory() if self._limits_factory is not None else None
         clock = FixedClock(episode.task.as_of_time)
         resolver = EpisodeResolver(
             calendar=episode.connectors.calendar,
@@ -268,6 +283,8 @@ class RunflowV0SUT:
             pattern=None if self._pattern == REACT else self._pattern,
             pattern_memory=memory,
             rag=rag,
+            tool_limits=limits,
+            answer_note=self._answer_note,
         )
         fingerprint = config_fingerprint(
             answer_extension=True,
@@ -300,6 +317,7 @@ class RunflowV0SUT:
             final_text=text,
             structured=submission.answer,
             pattern_stats=memory.stats.to_dict() if memory is not None else None,
+            rag_diag=limits.diag("A2") if limits is not None else None,
         )
 
     def _raise_budget_error(self) -> None:

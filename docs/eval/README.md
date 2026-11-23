@@ -1,12 +1,12 @@
 # 평가 결과 대장
 
-## 메일 RAG 패턴 비교 (ADR-0035)
+## 메일 RAG 검색 정책 비교 (ADR-0035)
 
 생성 모델 Luna·추론 강도 none·에이전트 ReAct를 고정하고 도구 호출형 RAG, Retrieve-once,
 질의 재작성 후 Retrieve-once를 dev 메일 21과제와 별도 스모크에서 비교했다.
 성공률은 76.2% / 74.6% / 81.0%이며 짝 차이 CI는 모두 0을 포함해 기준을 유지한다.
 사전 추정 포함 LLM+임베딩 기록 비용은 $0.22854392, 비용 미상 0건이다.
-설정·지표·실행 상태·비용과 출처는 [메일 RAG 패턴 비교 v1](rag-patterns-v1.md)을 따른다.
+설정·지표·실행 상태·비용과 출처는 [메일 RAG 검색 정책 비교 v1](rag-patterns-v1.md)을 따른다.
 기존 종단 dev/test 전체 점수와 이번 부분집합 점수를 직접 순위 비교하지 않는다.
 
 평가 단계에서 실행한 모든 평가를 한곳에서 찾기 위한 목록이다. 수치의 정본은 각 행의 "상세" 문서이며, 이 문서는 그 요약과 위치만 담는다. 숫자를 고칠 때는 상세 문서를 먼저 고치고 이 표를 맞춘다.
@@ -32,6 +32,9 @@
 | D01 | 2026-11-16 | 평가셋 v1 생성·자동 검수·사람 검수·봉인 | 과제 240 → 218 (dev 88 / test 130), 검색 질의 180 → 133 (dev 55 / test 78) | 본문 7,022개를 LLM 3계열이 작성($1.75). LLM Judge 자동 검수 372항목 중 54항목 표시($0.33). 사람 검수 제외 과제 22, 검색 47. 표현 변형 검수 문제 0건 | 봉인 완료 (test 130문항·102묶음) | ADR-0026 §6·§8, results-v1 "평가셋 구축에 쓴 LLM" | `eval/datasets/orbit-eval/v1/` (저장소) | [D01](experiments.md#d01) |
 | R01 | 2026-11-17 | 검색 방식 비교 (메일만) | dev 37질의·13묶음 / test 51·19, 메일함 200/1,000/5,000 | 5,000통 R@10: vector 0.71, hybrid 0.69, bm25 0.67, keyword 0.47, gmail_search 0.14 | 방식 재선정 안 함 (test 선택 편향) | results-v1 "검색 세트 test 결과" | `retrieval/test-openai-v1.json`. dev는 `retrieval/dev-openai-v1.json` (이번에 dev 표 추가) | [R01](experiments.md#r01) |
 | R02 | 2026-11-19 | 메일 RAG 검색 정책·질의 재작성 비교 | dev 메일 21과제·17묶음 × 3, 별도 스모크 21 × 1 | R0 76.2%, R1 74.6%, R2 81.0%; R2−R0 +4.8 pp [−3.3, +12.3] | 기준 유지·개선 미확정, test 미실행 | [rag-patterns-v1](rag-patterns-v1.md), ADR-0035 | 별도 worktree의 `runs/rag-patterns-v1/`  | [R02](rag-patterns-v1.md) |
+| R03 | 2026-11-22 | 메일 RAG 아키텍처 비교 (Naive·Advanced·Agentic·Adaptive·GraphRAG) | rag-v1 dev 64 / test 96문항·24묶음 × 3 | test 성공률 A1 0.601, A2 0.483; A1−A2 +0.118 [0.052, 0.184]. 정답 비교 Judge 일치율 0.942 (단일 조회 0.838) | 기준 유지, 불일치 29건 Claude 원문 대조: Judge 27·코드 2 (사람 판정 아님) | [rag-architecture-v1](rag-architecture-v1.md), ADR-0036 | `eval/runs/rag-arch-v1/` | [R03](rag-architecture-v1.md) |
+| R03b | 2026-11-22 | GraphRAG local 메일 순위에 reranker 적용 (GraphRAG + reranker, 그래프 없는 대조군) | rag-v1 dev 64 / test 96문항·24묶음 × 3 | test 성공률 A4R 0.625, A4RN 0.590; A4R−A4 +0.257 [0.132, 0.389], A4R−A2 +0.142 [0.063, 0.219], A4R−A1 +0.024 [−0.052, 0.108], A4R−A4RN +0.035 [−0.010, 0.080]. 정답 비교 Judge 일치율 0.915 (단일 조회 0.746) | 기준 유지, 그래프 기여 미확인, 단일 조회 불일치 17건 Claude 원문 대조: 모두 Judge (사람 판정 아님) | [rag-architecture-v1](rag-architecture-v1.md#r03b-graphrag-local-순위에-reranker-적용), ADR-0037 | `eval/runs/rag-arch-v1/` | [R03b](rag-architecture-v1.md#r03b-graphrag-local-순위에-reranker-적용) |
+| R03c | 2026-11-23 | Agentic RAG 검색 도구에 Advanced RAG 검색 단계 넣기 (Agentic RAG + reranker, Agentic RAG + Advanced 검색) | rag-v1 dev 64 / test 96문항·24묶음 × 3 | test 성공률 A2X 0.663, A2R 0.500; A2X−A2 +0.181 [0.108, 0.253], A2X−A1 +0.062 [0.007, 0.118], A2X−A4R +0.038 [−0.024, 0.101], A2R−A2 +0.017 [−0.049, 0.087]. 정답 비교 Judge 일치율 0.895 (단일 조회 0.682) | 기준 유지(평가 경로 전용), 요소 분리 미확인, 불일치 21건 Claude 원문 대조: Judge 19·코드 2 (사람 판정 아님) | [rag-architecture-v1](rag-architecture-v1.md#r03c-agentic-rag-검색-도구에-advanced-rag-검색-단계-넣기), ADR-0038 | `eval/runs/rag-arch-v1/` | [R03c](rag-architecture-v1.md#r03c-agentic-rag-검색-도구에-advanced-rag-검색-단계-넣기) |
 | B01 | 2026-11-17 | dev 기준선 | 88과제 × 3회 | luna · react · 색인 끔 0.49 [0.39, 0.59], assistant_v0 0.42 | 비교 기준 | results-v1 "dev 설정 비교" | `baseline-v1/` | [B01](experiments.md#b01) |
 | M01 | 2026-11-17 | dev 모델 비교 | 88 × 3 | haiku 0.67 (+0.186), gemini-3.5-flash-lite 0.39 (−0.102, 답할 수 없는 질문 환각률 0.24) | haiku는 비용 약 6배 | results-v1 "dev 설정 비교" | `models-v1/` | [M01](experiments.md#m01) |
 | A01 | 2026-11-17 | dev 에이전트 패턴 비교 | 88 × 3 | fixed_workflow 0.55 (+0.061, CI 0 포함), plan_execute 0.39 (−0.098) | react 유지 | results-v1, ADR-0030 | `compare-v1/pattern-*.jsonl` | [A01](experiments.md#a01) |
@@ -55,6 +58,7 @@
 - 문항 품질·문장 품질·유용성 Judge: 사람 검증을 거쳐야 하는 후속 작업
 - low의 test 확인, 비용 조건 때문에 빠진 Google 색인 켬 dev/test와 Plan 색인 켬 dev
 - 임베딩 모델·800자 청크·RRF k=60의 대안 비교
+- RAG 아키텍처 비교(A0~A4): ADR-0036 채택, 구현 전
 - 맥락 구성 실험과 안전·가드레일 세트: 초안 ADR-0032·0033 (PR #37, 미실행)
 
 ## 원본 보관

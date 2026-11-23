@@ -942,6 +942,74 @@ def check_skeleton_change(
     }, None
 
 
+_RULE_FIELDS = ("required_facts", "forbidden_facts", "forbidden_patterns")
+
+
+def _without_rules(sk: Skeleton) -> dict[str, Any]:
+    """검사 규칙 필드와 template_text를 뺀 skeleton. 이 부분은 recheck에서 달라지면 안 된다."""
+    data = sk.model_dump(mode="json", by_alias=True)
+    data.pop("world_model_sha256", None)  # CONFIG 해시라 규칙과 함께 바뀐다. 아래에서 따로 본다
+    for body in data["bodies"].values():
+        for key in (*_RULE_FIELDS, "template_text"):
+            body.pop(key, None)
+    return data
+
+
+def _rule_change_problem(old: Skeleton, new: Skeleton) -> tuple[list[str], str | None]:
+    """(바뀐 body_id, 거부 이유). template_text는 required_facts도 바뀐 body에서만 허용한다."""
+    if _without_rules(old) != _without_rules(new):
+        return (
+            [],
+            "skeleton이 검사 규칙(필수·금지 사실, 금지 패턴) 밖도 달라졌다. 새 디렉터리를 쓴다",
+        )
+    changed = differing_body_ids(old, new)
+    if old.world_model_sha256 != new.world_model_sha256 and not changed:
+        return [], "world_model_sha256만 달라졌고 bodies 규칙 변경이 없다. 새 디렉터리를 쓴다"
+    for bid in changed:
+        o, n = old.bodies[bid], new.bodies[bid]
+        if o.template_text != n.template_text and o.required_facts == n.required_facts:
+            return [], (
+                f"{bid}: required_facts는 그대로인데 template_text만 달라졌다. 새 디렉터리를 쓴다"
+            )
+    return changed, None
+
+
+def recheck_skeleton_problem(
+    out_dir: Path, skeleton: Skeleton, previous_path: str | None
+) -> tuple[list[str], str | None]:
+    """`--recheck`가 skeleton 변경을 허용해도 되는지 본다. (규칙이 바뀐 body_id, 거부 이유).
+
+    허용 조건: `--previous-skeleton`의 sha가 매니페스트 sha와 같고, 두 skeleton이
+    `bodies[*]`의 `required_facts`·`forbidden_facts`·`forbidden_patterns`를 빼면 같다.
+    `template_text`는 같은 body의 `required_facts`도 바뀐 때만 허용한다. 최상위
+    `world_model_sha256`은 bodies 규칙 변경이 있을 때만 달라도 된다. 규칙이 바뀐 body의 최신 행이
+    템플릿 대체(`fallback`)이면 다시 만들 수 없으므로 거부한다. 바뀐 body_id를 출력한다.
+    """
+    if not previous_path:
+        return [], "skeleton이 바뀌었다. --recheck는 --previous-skeleton을 함께 줘야 한다"
+    try:
+        old, old_sha = _load_skeleton(previous_path)
+        prev_sha = load_manifest(out_dir).get("skeleton_sha256")
+    except (OSError, ValidationError, ValueError, ManifestError) as exc:
+        return [], f"--previous-skeleton을 읽을 수 없다: {type(exc).__name__}"
+    if not prev_sha:
+        return [], "매니페스트에 skeleton_sha256이 없어 이전 skeleton을 확인할 수 없다"
+    if old_sha != prev_sha:
+        return [], "--previous-skeleton의 sha가 매니페스트의 skeleton_sha256과 다르다"
+    changed, why = _rule_change_problem(old, skeleton)
+    if why:
+        return [], why
+    rows = read_rows(out_dir / BODIES_FILE)
+    fallback = [b for b in changed if rows.get(b, {}).get("fallback")]
+    if fallback:
+        return [], (
+            f"규칙이 바뀐 body의 최신 행이 템플릿 대체(fallback)라 recheck할 수 없다: "
+            f"{', '.join(fallback)}"
+        )
+    print(f"검사 규칙이 바뀐 body_id {len(changed)}개: {', '.join(changed)}")
+    return changed, None
+
+
 def _check_resume(
     out_dir: Path,
     skeleton_sha: str,
@@ -1077,6 +1145,20 @@ def main(argv: list[str] | None = None) -> int:
                 "prompt_version": PROMPT_VERSION,
             }
         }
+    recheck_ok = False
+    if args.recheck and not args.allow_skeleton_change and (out_dir / MANIFEST_FILE).exists():
+        try:
+            prev_sha = load_manifest(out_dir).get("skeleton_sha256")
+        except ManifestError:
+            prev_sha = sha  # 아래 _check_resume이 같은 오류를 낸다
+        if prev_sha != sha:  # 비었으면 recheck_skeleton_problem이 거부한다
+            rule_changed, why = recheck_skeleton_problem(out_dir, skeleton, args.previous_skeleton)
+            if why:
+                print(why, file=sys.stderr)
+                return EXIT_USAGE
+            recheck_ok = True
+            if recheck_extra:
+                recheck_extra["recheck"]["rule_changed_body_ids"] = rule_changed
     est = estimate(
         skeleton,
         pending,
@@ -1127,7 +1209,7 @@ def main(argv: list[str] | None = None) -> int:
         out_dir,
         sha,
         allow_prompt_change=args.recheck,
-        allow_skeleton_change=args.allow_skeleton_change,
+        allow_skeleton_change=args.allow_skeleton_change or recheck_ok,
     )
     if problem:
         print(problem, file=sys.stderr)
