@@ -23,7 +23,7 @@
 1. 평가 설계: [`docs/evaluation-plan-draft.md`](../evaluation-plan-draft.md), 기반 [ADR-0009](../adr/ADR-0009-evaluation-foundation-v0.md)·[ADR-0010](../adr/ADR-0010-structured-answer-scoring.md)
 2. 평가셋 v1: [ADR-0026](../adr/ADR-0026-eval-suite-v1.md) (생성·검수·봉인), [ADR-0027](../adr/ADR-0027-all-day-calendar-timezone.md)
 3. 실행 도구: [ADR-0023](../adr/ADR-0023-runflow-evaluation.md) (runflow 평가), [ADR-0028](../adr/ADR-0028-retrieval-eval-runner.md) (검색), [ADR-0029](../adr/ADR-0029-eval-metrics-v1.md) (지표·Judge), [ADR-0030](../adr/ADR-0030-agent-pattern-variants.md) (패턴), [ADR-0034](../adr/ADR-0034-evaluation-deadlines.md) (시간 상한)
-4. 결과: [`results-v1.md`](results-v1.md), 기준 설정 결정 [ADR-0031](../adr/ADR-0031-base-config-v1.md)
+4. 결과: [`results-v1.md`](results-v1.md), 기준 설정 결정 [ADR-0031](../adr/ADR-0031-base-config-v1.md), v1 아키텍처 확정 [ADR-0042](../adr/ADR-0042-v1-agent-architecture.md)
 
 ## 평가 목록
 
@@ -57,6 +57,7 @@
 | J05 | 2026-11-19 | test Judge-v3 입력 준비·비용 조건 확인 | 가용 10설정 1,300건→eligible 1,267 (답 없음 33 제외) | 전체 dry-run $6.121430 > 실행 조건 $5.50 | 실제 호출 0·지출 $0, 근거성·엄격 성공률 미측정. 추가 결정 필요 | [Judge-v3 준비 결과](results-v1.md#test-judge-v3) | `complete-v1/test-judge-final-input.jsonl`, `judge-execution-plan.json` | [J05](experiments.md#j05) |
 | C01 | 2026-11-24 | Agent 코드 채점 문자열 검사 감사 (Jev 재채점, Gemini 2차 판정) | dev·test 20개 원본 2,450건 Jev v4, 목록 과제는 시각에 일정 제목을 붙여 재채점. 불일치·경계·표본 686건은 Gemini 재판정 | 사람 대조 62건 중 61건 일치. Gemini는 Jev와 685/686 일치(무작위 표본 100/100). test haiku-index−haiku +0.077 [+0.008, +0.146] (원래 0.000), haiku-index−luna-index +0.069 [−0.024, +0.164]; dev haiku-index−index-on +0.106 [+0.011, +0.204]. 패턴·Luna 색인 결론 유지 | Agent 주 점수를 코드 구조 검사 + Jev + Gemini 판정으로 변경. ADR-0031 재검토는 개발자 결정. 목록 과제 질문 형식은 사후 수정. 비용 $1.19 | [문자열 검사 오채점 감사](results-v1.md#문자열-검사-오채점-감사jev-재채점-2026-11-24) | `followup/grader-audit-20261124/` | [C01](experiments.md#c01) |
 | C02 | 2026-11-24 | 구조화 답 종류 오채점 재판정 | `answer_kind` 실패 243건 중 대상 일정은 맞고 종류만 `event`로 표시한 230건. 기존 Jev 행 사용, 갈림·경계 75건은 Gemini 재판정 | 229건 성공으로 정정(Gemini=Jev 74/75). test luna-index 0.708, haiku-index 0.762. dev gemini−runflow 유의 차이 사라짐, haiku-index−index-on +0.080 [−0.008, +0.170]로 CI 0 포함. test 결론 유지 | 최종 주 점수로 반영. `event_set` 오답 13건은 실패 유지. 비용 $0.10 | [구조화 답 종류 오채점 재판정](results-v1.md#구조화-답-종류-오채점-재판정2026-11-24) | `followup/grader-audit-20261124/` | [C02](experiments.md#c02) |
+| G03 | 2026-11-24 | v1 Agent 색인 검색에 Advanced 검색(A2X) 넣기, reranker 후보 오프라인 비교 | dev 88 × 3 두 구성(`--max-steps 150`), reranker는 rag-v1 dev 144행 | 성공률 default 0.754, advanced 0.769, +0.015 [−0.027, 0.060]. p95 지연 12.7초→25.1초. reranker recall@5 bge-m3 0.830, bge-m3-ko 0.840, ko-reranker 0.819 (Hybrid 0.730) | **보류**(제품 반영 안 함). 비용 약 $0.55 | [ADR-0041 결과](../adr/ADR-0041-v1-agent-advanced-search.md#결과-2026-11-24) | `eval/runs/agent-a2x-v1/` | ADR-0041 |
 
 중단·폐기 실행은 [I01](experiments.md#i01)·[I02](experiments.md#i02)·[I03](experiments.md#i03)에 원인·조치·영향·기록 비용을 분리했다. 새 비교의 완료·공백·비용 불확실성은 [M02](experiments.md#m02), Judge의 비용 조건 중단은 [J05](experiments.md#j05)에 기록했다.
 
@@ -67,8 +68,8 @@
 - 문항 품질·문장 품질·유용성 Judge: 사람 검증을 거쳐야 하는 후속 작업
 - low의 test 확인, 비용 조건 때문에 빠진 Google 색인 켬 dev/test와 Plan 색인 켬 dev
 - 임베딩 모델·800자 청크·RRF k=60의 대안 비교
-- RAG 아키텍처 비교(A0~A4): ADR-0036 채택, 구현 전
-- 맥락 구성 실험과 안전·가드레일 세트: 초안 ADR-0032·0033 (PR #37, 미실행)
+- 맥락 구성 실험(ADR-0032): 미실행, 남은 평가. 긴 대화 세트 24개를 만든 뒤 진행한다. 그전까지 기본값(N=6, K=20, M=30)을 쓴다(ADR-0042)
+- 안전·가드레일 세트(ADR-0033)와 음성 평가: 미실행, 다음 평가 대상
 
 ## 원본 보관
 
