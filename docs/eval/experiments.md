@@ -336,6 +336,18 @@
 - **비용:** $1.194615 (Jev $0.068615, Gemini $1.126000).
 - **출처:** [상세](results-v1.md#문자열-검사-오채점-감사jev-재채점-2026-11-24), RUNS/followup/grader-audit-20261124/{labels.json,jev.jsonl,jev_dup.jsonl,agent_jev.py,jev_rescore.py,agent_gemini.py,gemini/correctness.jsonl,gemini_rescore.py}.
 
+<a id="c02"></a>
+## C02 — 구조화 답 종류 오채점 재판정
+
+- **날짜·질문:** 2026-11-24. 시각을 묻는 과제에서 대상 일정은 맞히고 구조화 답의 종류만 `event`로 표시한 답을 코드가 실패로 세는가, 그 때문에 짝 차이 결론이 바뀌는가?
+- **후보·선정 근거:** C01과 같은 Agent 원본 20개. 실패 원인이 `answer_kind`인 243건 중 정답 종류 `event_time`, 답 종류 `event`, 일정 ID 일치, 틀린 검사가 `structured_answer`(와 문자열 검사)뿐인 230건. `event` 대신 `event_set`으로 답한 13건은 실제 실패로 둔다.
+- **고정 조건:** 에이전트 재실행 없음. C01의 Jev v4 행을 그대로 쓰고, C01과 같은 기준(코드 문자열 판정과 다름 또는 확률 최솟값 [0.1, 0.6))으로 고른 75건만 Gemini(`correctness-v2`)가 최종 판정한다. 규칙은 Gemini 출력을 보기 전에 정했다.
+- **결과:** Gemini는 75건 중 74건에서 Jev와 같은 판정. 230건 중 229건이 성공으로 바뀌었다. 최종 성공률 test luna-index 0.708, haiku 0.677, haiku-index 0.762, gemini 0.500; dev index-on 0.723, runflow 0.576. 결론이 바뀐 짝은 dev gemini−runflow(−0.117 유의 → −0.008 [−0.081, +0.069]), dev assistant−runflow(→ −0.117 [−0.226, −0.015]), dev pattern-fixed−runflow(→ +0.034, CI 0 포함), dev haiku-index−index-on(+0.106 유의 → +0.080 [−0.008, +0.170]). test 결론은 유지됐다.
+- **결정·결정자:** C01에서 개발자가 정한 채점 방식(코드 구조 검사 + Jev + Gemini)을 적용한 값이다. 이 값을 Agent 성공률의 최종 주 점수로 쓴다. ADR-0031 재검토 여부는 개발자가 정한다.
+- **미비교·한계:** 재판정은 실행 뒤에 했고 사람 대조는 없다. 75건 밖 155건은 Jev만 썼다. Agent가 종류를 `event`로 표시하는 출력 형식 문제는 고치지 않았다.
+- **비용:** $0.103290 (Gemini).
+- **출처:** [상세](results-v1.md#구조화-답-종류-오채점-재판정2026-11-24), RUNS/followup/grader-audit-20261124/{kind_regrade.py,gemini_kind/correctness.jsonl}.
+
 ## 공통 설계 한계
 
 - M01/A01은 실제 기준이 된 색인 켬이 아니라 색인 끔 luna에 한 요인씩 비교했다. M02는 Haiku·fixed의 dev/test와 plan의 test 조합만 보완했다. Google 2종과 plan dev는 비용 조건 때문에 비교하지 못했고 모든 요인 조합을 비교한 것은 아니다.
