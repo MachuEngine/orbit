@@ -1,0 +1,10 @@
+[google]
+route = "openrouter"
+model_id = "google/gemini-3.6-flash"
+max_output_tokens = 6000
+price_input_per_mtok = 0.75
+price_cached_input_per_mtok = 0.075
+price_output_per_mtok = 3.75
+price_source = "https://openrouter.ai/api/v1/models (2026-11-18)"
+provider_order = ["Google AI Studio"]
+timeout_seconds = 120.0

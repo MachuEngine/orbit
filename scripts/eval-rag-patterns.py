@@ -269,6 +269,8 @@ def command(pattern: str, kind: str, cap: float) -> tuple[list[str], Path, Path]
         "--experiment-id",
         f"rag-v1-{name}",
         "--live-llm",
+        "--grade",
+        "off",
         "--out",
         str(output),
     ]

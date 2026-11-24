@@ -41,7 +41,7 @@ OUT="runs/smoke-live/${SUT}-$(date +%Y%m%d-%H%M%S).jsonl"
 rc=0
 uv run --directory backend python -m orbit.evalrunner run \
   --dataset ../eval/datasets/orbit-eval/v1 --split dev --subset smoke \
-  --sut "$SUT" --live-llm --model-id "$MODEL_ID" --repeats 1 --seed 0 \
+  --sut "$SUT" --live-llm --grade off --model-id "$MODEL_ID" --repeats 1 --seed 0 \
   --max-cost-usd "$MAX_COST" --max-total-tokens "${MAX_TOTAL_TOKENS:-1000000}" \
   --out "../$OUT" || rc=$?
 if [ -f "$OUT" ]; then

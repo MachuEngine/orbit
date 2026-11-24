@@ -11,6 +11,13 @@
 
 평가 단계에서 실행한 모든 평가를 한곳에서 찾기 위한 목록이다. 수치의 정본은 각 행의 "상세" 문서이며, 이 문서는 그 요약과 위치만 담는다. 숫자를 고칠 때는 상세 문서를 먼저 고치고 이 표를 맞춘다.
 
+## 최종 채점 (ADR-0040)
+
+- `run --live-llm`은 실행 뒤 Agent 최종 채점(코드 구조 검사 + Jev v4 + Gemini 2차 판정)을 기본으로 한다. `--max-grade-cost-usd`가 필요하고 `AI_GATEWAY_API_KEY`, `ORBIT_OPENROUTER_API_KEY`가 없으면 출력 파일을 만들기 전에 거부한다(코드 2). 끄려면 `--grade off`. `--llm-script` 실행과 `--estimate`는 채점하지 않는다.
+- 이미 있는 결과 파일은 `grade <결과.jsonl> --dataset D --max-cost-usd X`로 채점한다. `--dry-run`은 대상 수와 추정 비용만 출력한다. 결과에 test 분할 행이 있으면 `run`과 같은 `--i-understand-this-uses-the-sealed-test-split`이 필요하고, 없으면 호출 전에 거부한다(코드 2). `run --grade llm`은 `run`에 준 봉인 해제 플래그를 그대로 쓴다.
+- 결과는 `<이름>.graded.jsonl`(이미 있으면 거부)이고 근거는 `<이름>.grade/`에 쌓인다. Jev·Gemini 호출 실패나 비용 상한 때문에 판정이 빠진 에피소드가 있으면 `.graded.jsonl`을 쓰지 않고 코드 3으로 끝난다. 실행 결과(`<이름>.jsonl`)는 남아 있으므로 `grade` 명령을 같은 결과 파일로 다시 실행하면(상한을 올려서) 저장된 판정은 다시 부르지 않고 빠진 건만 호출한다. 답이 빈 에피소드의 `success: null`은 정상이다. 실험 비용 상한으로 중단된 실행(`누적 상한으로 중단했다`, 코드 3)은 채점하지 않는다. 입력이 바뀐 이전 Jev 판정이 `.grade/jev.jsonl`에 있으면 호출 전에 거부(코드 2)하므로 그 파일을 지우거나 옮기고 다시 실행한다.
+- 비교는 `.graded.jsonl`로 `stats`·`rag-diag`를 돌린다. `grade` 필드의 `grader_fingerprint`가 같은 파일끼리만 같은 규칙으로 채점된 것이다.
+
 ## 읽는 순서
 
 1. 평가 설계: [`docs/evaluation-plan-draft.md`](../evaluation-plan-draft.md), 기반 [ADR-0009](../adr/ADR-0009-evaluation-foundation-v0.md)·[ADR-0010](../adr/ADR-0010-structured-answer-scoring.md)

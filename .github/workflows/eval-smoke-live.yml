@@ -121,7 +121,7 @@ jobs:
           set +e
           uv run --directory backend python -m orbit.evalrunner run \
             --dataset ../eval/datasets/orbit-eval/v1 --split dev --subset smoke \
-            --sut "$SUT" --live-llm --model-id "$MODEL_ID" --repeats 1 --seed 0 \
+            --sut "$SUT" --live-llm --grade off --model-id "$MODEL_ID" --repeats 1 --seed 0 \
             --max-cost-usd "$MAX_COST_USD" --max-total-tokens "$MAX_TOTAL_TOKENS" \
             --out ../runs/smoke-live/results.jsonl
           rc=$?
