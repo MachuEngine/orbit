@@ -176,7 +176,7 @@ def test_fixed_denominators_keep_exclusions_missing_and_unscored_rows(tmp_path: 
     assert other["paired_a_minus_baseline"]["strict_success_fixed_all"]["difference"] == 0.5
     assert other["paired_a_minus_baseline"]["grounded_conditional_verdict"]["n_tasks"] == 1
     assert baseline["claim_counts"] == {"supported": 1, "unsupported": 0, "not_checkable": 0}
-    assert baseline["code_fact_grounded_rate"] == metrics_v1.fact_support(a)["support_rate"]
+    assert baseline["code_faithfulness"] == metrics_v1.fact_support(a)["faithfulness"]
     assert a == before and manifest.settings[0].records[3]["outcome"]["success"] is None
     assert report == summarize(manifest, journal)  # 시드와 묶음 재표본이 결정적이다.
 

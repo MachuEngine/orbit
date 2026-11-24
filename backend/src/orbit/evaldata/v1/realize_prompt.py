@@ -1,4 +1,4 @@
-"""본문 실현 프롬프트 `realize-v2` (ADR-0026 §2.2). 프롬프트를 바꾸면 `PROMPT_VERSION`을 올린다.
+"""본문 실현 프롬프트 `realize-v3` (ADR-0026 §2.2). 프롬프트를 바꾸면 `PROMPT_VERSION`을 올린다.
 
 입력은 `BodySpec`에서 만든 구조화 텍스트다. 수신자·발신자 주소와 제공자 ID는 넣지 않는다.
 같은 스레드의 앞선 메일 본문은 앞부분만 잘라 넣는다(`PRIOR_CHARS`, `MAX_PRIORS`).
@@ -7,11 +7,12 @@
 # ruff: noqa: E501  (프롬프트 문장이라 줄 길이를 맞추지 않는다)
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 
 from orbit.evaldata.v1.skeleton import BodySpec, ContextPerson, Fact
 
-PROMPT_VERSION = "realize-v2"
+PROMPT_VERSION = "realize-v3"
 PRIOR_CHARS = 600  # 앞선 메일 한 통에서 넣는 최대 글자 수
 MAX_PRIORS = 4  # 넣는 앞선 메일 수(가장 가까운 것부터)
 
@@ -20,7 +21,7 @@ SYSTEM_PROMPT = """\
 
 규칙
 1. 본문만 출력한다. 제목 줄, "본문:" 같은 접두어, 설명, 마크다운 코드블록, 본문 전체를 감싸는 따옴표를 쓰지 않는다. 메일은 일반적인 인사말과 서명을 넣어도 된다.
-2. "필수 사실"마다 주어진 표기 중 하나를 숫자·날짜·시각 형식까지 그대로 본문에 넣는다. 표기를 풀어 쓰거나 다른 형식으로 바꾸지 않는다. 필수 사실의 시각 바로 뒤에 분이나 "반"을 덧붙이지 않는다.
+2. "필수 사실"마다 주어진 표기를 숫자·날짜·시각 형식까지 그대로 본문에 넣는다. 표기를 풀어 쓰거나 다른 형식으로 바꾸지 않는다. 필수 사실의 시각 바로 뒤에 분이나 "반"을 덧붙이지 않는다.
 3. "금지 사실"은 어떤 표기로도, 비슷한 표현으로도 넣지 않는다.
 4. 목표 글자 수 범위(공백 포함)를 지킨다.
 5. 실존하는 회사·인물·제품·서비스·URL·전화번호·계좌번호·주민등록번호를 쓰지 않는다. 협업 도구·메신저·검색 엔진·SNS·AI 서비스·스마트폰 같은 제품과 서비스도 실제 이름 대신 일반 명사("메신저", "화상 회의 도구", "협업 문서 도구", "검색 서비스")로 쓴다. 뉴스·시장 동향을 다루는 글도 마찬가지로 가상의 회사 이름이나 일반 명사만 쓴다. 이메일 주소와 링크는 넣지 않는다. 명세에 있는 이름과 회사만 쓴다.
@@ -51,8 +52,16 @@ def _person(p: ContextPerson) -> str:
     return f"{p.name} ({p.relation}{company})"
 
 
-def _fact_lines(facts: Sequence[Fact]) -> list[str]:
-    return [f"- [{f.kind}] " + " | ".join(f.surface_forms) for f in facts]
+def _fact_lines(facts: Sequence[Fact], body_id: str | None = None) -> list[str]:
+    """`body_id`가 있으면 사실마다 표기 하나만 보인다(본문·사실 ID로 결정적). 없으면 모든 표기를 보인다."""
+    if body_id is None:
+        return [f"- [{f.kind}] " + " | ".join(f.surface_forms) for f in facts]
+    lines = []
+    for f in facts:
+        digest = hashlib.sha256(f"{body_id}:{f.fact_id}".encode()).digest()
+        form = f.surface_forms[int.from_bytes(digest[:8], "big") % len(f.surface_forms)]
+        lines.append(f"- [{f.kind}] {form}")
+    return lines
 
 
 def prior_excerpt(text: str) -> str:
@@ -69,8 +78,10 @@ def build_user(
     spec: BodySpec,
     priors: Mapping[str, str] | None = None,
     retry_hints: Sequence[str] = (),
+    *,
+    body_id: str,
 ) -> str:
-    """사용자 메시지. `priors`는 {body_id: 본문}이고 `spec.context.prior_body_ids` 순서로 쓴다."""
+    """사용자 메시지. `body_id`는 필수 사실의 표기를 고르는 데 쓴다. `priors`는 {body_id: 본문}이고 `spec.context.prior_body_ids` 순서로 쓴다."""
     ctx = spec.context
     low, high = spec.target_chars
     lines: list[str] = [
@@ -100,8 +111,8 @@ def build_user(
         lines.append(f"주제: {ctx.topic}")
 
     lines.append("")
-    lines.append("필수 사실(각 항목에서 표기 하나를 그대로 넣는다):")
-    lines.extend(_fact_lines(spec.required_facts) or ["- (없음)"])
+    lines.append("필수 사실(표기를 그대로 넣는다):")
+    lines.extend(_fact_lines(spec.required_facts, body_id) or ["- (없음)"])
     lines.append("금지 사실(어떤 표기로도 넣지 않는다):")
     lines.extend(_fact_lines(spec.forbidden_facts) or ["- (없음)"])
 

@@ -59,6 +59,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from orbit.connectors.sim.calls import CallRecord
 from orbit.connectors.sim.world import WorldDiff
 from orbit.evaldata.schema import ClarifyAnswer
+from orbit.evalrunner.rag_arch.answer_norm import facts_pass
 from orbit.evalrunner.state_changes import (
     ActualChange,
     actual_changes,
@@ -189,7 +190,10 @@ def _subset(expected: Any, actual: Any) -> bool:
     return _equal(expected, actual)
 
 
-def check_answer_facts(gold: GoldView, final_text: str) -> bool:
+def check_answer_facts(gold: GoldView, final_text: str, *, rag_norm: bool = False) -> bool:
+    """`rag_norm`이면 rag-v1용 표기 정규화로 비교한다(ADR-0036). 기본은 기존 경계 규칙이다."""
+    if rag_norm:
+        return facts_pass([f.any_of for f in gold.answer_facts], final_text)
     return all(
         any(contains(final_text, candidate) for candidate in fact.any_of)
         for fact in gold.answer_facts
@@ -229,11 +233,14 @@ class Score:
     change_fields: tuple[dict[str, Any], ...] | None = None
 
 
-def text_fact_recall(gold: GoldView, final_text: str) -> float | None:
+def text_fact_recall(gold: GoldView, final_text: str, *, rag_norm: bool = False) -> float | None:
     facts = gold.answer_facts
     if not facts:
         return None
-    hit = sum(any(contains(final_text, c) for c in f.any_of) for f in facts)
+    if rag_norm:
+        hit = sum(facts_pass([f.any_of], final_text) for f in facts)
+    else:
+        hit = sum(any(contains(final_text, c) for c in f.any_of) for f in facts)
     return hit / len(facts)
 
 
@@ -245,10 +252,12 @@ def score_episode(
     structured: Mapping[str, Any] | None = None,
     reminders_created: int = 0,
     reminders: "Sequence[ReminderCreated]" = (),
+    rag_norm: bool = False,
 ) -> Score:
     """`reminders`는 러너가 DB에서 읽은 대화 리마인더다(ADR-0023 §7). Sim 밖 상태 변화라
     `expected_changes == []`이면 하나라도 있을 때 `unexpected_state_change`다. `reminders_created`가
-    `len(reminders)`보다 크면 내용을 모르는 리마인더가 남는 변화로 들어간다."""
+    `len(reminders)`보다 크면 내용을 모르는 리마인더가 남는 변화로 들어간다.
+    `rag_norm`은 rag-v1 과제(태그 `rag:`)의 답 문장 사실만 표기 정규화로 채점한다(ADR-0036)."""
     expected = gold.expected_changes
     state_match: bool | None
     state_diff: bool | None  # 남는 실제 변화가 없는가
@@ -282,7 +291,9 @@ def score_episode(
         "state_changes": state_changes,
         "required_tool_calls": check_required_tool_calls(gold, calls),
         "structured_answer": None if verdict is None else verdict == "ok",
-        "answer_facts": check_answer_facts(gold, final_text) if facts_needed else None,
+        "answer_facts": check_answer_facts(gold, final_text, rag_norm=rag_norm)
+        if facts_needed
+        else None,
         "must_not_contain": check_must_not_contain(gold, final_text),
     }
     failure: FailureType | None = None
@@ -302,7 +313,7 @@ def score_episode(
         or checks["must_not_contain"] is False
     ):
         failure = "wrong_answer"
-    recall = text_fact_recall(gold, final_text) if answer is not None else None
+    recall = text_fact_recall(gold, final_text, rag_norm=rag_norm) if answer is not None else None
     matched = (
         grade.matched_reading if grade is not None and failure == "ambiguity_ignored" else None
     )

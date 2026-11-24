@@ -1,4 +1,6 @@
-# 메일 RAG 패턴 비교 v1
+# 메일 RAG 검색 정책 비교 v1
+
+> 2026-11-21 문서 표기를 "RAG 패턴 비교"에서 "검색 정책 비교"로 바꿨다(ADR-0036). RAG 아키텍처 비교는 ADR-0036에서 따로 한다. 코드 식별자(`--rag-pattern`, `RAG_PATTERNS`)·파일 이름·지문은 R02 재현을 위해 그대로 둔다.
 
 설계: [ADR-0035](../adr/ADR-0035-rag-pattern-evaluation.md). 현재 생성 모델·에이전트·검색의 역할을 분리해 검색 시점·반복 정책과 질의 재작성 효과를 측정한다. 제품 기준 설정은 변경하지 않는다.
 
@@ -9,7 +11,7 @@
 | 생성 모델 | `openai/gpt-6-luna` | 동일 | 동일 |
 | 추론 강도 | `none` | 동일 | 동일 |
 | 에이전트 패턴 | ReAct | ReAct | ReAct |
-| RAG 패턴 | 도구 호출형 RAG | Retrieve-once + ReAct | Rewrite → Retrieve-once + ReAct |
+| 검색 정책 | 도구 호출형 RAG | Retrieve-once + ReAct | Rewrite → Retrieve-once + ReAct |
 | 색인 검색 시점 | 모델이 결정 | 사용자 턴 시작 | 질의 재작성 뒤 사용자 턴 시작 |
 | 색인 검색 횟수 | 모델이 결정 | 턴당 1회 | 턴당 1회 |
 | 질의 | 모델이 선택 | 현재 질문 앞 500자 | 같은 모델의 재작성 1회. JSON 형식 실패·빈 값·길이 초과·출력 절단 시 현재 질문 앞 500자로 fallback |
@@ -40,7 +42,7 @@ R1·R2는 색인 검색 정책만 턴당 한 번으로 제한한 근사이며, �
 ### 주 비교: 메일 dev 21과제 × 3회 · 17 clusters
 
 
-| RAG 패턴 | 성공/episodes | 성공률 [95% CI] | R0 대비 짝 차이 [95% CI] | pass³ | 본 실행 LLM 비용 | 지연 p50/p95 |
+| 검색 정책 | 성공/episodes | 성공률 [95% CI] | R0 대비 짝 차이 [95% CI] | pass³ | 본 실행 LLM 비용 | 지연 p50/p95 |
 | --- | --- | --- | --- | --- | --- | --- |
 | R0 · 도구 호출형 | 48/63 | 76.2% [61.1, 88.3] | 기준 | 52.4% | $0.07092652 | 10.00 / 21.50초 |
 | R1 · Retrieve-once | 47/63 | 74.6% [55.6, 88.9] | -1.6 pp [-14.0, +9.1] | 57.1% | $0.06116013 | 7.93 / 21.75초 |
@@ -154,7 +156,7 @@ R1·R2는 색인 검색 정책만 턴당 한 번으로 제한한 근사이며, �
 
 ## 보조 지표의 관찰
 
-| RAG 패턴 | 다중 턴 성공 | wrong_answer | unexpected_state_change | wrong_state_change | 평균 도구 호출/episode |
+| 검색 정책 | 다중 턴 성공 | wrong_answer | unexpected_state_change | wrong_state_change | 평균 도구 호출/episode |
 | --- | --- | --- | --- | --- | --- |
 | R0 · 도구 호출형 | 13/15 | 13 | 1 | 1 | 2.41 |
 | R1 · Retrieve-once | 10/15 | 11 | 3 | 2 | 2.73 |

@@ -312,3 +312,30 @@ def test_write_dataset_omits_unset_v1_fields(tmp_path: Path) -> None:
     out0 = tmp_path / "out0"
     write_dataset(out0, ds0.manifest, ds0.world_dict, ds0.tasks)
     assert (out0 / "tasks.jsonl").read_text("utf-8") == (v0 / "tasks.jsonl").read_text("utf-8")
+
+
+# ---------------------------------------------------------------- rag 과제 채점 경로
+
+
+async def test_rag_tagged_tasks_use_answer_norm_and_others_use_the_default_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orbit.evalrunner import runner as runner_module  # noqa: PLC0415
+
+    seen: dict[str, bool] = {}
+    original = runner_module.score_episode  # type: ignore[attr-defined]
+
+    def spy(gold: Any, final_text: str, *args: Any, **kwargs: Any) -> Any:
+        seen[final_text] = kwargs["rag_norm"]
+        return original(gold, final_text, *args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "score_episode", spy)
+    ds = load_runner_dataset(
+        build(
+            tmp_path,
+            task_row("r-rag", tags=["rag:single", "variant:x"]),
+            task_row("r-plain", tags=["write"]),
+        )
+    )
+    await run(ds, {"r-rag": [step("rag 답")], "r-plain": [step("일반 답")]}, sut="assistant_v0")
+    assert seen == {"rag 답": True, "일반 답": False}

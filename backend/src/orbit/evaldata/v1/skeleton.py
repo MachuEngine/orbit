@@ -11,10 +11,19 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from orbit.connectors.contracts import Address, AttachmentMeta, Calendar, CalendarEvent
 
@@ -165,6 +174,8 @@ class BodySpec(_Model):
     - `template_text`: 결정적 대체 본문. 필수 사실을 모두 담고 금지 사실은 담지 않는다.
       본문 실현이 상한을 넘게 실패하면 이 텍스트를 쓴다.
     - `generator_family`: 이 본문을 쓸 모델 계열(ADR-0026 §2.5).
+    - `forbidden_patterns`: 본문에 있으면 실패인 정규식 목록(realize 검사 `forbidden_pattern`).
+      기본은 빈 목록이며, 비어 있으면 직렬화에서 빠져 기존 skeleton·bodies 해시가 바뀌지 않는다.
     """
 
     artifact: Literal["mail", "document"]
@@ -176,9 +187,22 @@ class BodySpec(_Model):
     forbidden_facts: list[Fact] = []
     template_text: str
     generator_family: Family
+    forbidden_patterns: list[str] = []
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_patterns(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if not data.get("forbidden_patterns"):
+            data.pop("forbidden_patterns", None)
+        return data
 
     @model_validator(mode="after")
     def _check(self) -> BodySpec:
+        for pattern in self.forbidden_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"forbidden_patterns가 올바른 정규식이 아니다: {pattern}") from exc
         allowed = MAIL_GENRES if self.artifact == "mail" else DOC_GENRES
         if self.genre not in allowed:
             raise ValueError(f"{self.artifact}의 장르가 올바르지 않다: {self.genre}")

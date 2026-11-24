@@ -605,6 +605,25 @@ async def test_without_answer_sink_tools_prompt_and_fingerprint_are_unchanged(
     assert config_fingerprint(answer_extension=True) != config_fingerprint()
 
 
+async def test_answer_note_is_used_only_with_answer_sink(make_harness: Make) -> None:
+    note = "[테스트 답 안내]\n"
+    h = await make_harness([{"text": "안녕하세요"}])
+    h.deps.answer_note = note  # sink 없이는 쓰지 않는다(제품 경로)
+    run_id = await h.start("안녕")
+    await h.work()
+    system = str(h.llm.requests[0].messages[0].content)
+    assert note not in system
+    assert system == build_system_prompt(h.clock.now(), h.deps.tz, boundary_for(f"run:{run_id}"))
+    h2 = await make_harness([{"text": "안녕하세요"}])
+    sink: list[dict[str, Any]] = []
+    h2.deps.answer_sink = sink.append
+    h2.deps.answer_note = note
+    await h2.start("안녕")
+    await h2.work()
+    system2 = str(h2.llm.requests[0].messages[0].content)
+    assert system2.count(note) == 1 and system2.endswith(ANSWER_PROMPT_PARAGRAPH + "\n" + note)
+
+
 async def test_without_answer_sink_submit_answer_is_an_unknown_tool(make_harness: Make) -> None:
     h = await make_harness(
         [{"tool_calls": [call("submit_answer", kind="event_set", events=[])]}, {"text": "끝"}]

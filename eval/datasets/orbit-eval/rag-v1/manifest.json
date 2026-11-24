@@ -1,0 +1,71 @@
+{
+  "counts": {
+    "events": 0,
+    "messages": 1600,
+    "tasks": 160,
+    "users": 4
+  },
+  "created_with": "structure+llm",
+  "details": {
+    "bodies_note": "정답을 실현된 본문과 대조했다",
+    "bodies_verified": true,
+    "config_sha256": "c4992045fd509956557528bed16a310869b521fb9398fbc9c25ce2911d2e6280",
+    "fact_late_position": "미검증: 사실이 본문 후반부에 있는지는 확인하지 않았다(첫 등장 위치만 측정)",
+    "long_evidence_ratio": 0.3898,
+    "paraphrase": {
+      "cost_usd": 0.009682,
+      "enabled": true,
+      "models": {
+        "anthropic": {
+          "model_id": "anthropic/claude-haiku-5.5",
+          "route": "openrouter",
+          "temperature": null
+        },
+        "google": {
+          "model_id": "google/gemini-2.5-flash-lite",
+          "route": "openrouter",
+          "temperature": 0.7
+        },
+        "openai": {
+          "model_id": "openai/gpt-6-luna",
+          "route": "openai",
+          "temperature": 0.7
+        }
+      },
+      "ok": 160,
+      "prompt_version": "paraphrase-v1"
+    },
+    "paraphrased_tasks": 160,
+    "question_sources": [
+      "paraphrase"
+    ],
+    "schema_version": "orbit-rag-v1/3",
+    "skeleton_sha256": "0d13bd7cf19e09ad8b347b52b050a94b0601d540ce9492d633e9825e894f1825"
+  },
+  "generator_git_sha": "c9e2a8f478766edd04554151ff7dc40eda65dce8",
+  "name": "orbit-eval-rag",
+  "notes": "rag-v1: RAG 아키텍처 비교(ADR-0036)용 합성 코퍼스·질문 세트. 정답은 message_set(메일 ID 집합)이다. 집합 정답은 일부만 맞아도 오답이라 엄격하다. 문서 엔티티는 두지 않았다.",
+  "seal": {
+    "graph_gold_sha256": "943ce8899f2c594bfd090f3d47b12af200deaa4eb8ce0d96e63627475ec62f8e",
+    "review": {
+      "human_sampled": 40,
+      "note": "2026-11-21 개발자가 표본 40문항을 검수했다. 지적된 생성 규칙 문제(모호한 결정 문구, 메일에 남은 마감 표현, 여러 결정을 나열한 메일)는 규칙을 고치고 해당 본문을 다시 생성해 바로잡았다. 같은 규칙으로 만든 메일 전체를 대조 검사해 위반 0건을 확인한 뒤 봉인을 승인했다.",
+      "sample_script": "scripts/rag_v1_review_sample.py",
+      "sample_seed": 20261121
+    },
+    "schema": "rag-seal-v1",
+    "sealed_at": "2026-11-21T07:40:08.585822+00:00",
+    "skeleton_sha256": "0d13bd7cf19e09ad8b347b52b050a94b0601d540ce9492d633e9825e894f1825",
+    "tasks_sha256": "3148366fb11ec9e9b691d36fb597e4146813f078f880ce99d167b72085feaf9e",
+    "test_clusters": 24,
+    "test_items": 96,
+    "test_sha256": "3f638760f0c3e67724a0ac1a2a131b3a3a70631a63787f1bd3ac4de280fdb96a",
+    "world_sha256": "1e9e56cb1244cb75ae6a206e4d26578164ffc24eb90cf9bb44a6e4a45ce4654f"
+  },
+  "seed": 20261121,
+  "split_ratio": {
+    "dev": 0.4,
+    "test": 0.6
+  },
+  "version": "rag-v1"
+}

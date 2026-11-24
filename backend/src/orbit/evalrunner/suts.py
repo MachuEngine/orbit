@@ -10,6 +10,7 @@ from orbit.assistant.prompt import PROMPT_VERSION
 from orbit.connectors.contracts import ConnectorError
 from orbit.evalrunner.episode import Episode, EpisodeOutput, SystemUnderTest
 from orbit.evalrunner.llm_script import SUBMIT_ANSWER
+from orbit.evalrunner.rag_arch.sut import RagArchSUT
 from orbit.evalrunner.runflow_sut import RunflowV0SUT
 from orbit.evalrunner.tools import ToolDispatcher, serialize_result, tool_specs
 from orbit.llm.types import LLMRequest, Message, ToolSpec
@@ -144,10 +145,11 @@ _REGISTRY: dict[str, SutFactory] = {
     "scripted_tool": ScriptedToolSUT,
     "assistant_v0": AssistantV0SUT,
     "runflow_v0": RunflowV0SUT,  # 평가 DB 필요(ADR-0023)
+    "rag_arch": RagArchSUT,  # 평가 DB·색인 필요(ADR-0036)
 }
 
 # 러너가 에피소드마다 평가 DB 핸들(`Episode.database`)을 준비해야 하는 평가 대상
-DATABASE_SUTS = frozenset({"runflow_v0"})
+DATABASE_SUTS = frozenset({"runflow_v0", "rag_arch"})
 
 
 def register_sut(name: str, factory: SutFactory) -> None:

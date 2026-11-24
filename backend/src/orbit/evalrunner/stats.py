@@ -90,6 +90,8 @@ MIN_CLUSTERS = 10
 
 def _expected_repeats(records: Sequence[Record]) -> int:
     values = {(r.get("config") or {}).get("repeats") for r in records}
+    if not values:
+        raise ResultsError("결과 행이 없다")
     only = next(iter(values))
     if len(values) != 1 or not isinstance(only, int):
         raise ResultsError("config.repeats가 없거나 행마다 다르다")

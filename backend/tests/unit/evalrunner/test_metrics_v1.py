@@ -120,7 +120,8 @@ def test_tool_selection_recall_and_wrong_area_rate() -> None:
     half = row("b", tools_=[tool("list_events"), tool("search_docs")], meta=meta)
     out = m.tools([full, half])["selection"]
     assert out["episodes"] == 2
-    assert out["recall"] == pytest.approx(3 / 4)
+    assert out["micro_recall"] == pytest.approx(3 / 4)
+    assert out["macro_recall"] == pytest.approx((1 + 0.5) / 2)
     assert out["recall_by_area"]["mail"] == {"hit": 1, "need": 2, "rate": 0.5}
     # 선택 호출 4개(list_events, search_mail, list_events, search_docs) 중 문서 도구 1개가 영역 밖
     assert out["wrong_area_call_rate"] == pytest.approx(1 / 4)
@@ -129,7 +130,7 @@ def test_tool_selection_recall_and_wrong_area_rate() -> None:
 def test_tool_selection_skips_episodes_without_expected_tools() -> None:
     r = row(meta={"type": "ambiguous"}, tools_=[tool("list_events")])
     out = m.tools([r])["selection"]
-    assert out["episodes"] == 0 and out["recall"] is None
+    assert out["episodes"] == 0 and out["micro_recall"] is None
 
 
 def test_argument_validity_counts_only_argument_errors() -> None:
@@ -172,7 +173,8 @@ def test_fact_support_counts_grounded_over_all_candidates() -> None:
     none = row("c", text="일정이 없습니다", tools_=[])
     out = m.fact_support([good, bad, none])
     assert out["facts"] == 4 and out["grounded"] == 3
-    assert out["support_rate"] == pytest.approx(0.75)
+    assert out["faithfulness"] == pytest.approx(0.75)
+    assert out["macro_faithfulness"] == pytest.approx((1 + 0.5) / 2)  # 근거 없는 c는 뺀다
     assert out["episodes_with_facts"] == 2 and out["episodes_with_ungrounded_fact"] == 1
     assert out["by_kind"]["date"] == {"facts": 2, "grounded": 1, "rate": 0.5}
 
@@ -215,8 +217,11 @@ def test_citation_precision_recall_by_answer_kind() -> None:
     out = m.citation([perfect_subset, extra, mail, missing])
     assert out["episodes"] == 4 and out["episodes_without_structured_answer"] == 1
     # 일정 3건 중 정답 근거: a 1/1, b 1/2. 메일 c 1/1, d 0
-    assert out["precision"] == pytest.approx(3 / 4)
-    assert out["recall"] == pytest.approx(3 / 8)
+    assert out["micro_precision"] == pytest.approx(3 / 4)
+    assert out["micro_recall"] == pytest.approx(3 / 8)
+    # 정밀도 a 1, b 1/2, c 1(d는 인용 없음이라 뺌). 재현율 a 1/3(근거 일정 3건), b 1/3, c 1, d 0
+    assert out["macro_precision"] == pytest.approx((1 + 0.5 + 1) / 3)
+    assert out["macro_recall"] == pytest.approx((1 / 3 + 1 / 3 + 1 + 0) / 4)
 
 
 def test_citation_skips_time_slot_and_unanswerable() -> None:
@@ -225,7 +230,7 @@ def test_citation_skips_time_slot_and_unanswerable() -> None:
         row("b", expected_kind="abstain", answer={"kind": "abstain"}),
     ]
     out = m.citation(skip)
-    assert out["episodes"] == 0 and out["precision"] is None
+    assert out["episodes"] == 0 and out["micro_precision"] is None
 
 
 def test_abstention_rates() -> None:

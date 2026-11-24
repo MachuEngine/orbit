@@ -240,7 +240,7 @@ Lite는 false_action에서 재시도 후에도 파싱하지 못한 1건이 있�
 | luna · plan_execute · 색인 끔 | 0.21 | 0.22 | 0.96 | 1.00 / 0.00 / 0.18 | 0.96 / 0.53 |
 | assistant_v0 · luna | 0.00 | 0.11 | 0.99 | 0.86 / 0.00 / 0.12 | 0.91 / 0.54 |
 
-쓰기 분모는 63에피소드, 다중 턴은 27, 답할 수 없는 질문(기권·환각)은 21, 답할 수 있는 질문(과잉 거절)은 150이다. 기권 외 `clarify`·답 없음은 별도의 other라 기권률+환각률이 1이 아닐 수 있다. 사실 근거율은 추출된 날짜·시각·금액·숫자·이메일·이름 후보 전체의 비율(`support_rate`), 인용 P/R도 전체 계수(`precision`·`recall`)다. 에피소드 평균과 섞지 않았다. 예를 들어 색인 켬의 에피소드 평균 인용 P/R는 0.99/0.67이지만 위 표의 전체 계수는 0.98/0.61이다.
+쓰기 분모는 63에피소드, 다중 턴은 27, 답할 수 없는 질문(기권·환각)은 21, 답할 수 있는 질문(과잉 거절)은 150이다. 기권 외 `clarify`·답 없음은 별도의 other라 기권률+환각률이 1이 아닐 수 있다. 사실 근거율은 추출된 날짜·시각·금액·숫자·이메일·이름 후보 전체의 비율(`faithfulness`), 인용 P/R도 전체 계수(`micro_precision`·`micro_recall`)다. 에피소드 평균과 섞지 않았다. 예를 들어 색인 켬의 에피소드 평균 인용 P/R는 0.99/0.67이지만 위 표의 전체 계수는 0.98/0.61이다.
 
 | 설정 | 지연 p50 / p95(ms) | 도구 인자 유효율 | 도구 호출/에피소드 | 결함 과제 성공률 | 변형 답 일치율 |
 | --- | --- | --- | --- | --- | --- |
@@ -349,7 +349,7 @@ Haiku 내 색인 켬−끔은 -0.057 [-0.104, -0.015]다. Luna와 Haiku의 색�
 
 <details><summary>dev 보조 지표 전열 (기존 stats 출력)</summary>
 
-행 이름은 `stats` JSON 경로다. 비율은 0~1, `*_ms_*`는 밀리초다. `—`는 해당 항목 없음이며 실패 유형의 누락 키는 0건이다. 상세 정의와 해석 한계는 ADR-0029 §2와 이 문서의 기존 보조 지표 절을 따른다.
+행 이름은 `stats` JSON 경로다. 비율은 0~1, `*_ms_*`는 밀리초다. `—`는 해당 항목 없음이며 실패 유형의 누락 키는 0건이다. 상세 정의와 해석 한계는 ADR-0029 §2와 이 문서의 기존 보조 지표 절을 따른다. 2026-11-21에 지표 키를 표준 이름으로 바꿨다(값은 그대로): `precision`·`recall`→`micro_precision`·`micro_recall`, `episode_mean_precision`·`episode_mean_recall`→`macro_precision`·`macro_recall`, `support_rate`·`episode_mean_support`→`faithfulness`·`macro_faithfulness`. 당시 원본 stats JSON에는 옛 키로 남아 있다.
 
 | 지표 | Luna react (기준) | Haiku 5.5 react | Luna fixed |
 | --- | --- | --- | --- |
@@ -401,12 +401,12 @@ Haiku 내 색인 켬−끔은 -0.057 [-0.104, -0.015]다. Luna와 Haiku의 색�
 | grounding.abstention.over_refusal_rate | 0.04666667 | 0 | 0.06 |
 | grounding.abstention.unanswerable_episodes | 21 | 21 | 21 |
 | grounding.citation.available | true | true | true |
-| grounding.citation.episode_mean_precision | 0.98697917 | 0.97709924 | 0.9973545 |
-| grounding.citation.episode_mean_recall | 0.66770833 | 0.70694444 | 0.65381944 |
+| grounding.citation.macro_precision | 0.98697917 | 0.97709924 | 0.9973545 |
+| grounding.citation.macro_recall | 0.66770833 | 0.70694444 | 0.65381944 |
 | grounding.citation.episodes | 144 | 144 | 144 |
 | grounding.citation.episodes_without_structured_answer | 1 | 11 | 0 |
-| grounding.citation.precision | 0.98125 | 0.95402299 | 0.99354839 |
-| grounding.citation.recall | 0.60852713 | 0.64341085 | 0.59689922 |
+| grounding.citation.micro_precision | 0.98125 | 0.95402299 | 0.99354839 |
+| grounding.citation.micro_recall | 0.60852713 | 0.64341085 | 0.59689922 |
 | grounding.fact_support.available | true | true | true |
 | grounding.fact_support.by_kind.amount.facts | 20 | 48 | 20 |
 | grounding.fact_support.by_kind.amount.grounded | 20 | 48 | 20 |
@@ -426,13 +426,13 @@ Haiku 내 색인 켬−끔은 -0.057 [-0.104, -0.015]다. Luna와 Haiku의 색�
 | grounding.fact_support.by_kind.time.facts | 230 | 577 | 219 |
 | grounding.fact_support.by_kind.time.grounded | 214 | 524 | 204 |
 | grounding.fact_support.by_kind.time.rate | 0.93043478 | 0.90814558 | 0.93150685 |
-| grounding.fact_support.episode_mean_support | 0.9749192 | 0.96000556 | 0.97651515 |
+| grounding.fact_support.macro_faithfulness | 0.9749192 | 0.96000556 | 0.97651515 |
 | grounding.fact_support.episodes | 264 | 264 | 264 |
 | grounding.fact_support.episodes_with_facts | 221 | 258 | 220 |
 | grounding.fact_support.episodes_with_ungrounded_fact | 15 | 27 | 10 |
 | grounding.fact_support.facts | 586 | 1488 | 549 |
 | grounding.fact_support.grounded | 566 | 1428 | 530 |
-| grounding.fact_support.support_rate | 0.96587031 | 0.95967742 | 0.96539162 |
+| grounding.fact_support.faithfulness | 0.96587031 | 0.95967742 | 0.96539162 |
 | model_mismatch_episodes | 0 | 0 | 0 |
 | robustness.fault.available | true | true | true |
 | robustness.fault.episodes | 18 | 18 | 18 |
@@ -468,9 +468,9 @@ Haiku 내 색인 켬−끔은 -0.057 [-0.104, -0.015]다. Luna와 Haiku의 색�
 | tools.excess_calls.share_with_excess | 0.55691057 | 0.59756098 | 0.57317073 |
 | tools.selection.available | true | true | true |
 | tools.selection.calls_counted | 453 | 606 | 442 |
-| tools.selection.episode_mean_recall | 0.80420054 | 0.8401084 | 0.73306233 |
+| tools.selection.macro_recall | 0.80420054 | 0.8401084 | 0.73306233 |
 | tools.selection.episodes | 246 | 246 | 246 |
-| tools.selection.recall | 0.75268817 | 0.80645161 | 0.6827957 |
+| tools.selection.micro_recall | 0.75268817 | 0.80645161 | 0.6827957 |
 | tools.selection.recall_by_area.calendar.hit | 108 | 108 | 108 |
 | tools.selection.recall_by_area.calendar.need | 108 | 108 | 108 |
 | tools.selection.recall_by_area.calendar.rate | 1 | 1 | 1 |
@@ -518,7 +518,7 @@ Haiku 내 색인 켬−끔은 0.000 [-0.066, 0.070]다. Luna와 Haiku의 색인 
 
 <details><summary>test 보조 지표 전열 (기존 stats 출력)</summary>
 
-행 이름은 `stats` JSON 경로다. 비율은 0~1, `*_ms_*`는 밀리초다. `—`는 해당 항목 없음이며 실패 유형의 누락 키는 0건이다. 상세 정의와 해석 한계는 ADR-0029 §2와 이 문서의 기존 보조 지표 절을 따른다.
+행 이름은 `stats` JSON 경로다. 비율은 0~1, `*_ms_*`는 밀리초다. `—`는 해당 항목 없음이며 실패 유형의 누락 키는 0건이다. 상세 정의와 해석 한계는 ADR-0029 §2와 이 문서의 기존 보조 지표 절을 따른다. 2026-11-21에 지표 키를 표준 이름으로 바꿨다(값은 그대로): `precision`·`recall`→`micro_precision`·`micro_recall`, `episode_mean_precision`·`episode_mean_recall`→`macro_precision`·`macro_recall`, `support_rate`·`episode_mean_support`→`faithfulness`·`macro_faithfulness`. 당시 원본 stats JSON에는 옛 키로 남아 있다.
 
 | 지표 | Luna react (기준) | Haiku 5.5 react | Luna fixed | Luna plan |
 | --- | --- | --- | --- | --- |
@@ -570,12 +570,12 @@ Haiku 내 색인 켬−끔은 0.000 [-0.066, 0.070]다. Luna와 Haiku의 색인 
 | grounding.abstention.over_refusal_rate | 0.12941176 | 0.02352941 | 0.08235294 | 0.15294118 |
 | grounding.abstention.unanswerable_episodes | 9 | 9 | 9 | 9 |
 | grounding.citation.available | true | true | true | true |
-| grounding.citation.episode_mean_precision | 0.98974359 | 0.99061033 | 0.94362745 | 0.90632319 |
-| grounding.citation.episode_mean_recall | 0.51440329 | 0.59382716 | 0.55144033 | 0.47901235 |
+| grounding.citation.macro_precision | 0.98974359 | 0.99061033 | 0.94362745 | 0.90632319 |
+| grounding.citation.macro_recall | 0.51440329 | 0.59382716 | 0.55144033 | 0.47901235 |
 | grounding.citation.episodes | 81 | 81 | 81 | 81 |
 | grounding.citation.episodes_without_structured_answer | 1 | 6 | 1 | 0 |
-| grounding.citation.precision | 0.97468354 | 0.97894737 | 0.91954023 | 0.85057471 |
-| grounding.citation.recall | 0.47530864 | 0.57407407 | 0.49382716 | 0.45679012 |
+| grounding.citation.micro_precision | 0.97468354 | 0.97894737 | 0.91954023 | 0.85057471 |
+| grounding.citation.micro_recall | 0.47530864 | 0.57407407 | 0.49382716 | 0.45679012 |
 | grounding.fact_support.available | true | true | true | true |
 | grounding.fact_support.by_kind.amount.facts | 18 | 41 | 20 | 17 |
 | grounding.fact_support.by_kind.amount.grounded | 18 | 41 | 20 | 17 |
@@ -595,13 +595,13 @@ Haiku 내 색인 켬−끔은 0.000 [-0.066, 0.070]다. Luna와 Haiku의 색인 
 | grounding.fact_support.by_kind.time.facts | 90 | 274 | 83 | 96 |
 | grounding.fact_support.by_kind.time.grounded | 79 | 253 | 73 | 90 |
 | grounding.fact_support.by_kind.time.rate | 0.87777778 | 0.92335766 | 0.87951807 | 0.9375 |
-| grounding.fact_support.episode_mean_support | 0.955 | 0.95483582 | 0.95555556 | 0.96847604 |
+| grounding.fact_support.macro_faithfulness | 0.955 | 0.95483582 | 0.95555556 | 0.96847604 |
 | grounding.fact_support.episodes | 130 | 130 | 130 | 130 |
 | grounding.fact_support.episodes_with_facts | 110 | 127 | 115 | 109 |
 | grounding.fact_support.episodes_with_ungrounded_fact | 9 | 18 | 10 | 8 |
 | grounding.fact_support.facts | 288 | 870 | 286 | 331 |
 | grounding.fact_support.grounded | 269 | 836 | 268 | 316 |
-| grounding.fact_support.support_rate | 0.93402778 | 0.96091954 | 0.93706294 | 0.95468278 |
+| grounding.fact_support.faithfulness | 0.93402778 | 0.96091954 | 0.93706294 | 0.95468278 |
 | model_mismatch_episodes | 0 | 0 | 0 | 0 |
 | robustness.fault.available | true | true | true | true |
 | robustness.fault.episodes | 14 | 14 | 14 | 14 |
@@ -637,9 +637,9 @@ Haiku 내 색인 켬−끔은 0.000 [-0.066, 0.070]다. Luna와 Haiku의 색인 
 | tools.excess_calls.share_with_excess | 0.59482759 | 0.72413793 | 0.62931034 | 0.68103448 |
 | tools.selection.available | true | true | true | true |
 | tools.selection.calls_counted | 212 | 345 | 249 | 293 |
-| tools.selection.episode_mean_recall | 0.80578512 | 0.82506887 | 0.76859504 | 0.77961433 |
+| tools.selection.macro_recall | 0.80578512 | 0.82506887 | 0.76859504 | 0.77961433 |
 | tools.selection.episodes | 121 | 121 | 121 | 121 |
-| tools.selection.recall | 0.75 | 0.78409091 | 0.70454545 | 0.70454545 |
+| tools.selection.micro_recall | 0.75 | 0.78409091 | 0.70454545 | 0.70454545 |
 | tools.selection.recall_by_area.calendar.hit | 45 | 45 | 45 | 44 |
 | tools.selection.recall_by_area.calendar.need | 45 | 45 | 45 | 45 |
 | tools.selection.recall_by_area.calendar.rate | 1 | 1 | 1 | 0.97777778 |

@@ -34,6 +34,11 @@ dev = [
     "pytest>=9.2.0",
     "pytest-asyncio>=1.4.1.post1",
     "ruff>=0.17.4",
+    "networkx>=3.4",  # ADR-0036 A4 Louvain 커뮤니티(순수 Python, 격리 테스트가 CI에서 돈다)
+]
+# 평가 전용(ADR-0036 A1 reranker). 기본 설치·CI에는 넣지 않는다: uv sync --group rag-eval
+rag-eval = [
+    "sentence-transformers>=6.3.0",
 ]
 
 [tool.ruff]
@@ -57,6 +62,10 @@ strict = true
 files = ["src", "tests", "migrations"]
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["networkx", "networkx.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

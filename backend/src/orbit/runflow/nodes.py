@@ -17,6 +17,7 @@ step 멱등(장애 후 노드 재실행)
 로그에도 본문·주소를 남기지 않는다(예외 메시지에는 ID와 종류만).
 """
 
+import dataclasses
 import json
 import logging
 import uuid
@@ -390,8 +391,22 @@ class RunNodes:
         assistant = transcript.assistant_for_step(step)
         if assistant is None:
             boundary = boundary_for(f"run:{run_id}")
-            system = build_system_prompt(d.clock.now(), d.tz, boundary)
+            allowed = d.tool_limits.allowed if d.tool_limits is not None else None
+            system = build_system_prompt(d.clock.now(), d.tz, boundary, allowed)
             tools = run_tool_specs()
+            if d.tool_limits is not None:  # 평가 전용(ADR-0036): 모델에게 허용 도구만 보인다
+                system = d.tool_limits.filter_prompt(system, [spec.name for spec in tools])
+                tools = tuple(spec for spec in tools if spec.name in d.tool_limits.allowed)
+                if (
+                    d.tool_limits.search_note
+                ):  # 평가 전용(ADR-0038): 검색 도구 설명에 한 문장을 더한다
+                    note = d.tool_limits.search_note
+                    tools = tuple(
+                        dataclasses.replace(spec, description=f"{spec.description} {note}")
+                        if spec.name == SEARCH_INDEXED_MAIL
+                        else spec
+                        for spec in tools
+                    )
             if d.rag is not None:
                 tools = tuple(spec for spec in tools if spec.name != SEARCH_INDEXED_MAIL)
             metadata: dict[str, str] = {}
@@ -416,7 +431,10 @@ class RunNodes:
                 metadata = ctx.metadata
             if d.answer_sink is not None:  # 평가 전용 답 제출 확장(ADR-0023 §6)
                 system = with_answer_prompt(system)
-                tools = (*tools, answer_tool_spec())
+                if d.answer_note:
+                    system = system + "\n" + d.answer_note
+                if d.tool_limits is None or SUBMIT_ANSWER in d.tool_limits.allowed:
+                    tools = (*tools, answer_tool_spec())
             # 평가 전용 `reasoning-rt`: 같은 run의 앞선 step 추론 항목을 메모리에서 되돌린다
             returned = d.reasoning_cache.for_run(str(run_id)) if d.reasoning_cache else None
             request = LLMRequest(
@@ -528,6 +546,9 @@ class RunNodes:
         allowed = (
             self._d.pattern_memory.allowed_tools(str(run_id)) if self._d.pattern_memory else None
         )
+        limits = self._d.tool_limits
+        if limits is not None:  # 평가 전용(ADR-0036): 실행 코드에서도 허용 도구만 실행한다
+            allowed = limits.allowed
         first_write = next(
             (
                 i
@@ -550,6 +571,8 @@ class RunNodes:
                 continue
             if allowed is not None and name not in allowed:
                 if llm_id not in done:
+                    if limits is not None:
+                        limits.deny(name)
                     await self._store_tool_result(
                         ws, run_id, step, llm_id, name, {"error": "tool_not_allowed"}, is_error=True
                     )
@@ -599,6 +622,10 @@ class RunNodes:
                 # 빠뜨리지도 않는다.
                 kind, reason = outcome.connector_error
                 await self._notice_connector_error(ws, run_id, step, name, kind, reason)
+            if limits is not None and not outcome.is_error:
+                outcome = dataclasses.replace(
+                    outcome, content=limits.filter_result(name, outcome.content, tools.workset)
+                )
             await self._store_tool_result(
                 ws,
                 run_id,
@@ -635,6 +662,9 @@ class RunNodes:
         """색인 메일 검색(ADR-0019 §8). 색인 의존성이 없으면 도구를 쓸 수 없다고 돌려준다."""
         if self._d.mail_index is None:
             return ToolOutcome(json.dumps({"error": "index_unavailable"}), is_error=True)
+        limits = self._d.tool_limits
+        if limits is not None and limits.search_override is not None:  # 평가 전용(ADR-0038)
+            return await limits.search_override(arguments, ws, workset, mail)
         return await IndexedMailSearch(self._d.mail_index, self._d.tz).execute(
             arguments, workspace_id=ws, workset=workset, mail=mail
         )

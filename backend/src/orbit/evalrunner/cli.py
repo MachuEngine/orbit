@@ -31,10 +31,20 @@ from orbit.connectors.sim.faults import FaultPlan
 from orbit.connectors.sim.world import SimWorld
 from orbit.core.clock import FixedClock
 from orbit.core.config import get_llm_settings
+from orbit.db.session import AsyncDatabase
 from orbit.evaldata.dataset import read_review
 from orbit.evalrunner import judge, metrics_v1, stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
+from orbit.evalrunner.rag_arch import diagnostics as rag_diagnostics
+from orbit.evalrunner.rag_arch.config import ARCHS, DEFAULT_CONTEXT_CHAR_CAP
+from orbit.evalrunner.rag_arch.graph.build import (
+    GraphConfigConflict,
+    GraphNotBuilt,
+    load_graph_digests,
+)
+from orbit.evalrunner.rag_arch.reranker import LocalCrossEncoderReranker
+from orbit.evalrunner.rag_arch.sut import oracle_message_ids
 from orbit.evalrunner.retrieval import worldmail
 from orbit.evalrunner.retrieval.dryrun import dry_run_report
 from orbit.evalrunner.retrieval.embed_cache import BudgetExceeded as EmbedBudgetExceeded
@@ -231,6 +241,19 @@ def _parser() -> argparse.ArgumentParser:
         default=AGENTIC,
         help="평가 전용 검색 정책(ADR-0035). 기본 agentic은 현재 경로 그대로",
     )
+    run.add_argument(
+        "--rag-arch", choices=ARCHS, default=None,
+        help="--sut rag_arch의 RAG 아키텍처(ADR-0036). rag_arch에서는 필수, 다른 SUT에서는 오류",
+    )  # fmt: skip
+    run.add_argument(
+        "--context-char-cap", type=int, default=DEFAULT_CONTEXT_CHAR_CAP,
+        help="--sut rag_arch의 맥락 글자 상한. A0는 넣는 원문 합계, A2는 한 에피소드의 도구 결과 "
+        "합계에 적용한다. 기본값은 ADR-0036 공통 조건 2의 값이며 설정 지문에 들어간다",
+    )  # fmt: skip
+    run.add_argument(
+        "--a4-mode", choices=("auto", "local", "global"), default="auto",
+        help="--rag-arch A4의 경로. auto는 LLM이 고르고 local·global은 강제한다(지문에 들어간다)",
+    )  # fmt: skip
     run.add_argument("--out", required=True)
     run.add_argument("--seed", type=int, default=0, help="실험 시드이자 표본 추출 시드")
     run.add_argument("--sample", type=int, default=None, help="과제 N개만 시드 고정으로 뽑는다")
@@ -271,6 +294,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     ji.add_argument("results")
     ji.add_argument("--out", required=True)
+    rd = sub.add_parser(
+        "rag-diag", help="RAG 아키텍처 비교 진단 집계(성공률·유형별·도달·인용·효율, ADR-0036)"
+    )
+    rd.add_argument("--dataset", required=True)
+    rd.add_argument("--results", nargs="+", required=True, help="구성별 결과 JSONL")
+    rd.add_argument("--baseline", default="A2")
+    rd.add_argument("--k", type=int, default=None, help="pass^k의 k(기본: 완료한 반복 수)")
+    rd.add_argument("--resamples", type=int, default=stats.DEFAULT_RESAMPLES)
+    rd.add_argument("--seed", type=int, default=stats.DEFAULT_SEED)
     judge.add_parser(sub)
     return p
 
@@ -289,6 +321,18 @@ def _live_llm(declared_model_id: str) -> tuple[LLMFactory, dict[str, Any], str] 
         return None
     llm = build_llm(settings)
     return (lambda task, repeat: llm), llm_config_info(settings), settings.llm_model_id
+
+
+async def _graph_digests(
+    provider: EvalIndexProvider, app_url: str, embedding_model: str | None
+) -> dict[str, str]:
+    db = AsyncDatabase.from_url(app_url, pool_size=1, max_overflow=1)
+    try:
+        return await load_graph_digests(
+            db, {a: h.workspace_id for a, h in provider.handles.items()}, embedding_model
+        )
+    finally:
+        await db.dispose()
 
 
 def _database_env(sut: str) -> RunflowEnvironment | None:
@@ -438,8 +482,27 @@ def _write_embedding_stats(path: Path, embedder: CachingEmbedder) -> None:
 
 
 def _run(args: argparse.Namespace) -> int:
-    if args.rag_pattern != AGENTIC:
-        if (
+    if (args.sut == "rag_arch") != (args.rag_arch is not None):
+        print("--rag-arch는 --sut rag_arch와 함께만 쓴다(rag_arch에서는 필수)", file=sys.stderr)
+        return 2
+    if args.sut == "rag_arch" and (
+        args.index != "on"
+        or args.rag_pattern != AGENTIC
+        or args.pattern not in (None, "react")
+        or args.runflow_variant
+    ):
+        print(
+            "rag_arch는 index on·기본 rag-pattern·react·추가 변형 없음에서만 쓴다", file=sys.stderr
+        )
+        return 2
+    if args.rag_arch == "ORACLE" and args.split != "dev":
+        print("--rag-arch ORACLE은 정답 메일을 읽으므로 dev 분할에서만 쓴다", file=sys.stderr)
+        return 2
+    if args.a4_mode != "auto" and args.rag_arch not in ("A4", "A4R"):
+        print("--a4-mode는 --rag-arch A4·A4R에서만 쓴다", file=sys.stderr)
+        return 2
+    if args.rag_pattern != AGENTIC or args.sut == "rag_arch":
+        if args.rag_pattern != AGENTIC and (
             args.sut != "runflow_v0"
             or args.index != "on"
             or args.pattern not in (None, "react")
@@ -457,7 +520,7 @@ def _run(args: argparse.Namespace) -> int:
         else:
             valid_model = args.model_id == "openai/gpt-6-luna"
         if not valid_model:
-            print("RAG 변형은 Luna·reasoning none 설정에서만 쓴다", file=sys.stderr)
+            print("RAG 변형·rag_arch는 Luna·reasoning none 설정에서만 쓴다", file=sys.stderr)
             return 2
     requested = getattr(args, "embedding_stats_out", None)
     path = Path(requested) if requested is not None else None
@@ -521,8 +584,8 @@ def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput
     if args.pattern is not None and args.sut != "runflow_v0":
         print("--pattern은 --sut runflow_v0에서만 쓴다", file=sys.stderr)
         return 2
-    if (args.index == "on" or args.index_dry_run) and args.sut != "runflow_v0":
-        print("--index on은 --sut runflow_v0에서만 쓴다", file=sys.stderr)
+    if (args.index == "on" or args.index_dry_run) and args.sut not in ("runflow_v0", "rag_arch"):
+        print("--index on은 --sut runflow_v0·rag_arch에서만 쓴다", file=sys.stderr)
         return 2
     if args.index_dry_run and args.index != "on":
         print("--index-dry-run은 --index on과 함께 쓴다", file=sys.stderr)
@@ -560,6 +623,20 @@ def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput
             sut_options["rag_pattern"] = args.rag_pattern
         if args.pattern is not None:
             sut_options["pattern"] = args.pattern
+    if args.sut == "rag_arch":
+        sut_options["rag_arch"] = args.rag_arch
+        sut_options["context_char_cap"] = args.context_char_cap
+        if args.rag_arch == "ORACLE":  # test 과제의 gold는 SUT에 넘기지 않는다
+            sut_options["oracle_gold"] = oracle_message_ids(dataset)
+        if args.rag_arch in (
+            "A1",
+            "A3",
+            "A4R",
+            "A4RN",
+            "A2R",
+            "A2X",
+        ):  # 에피소드마다 SUT를 새로 만들어도 모델은 한 번만 로드한다
+            sut_options["reranker"] = LocalCrossEncoderReranker()
     provider: EvalIndexProvider | None = None
     if (
         index_setup is not None
@@ -567,6 +644,19 @@ def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput
         observation.embedder = index_setup.embedder
         provider, seconds = asyncio.run(index_setup.build())
         sut_options["index"] = provider
+        if args.rag_arch in ("A4", "A4R"):  # 구축된 그래프의 지문. 없으면 실행하지 않는다
+            try:
+                sut_options["graph_digests"] = asyncio.run(
+                    _graph_digests(
+                        provider,
+                        index_setup.urls[0] if index_setup.urls else "",
+                        index_setup.embedder.model_id if index_setup.embedder else None,
+                    )
+                )
+            except (GraphNotBuilt, GraphConfigConflict) as exc:
+                print(f"오류: {exc}", file=sys.stderr)
+                return 2
+            sut_options["a4_mode"] = args.a4_mode
         _print_index_summary(provider, index_setup.embedder, seconds)
     sha, dirty = _git_state(out.parent)  # 출력 파일을 만들기 전에 읽는다
     common: dict[str, Any] = {
@@ -697,6 +787,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run(args)
         if args.command == "judge":
             return judge.run_cli(args)
+        if args.command == "rag-diag":
+            return rag_diagnostics.run_cli(args)
         return _judge_input(args) if args.command == "judge-input" else _stats(args)
     except SealedSplitError:
         print(f"test 분할은 봉인돼 있다. 실행하려면 {SEAL_FLAG}를 명시한다.", file=sys.stderr)

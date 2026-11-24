@@ -5,6 +5,8 @@
 - `missing_required`: 필수 사실의 표기가 하나도 본문에 없다. 판정은 `scoring.contains`와 같은
   경계 규칙이다("10시"는 "10시 30분"에 일치하지 않는다).
 - `forbidden_present`: 금지 사실의 표기가 하나라도 있다.
+- `forbidden_pattern`: `spec.forbidden_patterns`의 정규식 중 하나가 본문에 걸린다(부분 문자열로
+  못 막는 표현용, 예: "N월 N일까지").
 - `too_short`·`too_long`: 글자 수가 목표 범위 [0.6×최소, 1.4×최대] 밖이다(공백 포함, 앞뒤
   공백 제외).
 - `email_domain`: 허용 도메인(`example.com`·`example.org`·`example.net`·`.test`) 밖의 이메일 주소.
@@ -34,6 +36,7 @@ REASONS: tuple[str, ...] = (
     "empty",
     "missing_required",
     "forbidden_present",
+    "forbidden_pattern",
     "too_short",
     "too_long",
     "email_domain",
@@ -241,6 +244,11 @@ def check_body(spec: BodySpec, raw: str | None) -> CheckResult:
         found = [form for form in fact.surface_forms if contains(text, form)]
         if found:
             add("forbidden_present", f"금지 사실이 들어갔다: {', '.join(found)}")
+
+    for pattern in spec.forbidden_patterns:
+        if (m := re.search(pattern, text)) is not None:
+            add("forbidden_pattern", f"쓰면 안 되는 표현이 있었다: {m.group(0)}")
+            break
 
     low, high = length_bounds(spec.target_chars)
     if len(text) < low:
