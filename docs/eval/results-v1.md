@@ -673,12 +673,12 @@ Haiku 내 색인 켬−끔은 0.000 [-0.066, 0.070]다. Luna와 Haiku의 색인 
 
 ### 문자열 검사 오채점 감사(Jev 재채점, 2026-11-24)
 
-코드 채점의 문자열 검사(`answer_facts`, `must_not_contain`)가 성공률을 얼마나 틀리게 세는지 Agent 실행 원본 20개(dev 10, test 10, 2,450 에피소드)를 Jev v4로 다시 채점해 확인했다. Jev 설정은 RAG 비교와 같다(`typesafe-ai/jev-1.14.0`, `jev-correctness-v4-extra`, 임계값 0.25, ADR-0039). 실제 비용은 $0.057639다.
+코드 채점의 문자열 검사(`answer_facts`, `must_not_contain`)가 성공률을 얼마나 틀리게 세는지 Agent 실행 원본 20개(dev 10, test 10, 2,450 에피소드)를 Jev v4로 다시 채점해 확인했다. Jev 설정은 RAG 비교와 같다(`typesafe-ai/jev-1.14.0`, `jev-correctness-v4-extra`, 임계값 0.25, ADR-0039). 실제 비용은 $0.068615다(전체 $0.057639, 목록 과제 재채점 $0.010976).
 
 채점 규칙:
 
 - 코드가 성공으로 셌거나, 실패 원인이 문자열 검사 두 개뿐인 에피소드만 Jev 판정으로 바꾼다. 상태 변경·승인·금지 도구·필수 도구 호출·구조화 답 검사 실패는 그대로 실패다.
-- Jev는 사실 설명(`facts[].description`)이 과제 안에서 모두 다른 130개 과제에만 쓴다. 나머지 22개 과제(일정 목록·취소 과제)는 "일정 제목", "일정 시작 시각" 같은 같은 설명이 여러 번 나오고, Jev가 맞는 시각에도 0.18~0.3을 주어 코드 성공 51건을 실패로 뒤집었다. 이 범위 규칙은 결과를 본 뒤 정했다.
+- 일정 목록·취소 22개 과제는 사실 설명(`facts[].description`)이 "일정 제목", "일정 시작 시각"으로 반복된다. 설명을 그대로 질문에 넣었더니 Jev가 어느 일정의 시각인지 알 수 없어 맞는 시각에도 0.18~0.3을 주었고, 코드 성공 51건을 실패로 뒤집었다. 그래서 이 과제들은 시각 설명에 바로 앞 일정 제목을 붙여("'성과 면담' 일정의 시작 시각") 270건을 다시 채점했다. 다시 채점하자 코드 성공을 실패로 뒤집은 건은 2건으로 줄었고, 두 건 모두 답 본문에 시각이 없었다. 질문 형식은 결과를 본 뒤 고쳤다.
 
 Jev 검증: 먼저 메인 세션이 test에서 문자열 검사만 실패한 62건을 직접 대조했다(오채점 56, 진짜 실패 6). Jev는 이 중 61건에서 같은 판정을 냈다. 다른 1건은 정정 전 결정과 최신 결정을 함께 제시한 Haiku 답으로, 사람은 실패, Jev는 성공으로 봤다.
 
@@ -691,7 +691,7 @@ Jev 검증: 먼저 메인 세션이 test에서 문자열 검사만 실패한 62�
 | test | luna-plan | 0.392 | 0.423 | 4 | 0 |
 | test | assistant | 0.400 | 0.423 | 3 | 0 |
 | test | haiku | 0.577 | 0.669 | 12 | 0 |
-| test | gemini | 0.446 | 0.454 | 1 | 0 |
+| test | gemini | 0.446 | 0.446 | 1 | 1 |
 | test | luna-index | 0.646 | 0.677 | 4 | 0 |
 | test | fixed-index | 0.631 | 0.646 | 2 | 0 |
 | test | plan-index | 0.469 | 0.492 | 3 | 0 |
@@ -701,7 +701,7 @@ Jev 검증: 먼저 메인 세션이 test에서 문자열 검사만 실패한 62�
 | dev | pattern-fixed | 0.549 | 0.572 | 7 | 1 |
 | dev | pattern-plan | 0.390 | 0.390 | 1 | 1 |
 | dev | haiku | 0.674 | 0.708 | 9 | 0 |
-| dev | gemini | 0.386 | 0.386 | 1 | 1 |
+| dev | gemini | 0.386 | 0.383 | 1 | 2 |
 | dev | index-on | 0.644 | 0.648 | 3 | 2 |
 | dev | index-on-low | 0.602 | 0.640 | 11 | 1 |
 | dev | fixed-index | 0.670 | 0.682 | 6 | 3 |
@@ -715,7 +715,7 @@ Jev 검증: 먼저 메인 세션이 test에서 문자열 검사만 실패한 62�
 | test | luna-plan − luna-react | −0.062 [−0.148, +0.023] | −0.054 [−0.144, +0.032] | 유지(차이 불확실) |
 | test | assistant − luna-react | −0.054 [−0.172, +0.061] | −0.054 [−0.177, +0.063] | 유지 |
 | test | haiku − luna-react | +0.123 [+0.031, +0.216] | +0.192 [+0.097, +0.285] | 유지, 차이 커짐 |
-| test | gemini − luna-react | −0.008 [−0.116, +0.096] | −0.023 [−0.128, +0.078] | 유지 |
+| test | gemini − luna-react | −0.008 [−0.116, +0.096] | −0.031 [−0.138, +0.071] | 유지 |
 | test | luna-index − luna-react | +0.192 [+0.100, +0.287] | +0.200 [+0.103, +0.298] | 유지 |
 | test | fixed-index − luna-index | −0.015 [−0.085, +0.058] | −0.031 [−0.110, +0.049] | 유지 |
 | test | plan-index − luna-index | −0.177 [−0.270, −0.086] | −0.185 [−0.278, −0.094] | 유지 |
@@ -725,7 +725,7 @@ Jev 검증: 먼저 메인 세션이 test에서 문자열 검사만 실패한 62�
 | dev | pattern-plan − runflow | −0.098 [−0.169, −0.027] | −0.110 [−0.181, −0.037] | 유지 |
 | dev | assistant − runflow | −0.064 [−0.182, +0.049] | −0.061 [−0.180, +0.057] | 유지 |
 | dev | haiku − runflow | +0.186 [+0.097, +0.282] | +0.208 [+0.114, +0.307] | 유지 |
-| dev | gemini − runflow | −0.102 [−0.193, −0.008] | −0.114 [−0.205, −0.019] | 유지 |
+| dev | gemini − runflow | −0.102 [−0.193, −0.008] | −0.117 [−0.208, −0.024] | 유지 |
 | dev | index-on − runflow | +0.155 [+0.072, +0.244] | +0.148 [+0.064, +0.236] | 유지 |
 | dev | index-on-low − index-on | −0.042 [−0.109, +0.020] | −0.008 [−0.071, +0.050] | 유지 |
 | dev | fixed-index − index-on | +0.027 [−0.049, +0.091] | +0.034 [−0.040, +0.097] | 유지 |
@@ -734,14 +734,13 @@ Jev 검증: 먼저 메인 세션이 test에서 문자열 검사만 실패한 62�
 
 해석:
 
-- Agent 패턴 비교(fixed·plan)와 Luna 색인 효과의 결론은 Jev로 채점해도 바뀌지 않는다. test에서는 Jev가 성공을 실패로 바꾼 에피소드가 없다.
+- Agent 패턴 비교(fixed·plan)와 Luna 색인 효과의 결론은 Jev로 채점해도 바뀌지 않는다. Jev가 성공을 실패로 바꾼 에피소드는 test 1건, dev 13건이고, dev 중 11건은 답 본문에 gold와 다른 시각을 말한 `t-free-slot-0008`이다.
 - 코드 채점은 정정 전 값을 함께 설명하거나 gold와 다르게 바꿔 쓰는 Haiku 답을 실패로 센다. 오채점은 haiku-index(dev 36, test 22)와 haiku(dev 9, test 12)에 몰렸다. 원래 표의 "Haiku 색인 켬−끔 0.000"과 "Haiku 색인 켬이 Luna 색인 켬보다 낮음"은 이 편향 때문이다.
 - Jev 기준으로 haiku-index는 luna-index보다 dev에서 유의하게 높고(+0.106 [+0.011, +0.204]), test에서는 CI가 0을 포함한다(+0.069 [−0.024, +0.164]). 성공 1건당 비용은 luna-index $0.0011, haiku-index $0.0072다. Luna + 색인을 기준으로 둔 ADR-0031을 다시 볼지는 개발자가 결정한다. 이 문서는 결정을 바꾸지 않는다.
-- 이 표는 사후 재채점이므로 주 점수를 대체하지 않는다. 범위 규칙은 결과를 본 뒤 정했고, 사람 대조는 test의 코드 실패 62건만 다뤘다.
-- 범위 밖 22개 과제는 코드 채점을 그대로 쓴다. 이 중 `t-free-slot-0008`은 답 본문이 gold와 다른 시각을 말해도 코드가 성공으로 센 거짓 성공이 dev에 약 11건 있다. 이 거짓 성공은 보정하지 않았다.
+- 이 표는 사후 재채점이므로 주 점수를 대체하지 않는다. 목록 과제의 질문 형식은 결과를 본 뒤 고쳤고, 사람 대조는 test의 코드 실패 62건만 다뤘다. Jev가 코드 성공을 실패로 바꾼 쪽은 사람이 전수 확인하지 않았다.
 - `must_not_contain`이 문맥을 보지 않는 문제와 `answer_facts`의 바꿔 쓰기 누락은 채점 규칙의 한계다. 다음 평가셋 버전에서 규칙을 고치려면 dev로 먼저 검증한다.
 
-출처: RUNS/followup/grader-audit-20261124/ — 사람 판정 labels.json (SHA-256 5e05a1dd2ffe4c91df6e9a809acfeb6d96f207b535835fe66d17c91928f44a18), Jev 출력 jev.jsonl (SHA-256 f7eb2131442dd5c102e520e5c9955ec706b760ac752a63a29581b093130f4b8c), 채점 스크립트 agent_jev.py (SHA-256 c64cdcd5ed9458daf81cd2f1001a2eb96732aba3918cf559490d9fa8bdd38b21), 재계산 스크립트 jev_rescore.py (SHA-256 3dcf6ae0da41809637ec6bf42b24a3d0e01d37d4c1ffa8aef94f0d96c00e7957). 입력은 `RUNS/{baseline-v1,compare-v1,compare-v2,models-v1,test-v1}/*.jsonl` 원본이다.
+출처: RUNS/followup/grader-audit-20261124/ — 사람 판정 labels.json (SHA-256 5e05a1dd2ffe4c91df6e9a809acfeb6d96f207b535835fe66d17c91928f44a18), Jev 출력 jev.jsonl (SHA-256 f7eb2131442dd5c102e520e5c9955ec706b760ac752a63a29581b093130f4b8c), 목록 과제 재채점 jev_dup.jsonl (SHA-256 a0cbb722c7fe2e82804b56453772d8d02967d213315fea5eafdeced4fbe4fdf3), 채점 스크립트 agent_jev.py (SHA-256 78cd6f4201f05e53de06cfc52a44c73344ce0875d4c5456c7acca984f23f0b17), 재계산 스크립트 jev_rescore.py (SHA-256 4dfde5cf699ee6efd0f5475da862c1d8a82f180f7b8ee84def1e5ec6658d1a4c). 입력은 `RUNS/{baseline-v1,compare-v1,compare-v2,models-v1,test-v1}/*.jsonl` 원본이다.
 
 ### 실행 비용과 상한
 
