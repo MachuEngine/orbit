@@ -742,6 +742,25 @@ Jev 검증: 먼저 메인 세션이 test에서 문자열 검사만 실패한 62�
 
 출처: RUNS/followup/grader-audit-20261124/ — 사람 판정 labels.json (SHA-256 5e05a1dd2ffe4c91df6e9a809acfeb6d96f207b535835fe66d17c91928f44a18), Jev 출력 jev.jsonl (SHA-256 f7eb2131442dd5c102e520e5c9955ec706b760ac752a63a29581b093130f4b8c), 목록 과제 재채점 jev_dup.jsonl (SHA-256 a0cbb722c7fe2e82804b56453772d8d02967d213315fea5eafdeced4fbe4fdf3), 채점 스크립트 agent_jev.py (SHA-256 78cd6f4201f05e53de06cfc52a44c73344ce0875d4c5456c7acca984f23f0b17), 재계산 스크립트 jev_rescore.py (SHA-256 4dfde5cf699ee6efd0f5475da862c1d8a82f180f7b8ee84def1e5ec6658d1a4c). 입력은 `RUNS/{baseline-v1,compare-v1,compare-v2,models-v1,test-v1}/*.jsonl` 원본이다.
 
+#### Gemini 2차 판정(2026-11-24)
+
+Jev 판정을 사람이 전수 확인하지 않은 부분을 RAG 비교의 정답 비교 Judge(`google/gemini-3.6-flash`, `correctness-v2`)로 다시 판정했다. 대상 규칙은 Gemini 출력을 보기 전에 정했다. Jev를 적용한 에피소드 1,525건 가운데 아래 686건을 Gemini에 보냈다. 실제 비용은 $1.126000, 파싱 실패는 0건이다.
+
+| 묶음 | 기준 | 건수 | Gemini = Jev |
+| --- | --- | --- | --- |
+| A | Jev 판정이 코드 판정과 다름 | 153 | 153 |
+| B | Jev 사실별 확률 최솟값이 [0.1, 0.6) (A 제외) | 428 | 427 |
+| H | 사람 판정 62건 중 A·B에 없는 것 | 5 | 5 |
+| C | 나머지 939건에서 무작위 100건(`random.Random(0)`) | 100 | 100 |
+
+- 최종 판정은 A·B·H·C에 Gemini, 나머지 839건에 Jev를 쓴다.
+- Gemini와 Jev가 다른 1건은 test gemini `t-day-agenda-0002`다. 답이 12:00 일정을 "오전 12시"로 적었고, Jev는 성공, Gemini는 실패로 봤다. 이 때문에 test gemini 성공률이 0.446에서 0.438로, gemini − luna-react가 −0.031 [−0.138, +0.071]에서 −0.038 [−0.146, +0.066]으로 바뀐다. 나머지 성공률과 짝 차이는 위 Jev 표와 같다.
+- 사람 판정 62건에서 Gemini는 Jev와 같은 61건이 맞았다. 틀린 1건도 Jev와 같은 Haiku 답(정정 전·후 결정을 함께 제시)이다.
+- C에서 불일치가 0/100이므로 Jev만 쓴 839건의 Jev·Gemini 불일치율은 95% 신뢰 수준에서 3.0% 이하로 추정한다. 두 판정기가 같은 방향으로 틀리는 경우는 이 수치로 잡지 못한다.
+- 결론: 위 해석은 그대로 유지된다. 두 판정기가 독립적으로 같은 결과를 냈으므로 Haiku 오채점과 ADR-0031 재검토 필요성은 Jev 하나에 기대지 않는다.
+
+출처: RUNS/followup/grader-audit-20261124/ — 대상 선정·실행 agent_gemini.py (SHA-256 9787e66c3c13243de952fd2310cdfcaf471b13c0b3407a0521ffb4ac439aa31b), Gemini 출력 gemini/correctness.jsonl (SHA-256 c04f1814919a525559d9c4e9cd82c30cc7b9ae13fabdff017cbbb76baf93273b), 재계산 gemini_rescore.py (SHA-256 c615a931956de7d0c636f7680a7d56db13d99574d2067e7d451711b62752aa5d). Judge 설정은 `RUNS/complete-v1/judge-v3-flash36.toml`이다.
+
 ### 실행 비용과 상한
 
 | 분할 | 후보 | 본 실행 추정 USD | 추정 8건 지출 | 본 실행 지출 | LLM 합계 | 비용 미상 에피소드 | 임베딩 합계 | LLM 상한 | 상태 |
