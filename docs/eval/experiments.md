@@ -323,6 +323,19 @@
 - **비용:** 실제 지출 $0. 추정은 1글자=1토큰·시도 1.1회·출력 350토큰·캐시 없음이며 문턱을 맞추기 위해 가정을 낮추지 않았다. 사용자 누적 상한 $6, 계획 CLI 상한 $5.30이다.
 - **출처:** ADR-0029 §3, RUNS/complete-v1/test-settings-final.json·test-judge-final-input.jsonl·judge-execution-plan.json·judge-final-dry-run.log. 각각의 SHA는 [상세](results-v1.md#test-judge-v3)에 있다. judge.jsonl은 생성하지 않았다.
 
+<a id="c01"></a>
+## C01 — Agent 코드 채점 문자열 검사 감사
+
+- **날짜·질문:** 2026-11-24. 코드 채점의 `answer_facts`·`must_not_contain` 검사가 성공을 실패로 잘못 세는가, 그 때문에 짝 차이 결론이 바뀌는가?
+- **후보·선정 근거:** Agent 실행 원본 20개(dev 10, test 10, 2,450 에피소드) 전체. 코드 성공이거나 문자열 검사만 실패한 에피소드를 Jev v4 판정으로 바꾼다.
+- **고정 조건:** 에이전트 재실행 없음. Jev 설정은 ADR-0039와 같다(`typesafe-ai/jev-1.14.0`, `jev-correctness-v4-extra`, 임계값 0.25). 재계산은 기존 문서와 같은 과제 묶음 부트스트랩(10,000회, 시드 0)이며 코드 값을 그대로 재현했다.
+- **비교 기준·사전 규칙:** Jev 재채점 짝 차이를 코드 값과 나란히 보고한다. 주 점수는 바꾸지 않는다. 일정 목록 과제는 설명이 반복돼 Jev가 맞는 답을 실패로 봤다. 이를 확인한 뒤 시각 설명에 일정 제목을 붙여 다시 채점했다(사후 수정).
+- **결과:** 사람이 대조한 test 62건 중 Jev가 61건에서 같은 판정. Jev가 성공을 실패로 바꾼 에피소드는 test 1·dev 13건(dev 11건은 `t-free-slot-0008` 거짓 성공). 오채점은 haiku-index·haiku에 몰렸다. test haiku-index−haiku +0.077 [+0.008, +0.146], haiku-index−luna-index +0.069 [−0.024, +0.164]. dev haiku-index−index-on +0.106 [+0.011, +0.204]. 패턴 비교와 Luna 색인 효과의 결론은 유지됐다.
+- **결정·결정자:** 주 점수를 유지한다. haiku-index가 dev에서 유의하게 높고 test에서 CI가 0을 포함하므로 ADR-0031 재검토 여부는 개발자가 정한다. 채점 규칙 수정은 다음 평가셋 버전에서 dev 검증 뒤 결정한다.
+- **미비교·한계:** 목록 과제 질문 형식은 사후 수정이다. 사람 대조는 test 코드 실패 62건만 다뤘고, Jev가 성공을 실패로 바꾼 쪽은 전수 확인하지 않았다.
+- **비용:** $0.068615 (Jev).
+- **출처:** [상세](results-v1.md#문자열-검사-오채점-감사jev-재채점-2026-11-24), RUNS/followup/grader-audit-20261124/{labels.json,jev.jsonl,jev_dup.jsonl,agent_jev.py,jev_rescore.py}.
+
 ## 공통 설계 한계
 
 - M01/A01은 실제 기준이 된 색인 켬이 아니라 색인 끔 luna에 한 요인씩 비교했다. M02는 Haiku·fixed의 dev/test와 plan의 test 조합만 보완했다. Google 2종과 plan dev는 비용 조건 때문에 비교하지 못했고 모든 요인 조합을 비교한 것은 아니다.
