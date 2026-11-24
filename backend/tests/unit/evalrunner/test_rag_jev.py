@@ -15,7 +15,7 @@ from orbit.evalrunner.judge import cohen_kappa
 from orbit.evalrunner.rag_arch import jev
 from orbit.evalrunner.rag_arch.correctness import Episode, Fact, Task
 
-KEY = "sk-test-SECRET-123"
+KEY = "sk-test-SECRET-123"  # gitleaks:allow (합성 테스트 값)
 
 
 def make_task(n_facts: int = 2) -> Task:
@@ -567,7 +567,7 @@ def test_probability_must_be_number_not_string_or_bool() -> None:
 
 
 def test_error_type_is_narrowed(tmp_path: Path) -> None:
-    secret = "sk-abcDEF123456"
+    secret = "sk-abcDEF123456"  # gitleaks:allow (합성 테스트 값)
 
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(403, json={"error": {"type": secret}})

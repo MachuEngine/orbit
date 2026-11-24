@@ -321,7 +321,7 @@ class _Realizer:
             request = LLMRequest(
                 messages=(
                     Message(role="system", content=build_system()),
-                    Message(role="user", content=build_user(spec, priors, hints)),
+                    Message(role="user", content=build_user(spec, priors, hints, body_id=body_id)),
                 ),
                 purpose="data_generation",
                 max_output_tokens=model.max_output_tokens,
@@ -829,7 +829,7 @@ def estimate(
             for p in spec.context.prior_body_ids
             if p in skeleton.bodies
         }
-        in_chars = sys_chars + len(build_user(spec, priors))
+        in_chars = sys_chars + len(build_user(spec, priors, body_id=bid))
         out_chars = (spec.target_chars[0] + spec.target_chars[1]) / 2
         model = models[spec.generator_family]
         extra = reasoning_tokens if model.route == "openai" and model.reasoning_effort else 0

@@ -174,9 +174,9 @@ async def test_request_shape_and_prompt_content(small_sk: Skeleton, tmp_path: Pa
     spec = small_sk.bodies[body_id]
     text = user.content or ""
     for f in spec.required_facts:
-        assert f.surface_forms[0] in text
+        assert any(form in text for form in f.surface_forms)
     for f in spec.forbidden_facts:
-        assert f.surface_forms[0] in text
+        assert any(form in text for form in f.surface_forms)
     assert f"{spec.target_chars[0]}~{spec.target_chars[1]}자" in text
     assert "@" not in text  # 주소는 프롬프트에 넣지 않는다
 
@@ -1064,7 +1064,7 @@ def test_read_rows_latest_wins_and_spend_counts_all_lines(tmp_path: Path) -> Non
 def test_prompt_version_and_brand_rule_in_prompt() -> None:
     from orbit.evaldata.v1.realize_prompt import SYSTEM_PROMPT
 
-    assert PROMPT_VERSION == "realize-v2"
+    assert PROMPT_VERSION == "realize-v3"
     assert "협업 도구" in SYSTEM_PROMPT and "일반 명사" in SYSTEM_PROMPT
 
 

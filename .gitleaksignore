@@ -2,3 +2,8 @@
 3d72fd4dfea0643ee4c7abe96d0160297857e10e:backend/tests/unit/llm/test_openrouter.py:generic-api-key:23
 # 6A Google 로그인 모의 서버의 합성 서명 키(test-signing-key-...). 실제 키가 아니다.
 f012d1d70f8ea5d9b352e027dea327fd69fb2dbd:backend/tests/google_mock.py:generic-api-key:26
+# RAG 아키텍처 비교 Jev 테스트의 합성 값(sk-test-SECRET-..., 오류 메시지 가림 확인용). 실제 키가 아니다.
+a3ed066d6fe4ca244e9fe3106e799b2fa1187bd0:backend/tests/unit/evalrunner/test_rag_jev.py:generic-api-key:18
+a3ed066d6fe4ca244e9fe3106e799b2fa1187bd0:backend/tests/unit/evalrunner/test_rag_jev.py:generic-api-key:570
+# test_openrouter.py 합성 테스트 값의 다른 커밋(위 3d72fd4 항목과 같은 값).
+3d490cef9d4d4fece6beb33fa4bcd757e46ff9b7:backend/tests/unit/llm/test_openrouter.py:generic-api-key:23

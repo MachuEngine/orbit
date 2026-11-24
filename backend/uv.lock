@@ -1080,12 +1080,12 @@ dependencies = [
 dev = [
     { name = "httpx" },
     { name = "mypy" },
+    { name = "networkx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
 rag-eval = [
-    { name = "networkx" },
     { name = "sentence-transformers" },
 ]
 
@@ -1111,14 +1111,12 @@ requires-dist = [
 dev = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "mypy", specifier = ">=2.4.1" },
+    { name = "networkx", specifier = ">=3.4" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "pytest-asyncio", specifier = ">=1.4.1.post1" },
     { name = "ruff", specifier = ">=0.17.4" },
 ]
-rag-eval = [
-    { name = "networkx", specifier = ">=3.4" },
-    { name = "sentence-transformers", specifier = ">=6.3.0" },
-]
+rag-eval = [{ name = "sentence-transformers", specifier = ">=6.3.0" }]
 
 [[package]]
 name = "orjson"
