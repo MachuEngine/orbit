@@ -15,6 +15,7 @@
 import argparse
 import asyncio
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess  # noqa: S404  git SHA 조회에만 쓴다
@@ -58,7 +59,7 @@ from orbit.evalrunner.runflow_index import (
     build_eval_indexes,
     check_as_of,
 )
-from orbit.evalrunner.runflow_sut import VARIANTS
+from orbit.evalrunner.runflow_sut import SEARCH_VARIANTS, VARIANTS
 from orbit.evalrunner.runner import (
     ExperimentBudget,
     FaultPlanSpec,
@@ -234,6 +235,12 @@ def _parser() -> argparse.ArgumentParser:
         "plan_execute(계획 1회 + 오류 시 재계획 1회), "
         "fixed_workflow(의도 분류 + 범주별 도구 제한). "
         "runflow_v0가 아니면 오류",
+    )  # fmt: skip
+    run.add_argument(
+        "--search-variant", choices=SEARCH_VARIANTS, default="default",
+        help="runflow_v0 전용 색인 검색 변형(ADR-0041). advanced는 search_indexed_mail 실행을 "
+        "Advanced 검색 단계(재작성·reranker·압축)로 바꾼다. --index on 필요, "
+        "uv sync --group rag-eval 필요",
     )  # fmt: skip
     run.add_argument("--repeats", type=int, default=3)
     run.add_argument(
@@ -522,7 +529,7 @@ def _run(args: argparse.Namespace, **grade_hooks: Any) -> int:
     if args.a4_mode != "auto" and args.rag_arch not in ("A4", "A4R"):
         print("--a4-mode는 --rag-arch A4·A4R에서만 쓴다", file=sys.stderr)
         return 2
-    if args.rag_pattern != AGENTIC or args.sut == "rag_arch":
+    if args.rag_pattern != AGENTIC or args.sut == "rag_arch" or args.search_variant != "default":
         if args.rag_pattern != AGENTIC and (
             args.sut != "runflow_v0"
             or args.index != "on"
@@ -541,7 +548,10 @@ def _run(args: argparse.Namespace, **grade_hooks: Any) -> int:
         else:
             valid_model = args.model_id == "openai/gpt-6-luna"
         if not valid_model:
-            print("RAG 변형·rag_arch는 Luna·reasoning none 설정에서만 쓴다", file=sys.stderr)
+            print(
+                "RAG 변형·rag_arch·--search-variant advanced는 Luna·reasoning none 설정에서만 쓴다",
+                file=sys.stderr,
+            )
             return 2
     requested = getattr(args, "embedding_stats_out", None)
     path = Path(requested) if requested is not None else None
@@ -610,6 +620,27 @@ def _run_evaluation(
     if (args.index == "on" or args.index_dry_run) and args.sut not in ("runflow_v0", "rag_arch"):
         print("--index on은 --sut runflow_v0·rag_arch에서만 쓴다", file=sys.stderr)
         return 2
+    if args.search_variant != "default":
+        if (
+            args.sut != "runflow_v0"
+            or args.index != "on"
+            or args.rag_pattern != AGENTIC
+            or args.pattern not in (None, "react")
+            or args.runflow_variant
+        ):
+            print(
+                "--search-variant advanced는 --sut runflow_v0 --index on, 기본 rag-pattern, "
+                "react, 추가 변형 없음에서만 쓴다",
+                file=sys.stderr,
+            )
+            return 2
+        if not args.index_dry_run and importlib.util.find_spec("sentence_transformers") is None:
+            print(
+                "--search-variant advanced는 sentence-transformers가 필요하다: "
+                "uv sync --group rag-eval",
+                file=sys.stderr,
+            )
+            return 2
     if args.index_dry_run and args.index != "on":
         print("--index-dry-run은 --index on과 함께 쓴다", file=sys.stderr)
         return 2
@@ -652,6 +683,9 @@ def _run_evaluation(
             sut_options["rag_pattern"] = args.rag_pattern
         if args.pattern is not None:
             sut_options["pattern"] = args.pattern
+        if args.search_variant != "default":  # reranker는 실험 하나에 하나만 로드한다
+            sut_options["search_variant"] = args.search_variant
+            sut_options["reranker"] = LocalCrossEncoderReranker()
     if args.sut == "rag_arch":
         sut_options["rag_arch"] = args.rag_arch
         sut_options["context_char_cap"] = args.context_char_cap

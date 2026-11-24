@@ -26,7 +26,6 @@ from zoneinfo import ZoneInfo
 
 from orbit.assistant.agent import TEMPERATURE
 from orbit.assistant.envelope import boundary_for, wrap_data
-from orbit.assistant.prompt import data_rule_lines
 from orbit.assistant.tools import READ_MAIL, SUBMIT_ANSWER, ReadOnlyTools
 from orbit.assistant.workset import WorkSet
 from orbit.core.clock import FixedClock
@@ -34,11 +33,10 @@ from orbit.evalrunner.episode import Episode, EpisodeOutput
 from orbit.evalrunner.rag_arch import a3
 from orbit.evalrunner.rag_arch import local_rank as lr
 from orbit.evalrunner.rag_arch.a1 import (
-    compress_body,
-    parse_compression,
     rerank_order,
     rerank_passage,
 )
+from orbit.evalrunner.rag_arch.a1_steps import compress_mails, rewrite_query
 from orbit.evalrunner.rag_arch.agentic_search import AgenticSearch
 from orbit.evalrunner.rag_arch.answer_norm import RAG_ANSWER_NORM_VERSION
 from orbit.evalrunner.rag_arch.config import (
@@ -90,7 +88,6 @@ from orbit.mailindex.limits import DEFAULT_RESULTS, MAX_QUERY_CHARS
 from orbit.runflow.answer import ANSWER_EXTENSION_VERSION, answer_tool_spec
 from orbit.runflow.index_tool import IndexedMailSearch
 from orbit.runflow.prompt import PROMPT_VERSION
-from orbit.runflow.rag import parsed_query
 from orbit.runflow.tool_limits import READ_NAME, ToolLimits
 
 
@@ -671,24 +668,7 @@ class RagArchSUT:
         return blocks, diag
 
     async def _rewrite(self, episode: Episode, question: str) -> tuple[str, bool]:
-        """A1 질의 재작성(LLM 1회). (질의, fallback 여부). 형식이 틀리면 입력 질문을 쓴다."""
-        episode.steps.consume()
-        rewritten = await episode.llm.complete(
-            LLMRequest(
-                messages=(
-                    Message(role="system", content=A1_REWRITE_PROMPT),
-                    Message(role="user", content=question),
-                ),
-                purpose="system_under_test",
-                max_output_tokens=REWRITE_MAX_OUTPUT_TOKENS,
-                temperature=TEMPERATURE,
-                metadata={"task_id": episode.task.task_id, "step_kind": "a1_rewrite"},
-            )
-        )
-        query, fallback = parsed_query(rewritten.text, question)
-        if rewritten.tool_calls or rewritten.finish_reason == "length":
-            query, fallback = question[:MAX_QUERY_CHARS], True
-        return query, fallback
+        return await rewrite_query(episode, question)
 
     async def _a4_context(
         self,
@@ -856,43 +836,7 @@ class RagArchSUT:
         mails: dict[str, dict[str, Any]],
         boundary: str,
     ) -> tuple[dict[str, str], int]:
-        """LLM 1회로 5통을 한 번에 압축한다. 검증을 통과하지 못한 메일은 원문 본문으로 되돌린다."""
-        episode.steps.consume()
-        blocks = [
-            wrap_data(
-                json.dumps({"handle": h, "body": mails[h].get("body", "")}, ensure_ascii=False),
-                source="mail_body",
-                boundary=boundary,
-            )
-            for h in handles
-        ]
-        system = "\n".join([A1_COMPRESS_PROMPT, "", *data_rule_lines(boundary)])
-        response = await episode.llm.complete(
-            LLMRequest(
-                messages=(
-                    Message(role="system", content=system),
-                    Message(role="user", content="\n\n".join([question, *blocks])),
-                ),
-                purpose="system_under_test",
-                max_output_tokens=COMPRESS_MAX_OUTPUT_TOKENS,
-                temperature=TEMPERATURE,
-                metadata={"task_id": episode.task.task_id, "step_kind": "a1_compress"},
-            )
-        )
-        parsed = None
-        if not response.tool_calls and response.finish_reason != "length":
-            parsed = parse_compression(response.text)
-        out: dict[str, str] = {}
-        fallbacks = 0
-        for h in handles:
-            original = str(mails[h].get("body", ""))
-            picked = (
-                compress_body(original, parsed[h]) if parsed is not None and h in parsed else None
-            )
-            if picked is None:
-                fallbacks += 1
-            out[h] = original if picked is None else picked
-        return out, fallbacks
+        return await compress_mails(episode, question, handles, mails, boundary)
 
     def _raise_budget_error(self) -> None:
         if self._index.budget_error is not None:

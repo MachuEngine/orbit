@@ -13,10 +13,11 @@
 """
 
 import hashlib
+import json
 import logging
 import uuid
-from collections.abc import Callable, Iterable
-from typing import Any
+from collections.abc import Callable, Iterable, Iterator
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from orbit.core.clock import FixedClock
@@ -26,6 +27,25 @@ from orbit.evalrunner.episode import (
     EpisodeOutput,
     SutTurn,
 )
+from orbit.evalrunner.rag_arch.a1_steps import compress_mails, rewrite_query
+from orbit.evalrunner.rag_arch.agentic_search import AgenticSearch
+from orbit.evalrunner.rag_arch.config import (
+    A1_COMPRESS_PROMPT,
+    A1_COMPRESS_VERSION,
+    A1_REWRITE_PROMPT,
+    A1_REWRITE_VERSION,
+    A2X_SEARCH_VERSION,
+    A2X_TOOL_NOTE,
+    A2X_TOOL_NOTE_VERSION,
+    CANDIDATES,
+    COMPRESS_MAX_OUTPUT_TOKENS,
+    RERANK_TOP_K,
+    RERANKER_DEVICE,
+    RERANKER_MAX_LENGTH,
+    REWRITE_MAX_OUTPUT_TOKENS,
+    prompt_sha,
+)
+from orbit.evalrunner.rag_arch.reranker import Reranker
 from orbit.evalrunner.runflow_env import EpisodeResolver
 from orbit.evalrunner.runflow_index import EvalIndexProvider
 from orbit.evalrunner.trace import EpisodeTrace
@@ -62,6 +82,9 @@ MAX_APPROVALS_PER_RUN = (
 )
 MAX_DRIVE_ROUNDS = 2 * (MAX_APPROVALS_PER_RUN + 1)  # `advance_run` 호출 상한(run 하나)
 INDEX_MODES = ("off", "on")
+SEARCH_VARIANTS = ("default", "advanced")
+# 도구 제한 없음(ADR-0041). 허용 도구 검사가 모두 통과하고 맥락 글자 상한에 걸리지 않는다
+UNCAPPED_CHARS = 2**62
 # CLI 이름(`--runflow-variant`) -> SUT 버전 문자열에 붙는 이름 (ADR-0023 §10)
 VARIANTS = {"facts": FACTS_EXTENSION_VERSION, "reasoning-rt": REASONING_ROUNDTRIP_VERSION}
 
@@ -144,6 +167,20 @@ class _Submission:
         self.answer = answer
 
 
+class _AllTools(frozenset[str]):
+    """모든 도구 이름을 허용하는 집합. `ToolLimits`를 켜도 도구 목록·프롬프트·거부가 그대로다."""
+
+    def __contains__(self, item: object) -> bool:
+        return True
+
+    # `in` 전용이다. 순회·길이는 의미가 없어 조용히 빈 집합처럼 굴지 않고 예외를 낸다
+    def __iter__(self) -> Iterator[str]:
+        raise TypeError("_AllTools는 `in` 검사만 지원한다")
+
+    def __len__(self) -> int:
+        raise TypeError("_AllTools는 `in` 검사만 지원한다")
+
+
 def _note_sha(note: str) -> str:
     return hashlib.sha256(note.encode("utf-8")).hexdigest()[:16]
 
@@ -166,6 +203,8 @@ class RunflowV0SUT:
         rag_pattern: str = AGENTIC,
         limits_factory: Callable[[], ToolLimits] | None = None,
         answer_note: str | None = None,
+        search_variant: str = "default",
+        reranker: Reranker | None = None,
     ) -> None:
         if index_mode not in INDEX_MODES:
             raise ValueError(f"지원하지 않는 색인 모드: {index_mode!r} (지원: {INDEX_MODES})")
@@ -182,6 +221,23 @@ class RunflowV0SUT:
             raise ValueError("지원하지 않는 RAG 패턴")
         if rag_pattern != AGENTIC and (pattern != REACT or index_mode != "on" or chosen):
             raise ValueError("RAG 변형은 index on·react·추가 변형 없음에서만 쓴다")
+        if search_variant not in SEARCH_VARIANTS:
+            raise ValueError(
+                f"지원하지 않는 검색 변형: {search_variant!r} (지원: {SEARCH_VARIANTS})"
+            )
+        if search_variant == "advanced" and (
+            index_mode != "on"
+            or reranker is None
+            or limits_factory is not None
+            or answer_note is not None
+            or rag_pattern != AGENTIC
+            or pattern != REACT
+        ):
+            raise ValueError(
+                "advanced 검색은 --index on과 reranker가 필요하고 다른 제한과 함께 쓰지 않는다"
+            )
+        self._search_variant = search_variant
+        self._reranker = reranker
         self._rag_pattern = rag_pattern
         self._answer_note = answer_note  # 평가 전용 답 제출 추가 단락(ADR-0036)
         self._limits_factory = limits_factory  # 평가 전용 도구 제한(ADR-0036 A2)
@@ -213,6 +269,13 @@ class RunflowV0SUT:
             extra.append(f"{RAG_VERSION}-{self._rag_pattern}")
         if self._answer_note is not None:  # None이면 기존 지문과 같다
             extra.append(f"answer-note-{_note_sha(self._answer_note)}")
+        if self._search_variant == "advanced":
+            extra += [
+                A2X_SEARCH_VERSION,
+                A2X_TOOL_NOTE_VERSION,
+                A1_REWRITE_VERSION,
+                A1_COMPRESS_VERSION,
+            ]
         return "".join([base, *(f"+{n}" for n in ordered), *(f"+{n}" for n in extra)])
 
     def config_info(
@@ -244,7 +307,68 @@ class RunflowV0SUT:
         if self._rag_pattern != AGENTIC:
             info["rag_pattern"] = self._rag_pattern
             info["rag_version"] = RAG_VERSION
+        if self._search_variant == "advanced":  # default는 키를 더하지 않는다(기존 지문 불변)
+            info["search"] = self._search_info()
         return info
+
+    def _search_info(self) -> dict[str, Any]:
+        reranker = cast(Reranker, self._reranker)
+        return {
+            "search_variant": self._search_variant,
+            "search_version": A2X_SEARCH_VERSION,
+            "candidates": CANDIDATES,
+            "rerank_top_k": RERANK_TOP_K,
+            "reranker": {
+                "model_id": reranker.model_id,
+                "revision": reranker.revision,
+                "max_length": getattr(reranker, "max_length", RERANKER_MAX_LENGTH),
+                "device": getattr(reranker, "device", RERANKER_DEVICE),
+            },
+            "tool_note_version": A2X_TOOL_NOTE_VERSION,
+            "tool_note_sha": prompt_sha(A2X_TOOL_NOTE),
+            "rewrite_version": A1_REWRITE_VERSION,
+            "rewrite_prompt_sha": prompt_sha(A1_REWRITE_PROMPT),
+            "rewrite_max_output_tokens": REWRITE_MAX_OUTPUT_TOKENS,
+            "compress_version": A1_COMPRESS_VERSION,
+            "compress_prompt_sha": prompt_sha(A1_COMPRESS_PROMPT),
+            "compress_max_output_tokens": COMPRESS_MAX_OUTPUT_TOKENS,
+        }
+
+    def _run_fingerprint(self) -> str:
+        """DB run 행 지문. default는 기존 그대로, advanced만 검색 변형을 더 해시한다."""
+        base = config_fingerprint(
+            answer_extension=True,
+            facts_extension=self._facts,
+            reasoning_roundtrip=self._reasoning_rt,
+            agent_pattern=self._pattern,
+            rag_pattern=self._rag_pattern,
+        )
+        if self._search_variant != "advanced":
+            return base
+        extra = json.dumps(self._search_info(), sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(f"{base}|{extra}".encode()).hexdigest()
+
+    def _advanced_limits(
+        self, episode: Episode, mail_index: MailIndexDeps | None
+    ) -> tuple[ToolLimits, AgenticSearch]:
+        """advanced: 도구 제한 없이 검색 실행만 A2X 검색 단계로 바꾼다(ADR-0041)."""
+        search = AgenticSearch(
+            variant="advanced",
+            episode=episode,
+            mi=mail_index,
+            tz=ZoneInfo(episode.task.time_zone),
+            reranker=cast(Reranker, self._reranker),
+            rewrite=rewrite_query,
+            compress=compress_mails,
+            raise_budget_error=self._raise_budget_error,
+        )
+        limits = ToolLimits(
+            _AllTools(),
+            UNCAPPED_CHARS,
+            search_override=search,
+            search_note=A2X_TOOL_NOTE,
+        )
+        return limits, search
 
     async def run(self, episode: Episode) -> EpisodeOutput:
         database = episode.database
@@ -259,6 +383,10 @@ class RunflowV0SUT:
         )
         limits = self._limits_factory() if self._limits_factory is not None else None
         clock = FixedClock(episode.task.as_of_time)
+        mail_index = self._mail_index(episode, database, clock)
+        search: AgenticSearch | None = None
+        if self._search_variant == "advanced":
+            limits, search = self._advanced_limits(episode, mail_index)
         resolver = EpisodeResolver(
             calendar=episode.connectors.calendar,
             mail=episode.connectors.mail,
@@ -276,7 +404,7 @@ class RunflowV0SUT:
             tz=ZoneInfo(episode.task.time_zone),
             checkpoint_conninfo=database.checkpoint_conninfo,
             jobs=None,
-            mail_index=self._mail_index(episode, database, clock),
+            mail_index=mail_index,
             answer_sink=submission,
             facts_extension=self._facts,
             reasoning_cache=ReasoningCache() if self._reasoning_rt else None,
@@ -286,13 +414,7 @@ class RunflowV0SUT:
             tool_limits=limits,
             answer_note=self._answer_note,
         )
-        fingerprint = config_fingerprint(
-            answer_extension=True,
-            facts_extension=self._facts,
-            reasoning_roundtrip=self._reasoning_rt,
-            agent_pattern=self._pattern,
-            rag_pattern=self._rag_pattern,
-        )
+        fingerprint = self._run_fingerprint()
         decisions = 0  # 에피소드 전체의 승인 결정 수(정책 순번)
         last_run: uuid.UUID | None = None
         try:
@@ -317,8 +439,15 @@ class RunflowV0SUT:
             final_text=text,
             structured=submission.answer,
             pattern_stats=memory.stats.to_dict() if memory is not None else None,
-            rag_diag=limits.diag("A2") if limits is not None else None,
+            rag_diag=self._rag_diag(search, limits),
         )
+
+    @staticmethod
+    def _rag_diag(search: AgenticSearch | None, limits: ToolLimits | None) -> dict[str, Any] | None:
+        """advanced는 검색·도구 제한 진단을 합친다. 키는 겹치지 않는다(ID·숫자만, ADR-0006)."""
+        if search is None:
+            return limits.diag("A2") if limits is not None else None
+        return {**(limits.diag("A2X") if limits is not None else {}), **search.diag()}
 
     def _raise_budget_error(self) -> None:
         """질의 임베딩이 비용 상한을 넘었으면 에피소드 실패가 아니라 실험 중단으로 알린다."""
