@@ -4,6 +4,7 @@
         --repeats 3 --out <jsonl>
     python -m orbit.evalrunner stats <jsonl> [--compare <jsonl>]
     python -m orbit.evalrunner judge-input <jsonl> --out <jsonl>
+    python -m orbit.evalrunner grade <results> --dataset D --max-cost-usd X [--dry-run]
     python -m orbit.evalrunner judge run|agreement|human-sample ...   (judge.py 참고)
 
 종료 코드: 0 정상, 2 사용 오류(봉인된 test 분할, 파일 충돌, 잘못된 입력), 3 누적 상한으로 중단.
@@ -33,7 +34,7 @@ from orbit.core.clock import FixedClock
 from orbit.core.config import get_llm_settings
 from orbit.db.session import AsyncDatabase
 from orbit.evaldata.dataset import read_review
-from orbit.evalrunner import judge, metrics_v1, stats
+from orbit.evalrunner import final_grade, judge, metrics_v1, stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
 from orbit.evalrunner.rag_arch import diagnostics as rag_diagnostics
@@ -275,6 +276,15 @@ def _parser() -> argparse.ArgumentParser:
         "--live-llm", action="store_true",
         help="ORBIT_LLM_* 설정의 실제 LLM을 호출한다(비용 발생). --llm-script와 함께 쓸 수 없다",
     )  # fmt: skip
+    run.add_argument(
+        "--grade", choices=["auto", "off", "llm"], default="auto",
+        help="실행 뒤 최종 채점(ADR-0040): 코드 구조 검사 + Jev + Gemini 판정을 "
+        "<out 이름>.graded.jsonl에 쓴다. auto(기본)는 --live-llm이면 llm, 아니면 off. "
+        "llm은 --max-grade-cost-usd와 AI_GATEWAY_API_KEY·ORBIT_OPENROUTER_API_KEY가 필요하다",
+    )  # fmt: skip
+    run.add_argument(
+        "--max-grade-cost-usd", type=float, default=None, help="채점(Jev + Gemini) 누적 비용 상한"
+    )
     run.add_argument(SEAL_FLAG, dest="allow_test", action="store_true")
 
     st = sub.add_parser("stats", help="결과 JSONL 통계")
@@ -303,6 +313,17 @@ def _parser() -> argparse.ArgumentParser:
     rd.add_argument("--k", type=int, default=None, help="pass^k의 k(기본: 완료한 반복 수)")
     rd.add_argument("--resamples", type=int, default=stats.DEFAULT_RESAMPLES)
     rd.add_argument("--seed", type=int, default=stats.DEFAULT_SEED)
+    gr = sub.add_parser(
+        "grade",
+        help="이미 있는 결과 파일을 최종 채점해 <결과 이름>.graded.jsonl을 쓴다(ADR-0040)",
+    )
+    gr.add_argument("results")
+    gr.add_argument("--dataset", required=True)
+    gr.add_argument("--max-cost-usd", type=float, default=None, help="채점 누적 비용 상한")
+    gr.add_argument(SEAL_FLAG, dest="allow_test", action="store_true")
+    gr.add_argument(
+        "--dry-run", action="store_true", help="대상 수와 추정 비용만 출력한다(호출·파일 쓰기 없음)"
+    )
     judge.add_parser(sub)
     return p
 
@@ -481,7 +502,7 @@ def _write_embedding_stats(path: Path, embedder: CachingEmbedder) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def _run(args: argparse.Namespace) -> int:
+def _run(args: argparse.Namespace, **grade_hooks: Any) -> int:
     if (args.sut == "rag_arch") != (args.rag_arch is not None):
         print("--rag-arch는 --sut rag_arch와 함께만 쓴다(rag_arch에서는 필수)", file=sys.stderr)
         return 2
@@ -539,7 +560,7 @@ def _run(args: argparse.Namespace) -> int:
     observation = _EmbeddingStatsOutput(path)
     result: int | None = None
     try:
-        result = _run_evaluation(args, observation)
+        result = _run_evaluation(args, observation, grade_hooks)
         return result
     finally:
         original_error = sys.exception()
@@ -553,7 +574,9 @@ def _run(args: argparse.Namespace) -> int:
                 print(f"임베딩 통계 저장 실패: {type(exc).__name__} (비용 미관측)", file=sys.stderr)
 
 
-def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput) -> int:
+def _run_evaluation(
+    args: argparse.Namespace, observation: _EmbeddingStatsOutput, grade_hooks: Mapping[str, Any]
+) -> int:
     if args.split == "test" and not args.allow_test:
         raise SealedSplitError("test 분할 봉인")  # 출력 파일을 만들기 전에 거부한다
     dataset = load_dataset(args.dataset)
@@ -613,6 +636,12 @@ def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput
         llm_factory, llm_config, model_id = live
     else:
         llm_factory = load_script(args.llm_script) if args.llm_script else scripted_llm_factory({})
+    grade_mode = _grade_mode(args)
+    if grade_mode == "llm" and not args.index_dry_run:
+        problem = _grade_precheck(args.max_grade_cost_usd, final_grade.graded_path(out))
+        if problem is not None:
+            print(problem, file=sys.stderr)
+            return 2
     database_env = _database_env(args.sut)
     if args.sut in DATABASE_SUTS and database_env is None:
         return 2  # 출력 파일을 만들기 전에 거부한다
@@ -717,7 +746,111 @@ def _run_evaluation(args: argparse.Namespace, observation: _EmbeddingStatsOutput
     if summary.stopped_reason is not None:
         print(f"누적 상한으로 중단했다: {summary.stopped_reason}", file=sys.stderr)
         return 3
+    if grade_mode == "llm" and args.estimate is None:
+        return _grade_run(
+            out,
+            final_grade.grade_tasks(dataset.tasks),
+            args.max_grade_cost_usd,
+            dry_run=False,
+            allow_test=args.allow_test,
+            retry_hint=(args.dataset, args.max_grade_cost_usd),
+            **grade_hooks,
+        )
     return 0
+
+
+def _grade_mode(args: argparse.Namespace) -> str:
+    if args.estimate is not None:  # 추정 실행은 채점하지 않는다
+        return "off"
+    return ("llm" if args.live_llm else "off") if args.grade == "auto" else args.grade
+
+
+def _grade_precheck(cap: float | None, graded: Path) -> str | None:
+    """채점을 시작할 수 없는 이유(메시지). 출력 파일을 만들기 전에 부른다."""
+    if cap is None or not cap > 0 or cap == float("inf"):
+        return "--grade llm에는 양수인 --max-grade-cost-usd(--max-cost-usd)가 필요하다"
+    if graded.exists():
+        return f"이미 있는 파일에는 쓰지 않는다: {graded}"
+    missing = final_grade.missing_keys()
+    if missing:
+        return f"채점 키 환경 변수가 없다: {', '.join(missing)}"
+    return None
+
+
+def _print_grade_report(r: final_grade.GradeReport, *, dry_run: bool) -> None:
+    gem = "Jev 실행 뒤 결정" if r.gemini_targets is None else str(r.gemini_targets)
+    print(
+        f"채점 행={r.rows} Jev 대상={r.targets} Jev 남은 호출={r.jev_pending}"
+        f"(추정 ${r.jev_est_usd:.6f}) Gemini 대상={gem} Gemini 남은 호출={r.gemini_pending}"
+        f"(추정 ${r.gemini_est_usd:.6f})"
+    )
+    for note in r.notes:
+        print(note, file=sys.stderr)
+    if not dry_run and r.written is not None:
+        print(f"판정 없음(null) {r.undecided}건, 지출 ${r.spent_usd:.6f}, 결과 {r.written}")
+
+
+def _grade_run(
+    results: Path,
+    tasks: Mapping[str, final_grade.GradeTask],
+    cap: float | None,
+    *,
+    dry_run: bool,
+    allow_test: bool = False,
+    retry_hint: tuple[str, float | None] | None = None,
+    **hooks: Any,
+) -> int:
+    def hint() -> None:
+        if retry_hint is not None:  # run 끝 채점이 실패해도 실행 결과는 남아 있다
+            print(
+                f"실행 결과는 {results}에 남아 있다. 다시 채점하려면: python -m orbit.evalrunner "
+                f"grade {results} --dataset {retry_hint[0]} --max-cost-usd {retry_hint[1]}"
+                + (f" {SEAL_FLAG}" if allow_test else ""),
+                file=sys.stderr,
+            )
+
+    try:
+        report = asyncio.run(
+            final_grade.grade_results(
+                results,
+                tasks,
+                max_cost_usd=cap,
+                dry_run=dry_run,
+                progress=print,
+                allow_test=allow_test,
+                **hooks,
+            )  # fmt: skip
+        )
+    except final_grade.GradeError as exc:
+        print(f"오류: GradeError: {exc}", file=sys.stderr)
+        hint()
+        return 2
+    except Exception:  # OSError·ResumeMismatch 등도 결과 경로와 재실행 명령은 알린다
+        hint()
+        raise
+    _print_grade_report(report, dry_run=dry_run)
+    if report.stop_reason is not None:
+        print(
+            f"채점 중단({report.stop_reason}): 판정이 빠진 에피소드가 있어 .graded.jsonl을 쓰지 "
+            "않았다. 같은 채점을 다시 실행하면 저장된 판정은 다시 부르지 않는다",
+            file=sys.stderr,
+        )
+        hint()
+        return 3
+    return 0
+
+
+def _grade(args: argparse.Namespace, **hooks: Any) -> int:
+    results = Path(args.results)
+    if not args.dry_run:
+        problem = _grade_precheck(args.max_cost_usd, final_grade.graded_path(results))
+        if problem is not None:
+            print(problem, file=sys.stderr)
+            return 2
+    tasks = final_grade.grade_tasks(load_dataset(args.dataset).tasks)
+    return _grade_run(
+        results, tasks, args.max_cost_usd, dry_run=args.dry_run, allow_test=args.allow_test, **hooks
+    )
 
 
 def _stats(args: argparse.Namespace) -> int:
@@ -785,6 +918,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "run":
             return _run(args)
+        if args.command == "grade":
+            return _grade(args)
         if args.command == "judge":
             return judge.run_cli(args)
         if args.command == "rag-diag":
@@ -802,6 +937,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         DatasetError,
         stats.ResultsError,
         UnknownSutError,
+        final_grade.GradeError,
     ) as exc:
         # 이 예외들의 메시지는 위치·이름만 담도록 직접 만든 것이다.
         print(f"오류: {type(exc).__name__}: {exc}", file=sys.stderr)

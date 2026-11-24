@@ -67,7 +67,7 @@ uv run python -m orbit.evalrunner run \
 ```bash
 uv run python -m orbit.evalrunner run \
   --dataset ../eval/datasets/orbit-eval/v0 --split dev --sut assistant_v0 \
-  --live-llm --repeats 3 --seed 0 --prompt-version assistant_v0 \
+  --live-llm --grade off --repeats 3 --seed 0 --prompt-version assistant_v0 \
   --max-cost-usd 2.5 --max-total-tokens 20000000 \
   --out ../runs/pilot/A.jsonl
 ```

@@ -450,7 +450,7 @@ export ORBIT_LLM_MODEL_ID=openai/gpt-6-luna ORBIT_LLM_REASONING_EFFORT=none \
 # --i-understand-this-uses-the-sealed-test-split가 필요하고, ORACLE은 test에서 거부된다.
 uv run --group rag-eval python -m orbit.evalrunner run --dataset ../eval/datasets/orbit-eval/rag-v1 --split dev \
   --sut rag_arch --rag-arch A1 --index on --embedder openai --price-per-mtok 0.02 --max-embed-cost-usd 0.05 \
-  --repeats 3 --live-llm --model-id openai/gpt-6-luna --max-cost-usd 0.3 --max-total-tokens 20000000 \
+  --repeats 3 --live-llm --grade off --model-id openai/gpt-6-luna --max-cost-usd 0.3 --max-total-tokens 20000000 \
   --out ../eval/runs/rag-arch-v1/dev-A1.jsonl
 uv run python -m orbit.evalrunner rag-diag --dataset ../eval/datasets/orbit-eval/rag-v1 \
   --results ../eval/runs/rag-arch-v1/dev-A*.jsonl --baseline A2
