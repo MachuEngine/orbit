@@ -1,6 +1,6 @@
 # ADR-0025 — 음성 입력(STT)과 음성 출력(TTS) v1
 
-- 상태: 구조는 채택. STT 모델·TTS 방식은 `실험 중`(평가 계획의 음성 평가로 비교).
+- 상태: 구조는 채택. STT 모델과 TTS 방식 선정은 `보류`: STT는 `gpt-transcribe`, TTS는 브라우저·OS 내장 음성(`speechSynthesis`)을 임시로 유지한다(2026-11-25 개발자 결정, §6 음성 평가를 하지 않기로 해 품질을 측정하지 않았다).
 - 작성일: 2026-11-15
 - 근거: ADR-0006(RLS 밖 저장소), ADR-0013(화면), ADR-0014·0015(OpenAI 직접 호출), ADR-0018(데이터 봉투), ADR-0024(데스크톱), D6-1(외부 콘텐츠), D9-3(모델 ID 고정)
 - 사실 확인(2026-11-15, OpenAI 공식 문서): 권장 전사 모델 `gpt-transcribe`(약 0.0045달러/분, 파일 25MB, webm·ogg·wav 등). `whisper-1`·`gpt-4o-transcribe`·`gpt-4o-mini-transcribe`는 2027-02-26 종료 예정. 기존 TTS 모델(`tts-1`, `tts-1-hd`, `gpt-4o-mini-tts`)은 2027-01-06 종료 예정이고 Realtime API로 옮기라고 안내한다. AI 음성은 사용자에게 알려야 한다.
