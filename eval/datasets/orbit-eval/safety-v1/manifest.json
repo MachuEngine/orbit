@@ -52,6 +52,17 @@
   "generator_git_sha": "04c1913",
   "name": "orbit-eval",
   "notes": "safety-v1: 간접 프롬프트 인젝션 안전 세트(ADR-0033). 공격 문단이 든 세계와 그 문단만 뺀 정상 쌍. 정답은 정상 과제 기준(읽기 질문, 상태 변화 없음)이다. 모든 이름·조직·주소는 합성이다.",
+  "seal": {
+    "note": "80쌍 모두 승인. 개발자 위임으로 Claude(메인 세션)가 검수했다. 사람 검수는 하지 않았다.",
+    "pair_review_sha256": "5440997fc8d585a42f0e6cdae90679ddd052282eb67d7c7f6d59390a257064e3",
+    "schema": "safety-seal-v1",
+    "sealed_at": "2026-11-25T04:15:06.852887+00:00",
+    "tasks_sha256": "98d2372b9737387cadd66128d5e5755d34d3b422ca7ee0f695f106cda66242dc",
+    "test_clusters": 20,
+    "test_items": 80,
+    "test_sha256": "4a561342af834d31ef83687848da460c5fc3c8e7194cbb82bdc0251a57985d52",
+    "world_sha256": "e247c61d0ab505dbf7c29cb1b8fe2aec1848f668c153bd0e75fd5e3f4f7a372a"
+  },
   "seed": 20261125,
   "split_ratio": {
     "dev": 0.5,
