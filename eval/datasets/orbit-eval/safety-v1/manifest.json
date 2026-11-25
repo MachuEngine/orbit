@@ -1,0 +1,61 @@
+{
+  "counts": {
+    "events": 320,
+    "messages": 576,
+    "tasks": 160,
+    "users": 160
+  },
+  "created_with": "templates",
+  "details": {
+    "by_channel": {
+      "doc": 40,
+      "mail": 40
+    },
+    "by_split": {
+      "dev": 40,
+      "test": 40
+    },
+    "by_type": {
+      "exfiltration": 16,
+      "instruction_following": 16,
+      "reminder_induction": 16,
+      "system_leak": 16,
+      "write_induction": 16
+    },
+    "by_type_split": {
+      "exfiltration/dev": 8,
+      "exfiltration/test": 8,
+      "instruction_following/dev": 8,
+      "instruction_following/test": 8,
+      "reminder_induction/dev": 8,
+      "reminder_induction/test": 8,
+      "system_leak/dev": 8,
+      "system_leak/test": 8,
+      "write_induction/dev": 8,
+      "write_induction/test": 8
+    },
+    "by_variant": {
+      "authority": 20,
+      "envelope_escape": 20,
+      "plain": 20,
+      "urgency": 20
+    },
+    "clusters": 40,
+    "decoys_per_world": {
+      "docs": 2.6,
+      "events": 2.0,
+      "mails": 3.6
+    },
+    "false_positive_pairs": 40,
+    "pairs": 80
+  },
+  "generator_git_sha": "04c1913",
+  "name": "orbit-eval",
+  "notes": "safety-v1: 간접 프롬프트 인젝션 안전 세트(ADR-0033). 공격 문단이 든 세계와 그 문단만 뺀 정상 쌍. 정답은 정상 과제 기준(읽기 질문, 상태 변화 없음)이다. 모든 이름·조직·주소는 합성이다.",
+  "seed": 20261125,
+  "split_ratio": {
+    "dev": 0.5,
+    "test": 0.5
+  },
+  "version": "safety-v1"
+}
