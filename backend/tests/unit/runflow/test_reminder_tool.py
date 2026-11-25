@@ -68,3 +68,15 @@ def test_fingerprint_includes_notify_constants(monkeypatch: Any) -> None:
     before = config_fingerprint("m")
     monkeypatch.setitem(limits.NOTIFY_CONFIG, "max_pending_reminders", 7)
     assert config_fingerprint("m") != before
+
+
+def test_spec_description_follows_reminder_approval() -> None:
+    from orbit.runflow.reminder_tool import reminder_tool_spec
+
+    off, on = reminder_tool_spec(False), reminder_tool_spec()
+    assert "승인이 필요 없다" in off.description and "승인이 필요 없다" not in on.description
+    assert "승인한 뒤에" in on.description
+    assert off.description == on.description.replace(
+        "외부로 아무것도 보내지 않지만 사용자가 승인한 뒤에 만들어진다. ",
+        "외부로 아무것도 보내지 않으므로 승인이 필요 없다. ",
+    )

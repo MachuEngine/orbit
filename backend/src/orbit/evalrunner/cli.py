@@ -29,14 +29,23 @@ from typing import Any
 from pydantic import ValidationError
 from sqlalchemy.engine import make_url
 
+from orbit.connectors.sim.factory import build_sim_connectors
 from orbit.connectors.sim.faults import FaultPlan
 from orbit.connectors.sim.world import SimWorld
 from orbit.core.clock import FixedClock
 from orbit.core.config import get_llm_settings
 from orbit.db.session import AsyncDatabase
 from orbit.evaldata.dataset import read_review
+from orbit.evaldata.safety_v1.constants import PROMPT_CANARIES
 from orbit.evalrunner import final_grade, judge, metrics_v1, stats
 from orbit.evalrunner.episode import Budget
+from orbit.evalrunner.guards import (
+    GUARDS,
+    NO_APPROVAL,
+    JudgeBackends,
+    require_sim_connectors,
+    validate_guards,
+)
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
 from orbit.evalrunner.rag_arch import diagnostics as rag_diagnostics
 from orbit.evalrunner.rag_arch.config import ARCHS, DEFAULT_CONTEXT_CHAR_CAP
@@ -179,6 +188,27 @@ def _mail_content_subset(dataset: Dataset) -> Dataset:
     )
 
 
+def _writes_subset(dataset: Dataset) -> Dataset:
+    """기대 쓰기(`expected_changes`)가 있는 dev 과제만 선택한다(승인·가드 오탐 비교용)."""
+    tasks = tuple(t for t in dataset.tasks if t.split == "dev" and t.gold.expected_changes)
+    if not tasks:
+        raise DatasetError("writes 부분집합에 과제가 없다")
+    manifest_bytes = json.dumps(
+        dict(dataset.manifest), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    selection = {
+        "name": "writes",
+        "version": "writes-v1",
+        "split": "dev",
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "task_ids": sorted(t.task_id for t in tasks),
+        "clusters": sorted({t.cluster_id for t in tasks}),
+    }
+    return replace(
+        dataset, tasks=tasks, manifest={**dataset.manifest, "evaluation_subset": selection}
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m orbit.evalrunner")
     sub = p.add_subparsers(dest="command", required=True)
@@ -187,10 +217,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--dataset", required=True)
     run.add_argument("--split", required=True, choices=["dev", "test"])
     run.add_argument(
-        "--subset", choices=["smoke", "mail-content"], default=None,
+        "--subset", choices=["smoke", "mail-content", "writes"], default=None,
         help="smoke: manifest의 smoke_task_ids만 실행한다(dev 분할만, "
         "ADR-0026 §5). CI 회귀 확인용이며 "
-        "비교 실험의 판단 근거로 쓰지 않는다",
+        "비교 실험의 판단 근거로 쓰지 않는다. writes: 기대 쓰기가 있는 dev 과제만 "
+        "실행한다(가드레일 오탐 비교용, dev 분할만)",
     )  # fmt: skip
     run.add_argument("--sut", required=True, help=f"등록된 이름: {', '.join(sut_names())}")
     run.add_argument(
@@ -241,6 +272,18 @@ def _parser() -> argparse.ArgumentParser:
         help="runflow_v0 전용 색인 검색 변형(ADR-0041). advanced는 search_indexed_mail 실행을 "
         "Advanced 검색 단계(재작성·reranker·압축)로 바꾼다. --index on 필요, "
         "uv sync --group rag-eval 필요",
+    )  # fmt: skip
+    run.add_argument(
+        "--prompt-canary", choices=sorted(PROMPT_CANARIES), default=None,
+        help="runflow_v0 전용 평가용 시스템 지침 카나리(ADR-0033). 시스템 지침 끝에 비공개 확인 "
+        "코드 문장을 붙인다. 실사용 지침에는 없다. 설정 지문에 들어간다",
+    )  # fmt: skip
+    run.add_argument(
+        "--guard", action="append", default=[], choices=list(GUARDS),
+        help="runflow_v0 전용 평가용 가드레일 스위치(ADR-0033). 여러 번 쓸 수 있다. "
+        "envelope-off·no-approval·reminder-approval·injection-llm|jev|jev-mask|clf(하나만)·"
+        "write-intent. "
+        "실사용 경로에는 없고 설정 지문에 들어간다",
     )  # fmt: skip
     run.add_argument("--repeats", type=int, default=3)
     run.add_argument(
@@ -595,6 +638,11 @@ def _run_evaluation(
             print("--subset mail-content는 dev 분할에서만 쓴다", file=sys.stderr)
             return 2
         dataset = _mail_content_subset(dataset)
+    if args.subset == "writes":
+        if args.split != "dev":
+            print("--subset writes는 dev 분할에서만 쓴다", file=sys.stderr)
+            return 2
+        dataset = _writes_subset(dataset)
     smoke_excluded: int | None = None
     if args.subset == "smoke":
         if args.split != "dev":
@@ -619,6 +667,41 @@ def _run_evaluation(
         return 2
     if (args.index == "on" or args.index_dry_run) and args.sut not in ("runflow_v0", "rag_arch"):
         print("--index on은 --sut runflow_v0·rag_arch에서만 쓴다", file=sys.stderr)
+        return 2
+    if args.prompt_canary is not None and args.sut != "runflow_v0":
+        print("--prompt-canary는 --sut runflow_v0에서만 쓴다", file=sys.stderr)
+        return 2
+    if args.guard and args.sut != "runflow_v0":
+        print("--guard는 --sut runflow_v0에서만 쓴다", file=sys.stderr)
+        return 2
+    try:
+        guards = validate_guards(args.guard)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if NO_APPROVAL in guards and dataset.tasks:  # S2는 실행 전에 Sim 커넥터인지 확인한다
+        first = dataset.tasks[0]
+        account = first.account_id
+        probe = build_sim_connectors(
+            SimWorld.load(dict(dataset.world_snapshot), FixedClock(first.as_of_time)), [account]
+        )
+        try:
+            require_sim_connectors(
+                probe.mail[account], probe.calendar[account], probe.drive[account]
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    if args.sut != "runflow_v0" and any(t.safety is not None for t in dataset.tasks):
+        print("안전 세트는 runflow_v0에서만 실행한다", file=sys.stderr)
+        return 2
+    if args.prompt_canary is None and any(
+        t.safety is not None and t.safety.attack_type == "system_leak" for t in dataset.tasks
+    ):
+        print(
+            "system_leak 과제가 있는 데이터셋은 --prompt-canary safety-v1이 필요하다",
+            file=sys.stderr,
+        )
         return 2
     if args.search_variant != "default":
         if (
@@ -683,6 +766,15 @@ def _run_evaluation(
             sut_options["rag_pattern"] = args.rag_pattern
         if args.pattern is not None:
             sut_options["pattern"] = args.pattern
+        if args.prompt_canary is not None:
+            sut_options["prompt_canary"] = args.prompt_canary
+        if guards:  # 분류기는 실험 하나에 하나만 로드한다. 키·패키지가 없으면 여기서 멈춘다
+            try:
+                sut_options["guard_backends"] = JudgeBackends.for_guards(guards)
+            except (ValueError, RuntimeError, OSError) as exc:
+                print(f"가드레일 준비 실패: {exc}", file=sys.stderr)
+                return 2
+            sut_options["guards"] = guards
         if args.search_variant != "default":  # reranker는 실험 하나에 하나만 로드한다
             sut_options["search_variant"] = args.search_variant
             sut_options["reranker"] = LocalCrossEncoderReranker()

@@ -2,7 +2,8 @@
 
 노드 구성
 - `agent`: LLM 호출, 대화 저장, 읽기 도구 실행. 쓰기 도구 호출이면 `tool_call`과 `approval`을 만들고
-  run을 `waiting_approval`로 옮긴다. 도구 호출이 없는 응답이면 run을 `succeeded`로 끝낸다.
+  run을 `waiting_approval`로 옮긴다. 리마인더 `create_reminder`도 기본은 같은 승인 요청을 거친다
+  (G1, ADR-0033. `RunDeps.reminder_approval`). 도구 호출이 없는 응답이면 run을 `succeeded`로 끝낸다.
 - `await_approval`: `interrupt`만 한다. 부수 효과가 없다(조건 3).
 - `execute`: Orbit의 `approval` 상태를 읽고 판단한다(조건 4). 승인이면 저장된 인자로 동작을 만들어
   `args_hash`를 재계산하고, 일치할 때만 `execute_approved`를 부른다. 거절·만료면 거절 결과만 남긴다.
@@ -18,9 +19,12 @@ step 멱등(장애 후 노드 재실행)
 """
 
 import dataclasses
+import hashlib
 import json
 import logging
+import unicodedata
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from langgraph.types import interrupt
@@ -64,12 +68,13 @@ from orbit.runflow.context import (
 from orbit.runflow.deps import NoConnection, RunDeps
 from orbit.runflow.docs_tool import DOC_TOOLS, DocTools
 from orbit.runflow.eval_variants import with_facts_prompt
+from orbit.runflow.guards import mask_tool_result, scan_tool_result
 from orbit.runflow.index_tool import SEARCH_INDEXED_MAIL, IndexedMailSearch
 from orbit.runflow.jobs import EXPIRE_APPROVALS, defer_at
 from orbit.runflow.patterns import PatternDriver
 from orbit.runflow.prompt import build_system_prompt
 from orbit.runflow.rag import INITIAL_STEP, initial_call_id
-from orbit.runflow.reminder_tool import CREATE_REMINDER, ReminderTool
+from orbit.runflow.reminder_tool import CREATE_REMINDER, ReminderTool, check_due
 from orbit.runflow.repo import get_approval_by_tool_call, get_tool_call, lock_run
 from orbit.runflow.state import RunState, validate_state
 from orbit.runflow.store import ActionsStoreAdapter
@@ -92,12 +97,34 @@ _ACTION_ADAPTER: TypeAdapter[WriteAction] = TypeAdapter(
 )
 
 
+def reminder_args(text: str, due: datetime) -> dict[str, Any]:
+    """리마인더 승인 요청의 정규 인자(ADR-0033 G1). 문구는 NFC, 시각은 UTC."""
+    return {
+        "kind": CREATE_REMINDER,
+        "text": unicodedata.normalize("NFC", text),
+        "due_at": due.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+    }
+
+
+def reminder_hash(args: dict[str, Any]) -> str:
+    body = json.dumps(args, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
 def orbit_tool_call_id(run_id: uuid.UUID, step: int, index: int) -> uuid.UUID:
     """(run, step, 호출 순번)에서 결정적으로 만든 `tool_call` id. 노드를 재실행해도 같은 값이다."""
     return uuid.uuid5(TOOL_CALL_NAMESPACE, f"{run_id}:{step}:{index}")
 
 
 logger = logging.getLogger(__name__)
+
+
+def _reminder_parse_error(call: dict[str, Any]) -> str | None:
+    """`create_reminder` 호출의 인자 형식 오류 종류. 다른 도구이거나 형식이 맞으면 None."""
+    if call.get("name") != CREATE_REMINDER:
+        return None
+    parsed = ReminderTool._parse(call.get("arguments"))
+    return parsed if isinstance(parsed, str) else None
 
 
 def _context_outcome(arguments: object, prior: ConversationContext) -> ToolOutcome:
@@ -139,6 +166,12 @@ class RunNodes:
     @staticmethod
     def _out(update: dict[str, Any]) -> dict[str, Any]:
         return validate_state(update)
+
+    def _write_names(self) -> frozenset[str]:
+        """승인을 거치는 쓰기 도구. `reminder_approval`(기본 True)이면 리마인더 생성도 포함한다."""
+        if self._d.reminder_approval:
+            return WRITE_TOOLS | frozenset({CREATE_REMINDER})
+        return WRITE_TOOLS
 
     async def _transition(
         self,
@@ -271,6 +304,7 @@ class RunNodes:
         is_error: bool,
         handles: dict[str, Any] | None = None,
         orbit_tool_call_id_: uuid.UUID | None = None,
+        injection_suspect: bool = False,
     ) -> None:
         """도구 결과 행을 저장한다. 같은 (step, 호출 ID)가 이미 있으면 건너뛴다."""
         async with self._d.db.workspace_session(ws) as s:
@@ -294,6 +328,8 @@ class RunNodes:
                 content["handles"] = handles
             if orbit_tool_call_id_ is not None:
                 content["orbit_tool_call_id"] = str(orbit_tool_call_id_)
+            if injection_suspect:  # G3 경고. 불리언만 둔다(본문·문구 원문은 저장하지 않는다)
+                content["injection_suspect"] = True
             await append_message(
                 s,
                 workspace_id=ws,
@@ -392,8 +428,10 @@ class RunNodes:
         if assistant is None:
             boundary = boundary_for(f"run:{run_id}")
             allowed = d.tool_limits.allowed if d.tool_limits is not None else None
-            system = build_system_prompt(d.clock.now(), d.tz, boundary, allowed)
-            tools = run_tool_specs()
+            system = build_system_prompt(
+                d.clock.now(), d.tz, boundary, allowed, reminder_approval=d.reminder_approval
+            )
+            tools = run_tool_specs(d.reminder_approval)
             if d.tool_limits is not None:  # 평가 전용(ADR-0036): 모델에게 허용 도구만 보인다
                 system = d.tool_limits.filter_prompt(system, [spec.name for spec in tools])
                 tools = tuple(spec for spec in tools if spec.name in d.tool_limits.allowed)
@@ -438,7 +476,9 @@ class RunNodes:
             # 평가 전용 `reasoning-rt`: 같은 run의 앞선 step 추론 항목을 메모리에서 되돌린다
             returned = d.reasoning_cache.for_run(str(run_id)) if d.reasoning_cache else None
             request = LLMRequest(
-                messages=tuple(transcript.llm_messages(system, boundary, returned)),
+                messages=tuple(
+                    transcript.llm_messages(system, boundary, returned, envelope=d.envelope)
+                ),
                 purpose="system_under_test",
                 tools=tools,
                 tool_choice="auto",
@@ -549,11 +589,15 @@ class RunNodes:
         limits = self._d.tool_limits
         if limits is not None:  # 평가 전용(ADR-0036): 실행 코드에서도 허용 도구만 실행한다
             allowed = limits.allowed
+        write_names = self._write_names()
+        # 인자 형식이 틀린 리마인더 호출은 승인 슬롯을 차지하지 않는다(아래에서 오류 결과만 남긴다)
         first_write = next(
             (
                 i
                 for i, c in enumerate(calls)
-                if c["name"] in WRITE_TOOLS and (allowed is None or c["name"] in allowed)
+                if c["name"] in write_names
+                and (allowed is None or c["name"] in allowed)
+                and _reminder_parse_error(c) is None
             ),
             None,
         )
@@ -577,7 +621,7 @@ class RunNodes:
                         ws, run_id, step, llm_id, name, {"error": "tool_not_allowed"}, is_error=True
                     )
                 continue
-            if name in WRITE_TOOLS:
+            if name in write_names:
                 if index != first_write and llm_id not in done:
                     await self._store_tool_result(
                         ws,
@@ -585,7 +629,7 @@ class RunNodes:
                         step,
                         llm_id,
                         name,
-                        {"error": "one_write_at_a_time"},
+                        {"error": _reminder_parse_error(call) or "one_write_at_a_time"},
                         is_error=True,
                     )
                 continue
@@ -626,6 +670,21 @@ class RunNodes:
                 outcome = dataclasses.replace(
                     outcome, content=limits.filter_result(name, outcome.content, tools.workset)
                 )
+            guard = self._d.content_guard
+            suspect = False
+            if guard is not None and self._d.guard_log is not None and not outcome.is_error:
+                # G3: 본문이 든 도구 결과는 모델에 넘기기 전에 판정한다
+                if guard.mode == "mask":  # 평가 재현 전용. 제품은 경고만 한다
+                    outcome = dataclasses.replace(
+                        outcome,
+                        content=await mask_tool_result(
+                            name, outcome.content, guard, self._d.guard_log
+                        ),
+                    )
+                else:  # 본문은 그대로 두고 "의심" 표시만 저장한다(불리언)
+                    suspect = await scan_tool_result(
+                        name, outcome.content, guard, self._d.guard_log
+                    )
             await self._store_tool_result(
                 ws,
                 run_id,
@@ -635,6 +694,7 @@ class RunNodes:
                 outcome.content,
                 is_error=outcome.is_error,
                 handles=tools.workset.export(),
+                injection_suspect=suspect,
             )
         if first_write is None:
             return None
@@ -691,28 +751,51 @@ class RunNodes:
         if existing is not None:
             return tool_call_id  # 이미 승인 요청을 만들었다(재실행)
 
-        try:
-            action = await build_action(
-                name, call.get("arguments"), workset=workset, calendar=calendar, mail=mail
-            )
-        except ToolInputError as exc:
-            await self._store_tool_result(
-                ws, run_id, step, llm_id, name, {"error": exc.kind}, is_error=True
-            )
+        handles: dict[str, str]
+        if name == CREATE_REMINDER:  # G1: 리마인더도 승인 요청을 만든다
+            parsed = ReminderTool._parse(call.get("arguments"))
+            if isinstance(parsed, str):
+                await self._store_tool_result(
+                    ws, run_id, step, llm_id, name, {"error": parsed}, is_error=True
+                )
+                return None
+            if (kind := check_due(parsed[1], d.clock.now())) is not None:
+                await self._store_tool_result(
+                    ws, run_id, step, llm_id, name, {"error": kind}, is_error=True
+                )
+                return None
+            args = reminder_args(*parsed)
+            digest = reminder_hash(args)
+            handles = {}
+            provenance: dict[str, Any] = {"emails": {}, "handles": {}, "target": {}}
+        else:
+            try:
+                action = await build_action(
+                    name, call.get("arguments"), workset=workset, calendar=calendar, mail=mail
+                )
+            except ToolInputError as exc:
+                await self._store_tool_result(
+                    ws, run_id, step, llm_id, name, {"error": exc.kind}, is_error=True
+                )
+                return None
+            args = canonical_args(action)
+            digest = args_hash(action)
+            workspace_emails, external_texts = transcript.provenance_inputs()
+            handles = _handles_of(name, call.get("arguments"))
+            provenance = {
+                "emails": classify_emails(
+                    recipient_emails(action),
+                    user_utterances=transcript.user_utterances(),
+                    workspace_emails=workspace_emails,
+                    external_texts=external_texts,
+                ),
+                "handles": handles,
+                "target": await build_target(action, calendar=calendar, mail=mail),
+            }
+        if await self._intent_rejected(ws, run_id, step, llm_id, name, call, transcript):
             return None
-        args = canonical_args(action)
-        workspace_emails, external_texts = transcript.provenance_inputs()
-        handles = _handles_of(name, call.get("arguments"))
-        provenance: dict[str, Any] = {
-            "emails": classify_emails(
-                recipient_emails(action),
-                user_utterances=transcript.user_utterances(),
-                workspace_emails=workspace_emails,
-                external_texts=external_texts,
-            ),
-            "handles": handles,
-            "target": await build_target(action, calendar=calendar, mail=mail),
-        }
+        if transcript.injection_suspect():  # G3: 이 실행에서 의심 결과를 읽었다
+            provenance["injection_warning"] = True
         async with d.db.workspace_session(ws) as s:
             status = await lock_run(s, ws, run_id)
             if status is None or status in TERMINAL_RUN_STATUSES:
@@ -724,7 +807,7 @@ class RunNodes:
                 tool_call_id=tool_call_id,
                 tool_name=name,
                 args=args,
-                args_hash=args_hash(action),
+                args_hash=digest,
                 provenance=provenance,
                 clock=d.clock,
                 ids=d.ids,
@@ -759,6 +842,35 @@ class RunNodes:
             if status == "running":
                 await self._transition(s, ws, run_id, "waiting_approval")
         return tool_call_id
+
+    async def _intent_rejected(
+        self,
+        ws: uuid.UUID,
+        run_id: uuid.UUID,
+        step: int,
+        llm_id: str,
+        name: str,
+        call: dict[str, Any],
+        transcript: Transcript,
+    ) -> bool:
+        """평가 전용 G4. 사용자 요청이 아닌 쓰기로 판정하면 거절 결과를 남기고 True를 돌려준다.
+
+        판정 입력은 사용자 발화와 쓰기 인자뿐이다. 외부 본문은 넣지 않는다.
+        """
+        guard, log = self._d.intent_guard, self._d.guard_log
+        if guard is None or log is None:
+            return False
+        arguments = call.get("arguments")
+        verdict = await guard.judge(
+            transcript.user_utterances(), name, arguments if isinstance(arguments, dict) else {}
+        )
+        hit = verdict.flagged and verdict.error is None
+        log.add(guard.name, name, verdict, blocked=hit)
+        if hit:
+            await self._store_tool_result(
+                ws, run_id, step, llm_id, name, {"error": "write_not_requested"}, is_error=True
+            )
+        return hit
 
     # ------------------------------------------------------------ await_approval
 
@@ -804,6 +916,11 @@ class RunNodes:
                 ws, run_id, step, llm_id, tool_call, approval.id, approval.status, None
             )
             return again
+
+        if tool_call.tool_name == CREATE_REMINDER:
+            return await self._execute_reminder(
+                ws, run_id, step, llm_id, tool_call, approval, again
+            )
 
         # approved: 저장된 인자로 동작을 다시 만들고 해시를 재계산한다(같을 때만 실행).
         try:
@@ -854,6 +971,60 @@ class RunNodes:
         await self._finish_call(
             ws, run_id, step, llm_id, tool_call, approval.id, record.status, record.error_kind
         )
+        return again
+
+    async def _execute_reminder(
+        self,
+        ws: uuid.UUID,
+        run_id: uuid.UUID,
+        step: int,
+        llm_id: str,
+        tool_call: Any,
+        approval: Any,
+        again: dict[str, Any],
+    ) -> dict[str, Any]:
+        """G1: 승인된 리마인더를 만든다. 저장된 인자의 해시가 같을 때만 실행한다.
+
+        외부 호출이 없는 로컬 쓰기라 `execution` 행은 만들지 않는다. 알림 ID가 결정적이라 재실행해도
+        한 번만 생긴다.
+        """
+        stored = tool_call.args if isinstance(tool_call.args, dict) else {}
+        parsed = ReminderTool._parse({"text": stored.get("text"), "due_at": stored.get("due_at")})
+        if isinstance(parsed, str) or stored.get("kind") != CREATE_REMINDER:
+            return await self._fail(ws, run_id, "hash_mismatch")
+        digest = reminder_hash(reminder_args(*parsed))
+        if digest != approval.args_hash or digest != tool_call.args_hash:
+            await self._finish_call(
+                ws, run_id, step, llm_id, tool_call, approval.id, "failed", "hash_mismatch"
+            )
+            return await self._fail(ws, run_id, "hash_mismatch")
+        tool = ReminderTool(self._d.db, self._d.clock, self._d.tz)
+        already = await tool.exists(
+            workspace_id=ws, run_id=run_id, step=step, llm_call_id=llm_id
+        )  # 이미 만든 알림이면 만료 판정보다 먼저 성공으로 본다(재실행 멱등)
+        if (
+            not already and self._d.clock.now() >= approval.expires_at
+        ):  # executor.py와 같은 만료 판정
+            await self._finish_call(
+                ws, run_id, step, llm_id, tool_call, approval.id, "expired", None
+            )
+            return again
+        outcome = await tool.execute(
+            {"text": parsed[0], "due_at": parsed[1].isoformat()},
+            workspace_id=ws,
+            run_id=run_id,
+            step=step,
+            llm_call_id=llm_id,
+        )
+        if outcome.is_error:
+            kind = str(json.loads(outcome.content).get("error", "failed"))
+            await self._finish_call(
+                ws, run_id, step, llm_id, tool_call, approval.id, "failed", kind
+            )
+        else:
+            await self._finish_call(
+                ws, run_id, step, llm_id, tool_call, approval.id, "succeeded", None
+            )
         return again
 
     async def _finish_call(

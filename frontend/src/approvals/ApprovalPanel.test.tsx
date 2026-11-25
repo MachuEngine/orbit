@@ -20,6 +20,7 @@ function approvalBody(overrides: Record<string, unknown> = {}) {
     summary: { to_count: 2 },
     provenance: { "kim@example.com": "user", "new@example.com": "external_content" },
     expires_at: "2026-11-11T10:05:00+00:00",
+    injection_warning: false,
     decided_at: null,
     ...overrides,
   };
@@ -79,6 +80,17 @@ describe("ApprovalPanel", () => {
     stubFetch(approvalBody({ provenance: { "new@example.com": "model" } }));
     render(<ApprovalPanel approvalId="ap1" clock={clock} />);
     expect(await screen.findByText("비서가 만든 값")).toBeInTheDocument();
+  });
+
+  it("서버가 인젝션 의심을 표시한 승인은 경고 문구를 보여 주고, 아니면 보여 주지 않는다", async () => {
+    stubFetch(approvalBody({ injection_warning: true }));
+    const { unmount } = render(<ApprovalPanel approvalId="ap1" clock={clock} />);
+    expect(await screen.findByText(/지시처럼 보이는 문장이 있었습니다/)).toBeInTheDocument();
+    unmount();
+    stubFetch(approvalBody({ injection_warning: false }));
+    render(<ApprovalPanel approvalId="ap1" clock={clock} />);
+    await screen.findByText("new@example.com");
+    expect(screen.queryByText(/지시처럼 보이는 문장이 있었습니다/)).toBeNull();
   });
 
   it("출처 정보가 없는 주소는 확인하지 못했다고 경고한다(fail-closed)", async () => {

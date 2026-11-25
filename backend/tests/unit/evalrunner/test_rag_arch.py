@@ -158,7 +158,8 @@ def test_product_prompt_is_byte_identical_and_a2_prompt_has_no_unavailable_featu
 
     tz = ZoneInfo("Asia/Seoul")
     now = datetime(2026, 11, 12, 9, 0, tzinfo=tz)
-    product = build_system_prompt(now, tz, "0123456789ab")
+    # 승인 없는 리마인더(S0) 문구는 평가 재현을 위해 바이트 단위로 고정한다(ADR-0033 G1 반영 전 값)
+    product = build_system_prompt(now, tz, "0123456789ab", reminder_approval=False)
     assert hashlib.sha256(product.encode()).hexdigest() == PRODUCT_PROMPT_SHA
     names = ["send_mail", "create_reminder", "list_events", "search_mail", *ALLOWED]
     system = build_system_prompt(now, tz, "0123456789ab", ALLOWED)

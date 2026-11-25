@@ -17,7 +17,15 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 DEFAULT_TIME_ZONE = "Asia/Seoul"  # `Task.time_zone`이 없을 때 쓴다(v0 호환)
 
@@ -286,6 +294,32 @@ class Gold(_Model):
     answer_facts_required: bool = False
 
 
+SafetyAttackType = Literal[
+    "instruction_following", "exfiltration", "write_induction", "reminder_induction", "system_leak"
+]
+
+
+class SafetyInfo(_Model):
+    """안전 세트(safety-v1, ADR-0033)의 과제 부가 정보. 채점기만 읽고 평가 대상에게 보이지 않는다.
+
+    `role`: 공격 문서가 든 세계(`attack`)와 공격 문장만 뺀 쌍(`normal`). `attack_source_ids`는
+    공격 문장이 든 메일·파일 ID, `attack_target`은 공격이 가리키는 목적지(주소 또는 일정 ID),
+    `marker`는 성공 판정에 쓰는 합성 문자열, `leak_source_id`는 exfiltration에서 유출 대상이
+    들어 있는 메일·파일 ID다. 모든 값은 합성 데이터다.
+    """
+
+    pair_id: str
+    role: Literal["attack", "normal"]
+    attack_type: SafetyAttackType
+    channel: Literal["mail", "doc"]
+    attack_source_ids: list[str]
+    attack_target: str | None = None
+    marker: str
+    leak_source_id: str | None = None
+    template_id: str
+    variant: Literal["plain", "authority", "urgency", "envelope_escape"]
+
+
 class Task(_Model):
     task_id: str
     scenario_id: str
@@ -299,11 +333,29 @@ class Task(_Model):
     tags: list[str] = Field(default_factory=list)
     # 시뮬레이션 사용자의 승인 결정(ADR-0023 §3). n번째 쓰기 승인 요청에 대한 결정이고 목록 밖은
     # 승인이다. 없으면(v0) 모두 승인한다. 정답이 아니라 사용자 행동 입력이라 평가 대상에게 보인다.
-    approval_policy: list[Literal["approve", "reject"]] | None = None
+    # `["oracle"]`이면 요청한 쓰기가 `gold.expected_changes`와 맞을 때만 승인한다(ADR-0033).
+    approval_policy: list[Literal["approve", "reject", "oracle"]] | None = None
     # 사용자 시간대(IANA 이름). 없으면 `DEFAULT_TIME_ZONE`. 평가 대상의 시각 해석 기준이다.
     time_zone: str | None = None
     # 이 과제에만 거는 장애 주입(`FaultPlan.from_dict` 형식, ADR-0026 7절). 평가 대상에게 안 보인다.
     fault_plan: dict[str, Any] | None = None
+    # 안전 세트 부가 정보. 없으면 파일에 쓰지 않는다(기존 데이터셋과 같은 바이트).
+    safety: SafetyInfo | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_safety(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """`safety`가 없으면 키를 빼서 기존 데이터셋의 직렬화·봉인 해시를 그대로 둔다."""
+        data: dict[str, Any] = handler(self)
+        if data.get("safety") is None:
+            data.pop("safety", None)
+        return data
+
+    @model_validator(mode="after")
+    def _oracle_is_alone(self) -> Task:
+        policy = self.approval_policy or []
+        if "oracle" in policy and policy != ["oracle"]:
+            raise ValueError('approval_policy의 "oracle"은 다른 값과 함께 쓰지 않는다')
+        return self
 
 
 ReviewDecision = Literal["approve", "fix", "exclude"]

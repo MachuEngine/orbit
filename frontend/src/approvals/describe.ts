@@ -28,10 +28,17 @@ export interface ApprovalView {
   strayWarnings: Person[];
   /** 승인 인자에 있지만 이 화면이 보여 주지 않은 항목 이름 */
   hiddenKeys: string[];
+  /** 읽은 메일·문서에 지시처럼 보이는 문장이 있었다는 서버 표시 */
+  injectionWarning: boolean;
 }
+
+/** 서버가 `injection_warning`을 켰을 때 승인 화면에 보여 주는 경고 문구 */
+export const INJECTION_WARNING_TEXT =
+  "이 작업 중 읽은 메일·문서에 지시처럼 보이는 문장이 있었습니다. 직접 요청하신 작업이 맞는지 확인하세요.";
 
 type ApprovalInput = Pick<Approval, "tool_name" | "args" | "summary" | "provenance"> & {
   target?: Approval["target"];
+  injection_warning?: boolean;
 };
 
 /** 화면에 보이지 않아도 되는 내부 식별자. 제공자 ID는 일부러 보여 주지 않는다. */
@@ -42,6 +49,7 @@ const SHOWN_KEYS: Record<string, string[]> = {
   create_event: ["title", "start", "end", "attendees", "location", "description"],
   update_event_time: ["start", "end"],
   cancel_event: [],
+  create_reminder: ["text", "due_at"],
 };
 
 const EXCERPT_LENGTH = 80;
@@ -133,6 +141,22 @@ export function formatTimeRange(start: string, end: string, timeZone?: string): 
       ? `${part("hour")}:${part("minute")}`
       : full.format(endDate);
   return `${full.format(startDate)} – ${endText}${zone === "" ? "" : ` (${zone})`}`;
+}
+
+/** 알림 시각을 "11월 12일 (목) 14:30 (GMT+9)"처럼 쓴다. 해석할 수 없으면 받은 값을 그대로 쓴다. */
+export function formatDueAt(value: string, timeZone?: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone,
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "short",
+  }).format(date);
 }
 
 function longText(label: string, text: string): DetailRow {
@@ -234,6 +258,13 @@ export function describeApproval(approval: ApprovalInput): ApprovalView {
       }
       break;
     }
+    case "create_reminder": {
+      const content = str(args.text);
+      if (content !== null) rows.push({ kind: "text", label: "내용", value: content });
+      const due = str(args.due_at);
+      if (due !== null) rows.push({ kind: "text", label: "알림 시각", value: formatDueAt(due) });
+      break;
+    }
     default: {
       // 모르는 동작은 문자열·숫자 인자만 이름과 값으로 보여 준다. 객체는 펼치지 않는다.
       for (const [key, value] of Object.entries(args)) {
@@ -258,7 +289,7 @@ export function describeApproval(approval: ApprovalInput): ApprovalView {
     .filter((email) => !shown.has(email.toLowerCase()))
     .map((email) => person(email, provenance))
     .filter((p) => p.flagged);
-  return { rows, strayWarnings, hiddenKeys };
+  return { rows, strayWarnings, hiddenKeys, injectionWarning: approval.injection_warning === true };
 }
 
 /** 카드 전체에서 출처 경고가 붙은 주소가 하나라도 있는지. */

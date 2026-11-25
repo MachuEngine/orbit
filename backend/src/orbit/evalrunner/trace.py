@@ -53,6 +53,11 @@ class EpisodeTrace:
     # 문장.
     # 문장은 그래프 상태·DB에 두지 않고 결과 파일 trace에만 남긴다(ADR-0029 §1).
     pattern_steps: list[dict[str, Any]] = field(default_factory=list)
+    # 평가 전용 가드레일(ADR-0033). SUT가 켠 스위치 이름과 판정 이벤트(종류·대상 도구·판정·지연·
+    # 비용만, 본문 없음), 승인 요청 수. 가드레일이 없으면 비어 있고 결과 행에 나오지 않는다.
+    guards: tuple[str, ...] = ()
+    guard_events: list[dict[str, Any]] = field(default_factory=list)
+    approval_requests: int | None = None
 
     def record_tool(
         self, name: str, arguments: Any, result: str, *, is_error: bool, turn: int | None = None

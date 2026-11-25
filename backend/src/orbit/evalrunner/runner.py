@@ -17,7 +17,7 @@ import logging
 import random
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from orbit.connectors.contracts import ConnectorError
@@ -26,6 +26,7 @@ from orbit.connectors.sim.faults import FaultPlan
 from orbit.connectors.sim.world import SimWorld, SnapshotError, diff
 from orbit.core.clock import FixedClock
 from orbit.evaldata.schema import DEFAULT_TIME_ZONE
+from orbit.evalrunner.approval_oracle import ORACLE_POLICY, ApprovalOracle
 from orbit.evalrunner.episode import (
     Budget,
     BudgetExceeded,
@@ -48,12 +49,14 @@ from orbit.evalrunner.runflow_env import (
     RunflowEnvironment,
     approval_violations,
 )
+from orbit.evalrunner.safety import score_attack
 from orbit.evalrunner.scoring import FailureType, score_episode
 from orbit.evalrunner.structured import answer_ids
 from orbit.evalrunner.task_source import SPLITS, Dataset, DatasetError, TaskView
 from orbit.evalrunner.trace import RESULT_SCHEMA_VERSION, EpisodeTrace, build_trace
 from orbit.llm.interface import LLM, UsageRecorder
 from orbit.llm.model_id import is_declared_model
+from orbit.runflow.guards import GuardLog
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +222,11 @@ class EpisodeResult:
     pattern_stats: Mapping[str, Any] | None = None
     # RAG 아키텍처 비교 진단(ADR-0036). 맥락에 닿은 메일 ID·절단 여부·검색 횟수. 본문은 없다.
     rag_diag: Mapping[str, Any] | None = None
+    # 안전 세트(ADR-0033) 공격 채점과 승인 오라클 결정 기록. 안전 과제가 아니면 None이고 행에 없다.
+    safety: Mapping[str, Any] | None = None
+    approvals: Sequence[Mapping[str, Any]] | None = None
+    # 평가 전용 가드레일(ADR-0033): 켠 스위치, 판정 이벤트, 막힘 여부, 승인 요청 수. 없으면 없다.
+    guard: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         row = self._base_dict()
@@ -228,6 +236,12 @@ class EpisodeResult:
             row["pattern_stats"] = dict(self.pattern_stats)
         if self.rag_diag is not None:
             row["rag_diag"] = dict(self.rag_diag)
+        if self.safety is not None:
+            row["safety"] = dict(self.safety)
+        if self.approvals is not None:
+            row["approvals"] = [dict(a) for a in self.approvals]
+        if self.guard is not None:
+            row["guard"] = dict(self.guard)
         if self.cleanup_failed is not None:  # DB를 쓴 에피소드(관찰이 실패하면 turns가 없다)
             row["approval_violations"] = self.approval_violations
             row["turns"] = None if self.turns is None else [dict(t) for t in self.turns]
@@ -337,6 +351,11 @@ async def run_episode(
     started = monotonic()
     latency_ms: int | None = None
     timeout = asyncio.timeout(budget.max_seconds)
+    oracle = (
+        ApprovalOracle(task.gold.expected_changes)
+        if tuple(task.approval_policy or ()) == ORACLE_POLICY
+        else None
+    )
     try:
         # DB 준비·SUT·관찰이 같은 절대 기한을 공유한다. 단계마다 예산을 다시 시작하지 않는다.
         async with timeout:
@@ -344,6 +363,8 @@ async def run_episode(
                 database = await database_env.prepare(
                     as_of=task.as_of_time, seed=episode_seed(seed, task.task_id, repeat)
                 )
+            if oracle is not None and database is not None:
+                database = replace(database, approval_decider=oracle.decide)
             # 구성 중 예외가 나도 finally가 자원을 정리한다.
             episode = Episode(
                 task=SutTask(
@@ -431,6 +452,24 @@ async def run_episode(
         rag_norm=any(t.startswith("rag:") for t in task.tags),
     )
     violations = approval_violations(observation, calls) if observation is not None else 0
+    reminders = observation.reminders if observation is not None else ()
+    safety = score_attack(
+        task,
+        final_text=output.final_text if output is not None else "",
+        diff=diff(before, world),
+        reminders=reminders,
+        unknown_reminders=0,
+        calls=calls,
+        approvals=oracle.records if oracle is not None else (),
+        observed=observation is not None or database_env is None,
+    )
+    guard = _guard_block(collector)
+    if safety is not None and guard is not None:
+        safety = {
+            **safety,
+            "guard_events": guard["events"],
+            "guard_blocked": guard["guard_blocked"],
+        }
     failure: FailureType | None
     if score.failure_type == "forbidden_tool":
         # 안전 위반은 오류·예산 초과에 가려지지 않는다
@@ -453,6 +492,9 @@ async def run_episode(
     recorded = recorder.total_cost_usd
     # 취소된 호출의 비용은 알 수 없다. 합계가 있어도 과소 집계이므로 None으로 둔다.
     cost = None if recording_llm.cancelled or recorded is None else float(recorded)
+    if cost is not None and guard is not None:  # 기록기 밖(Jev) 판정 비용을 더한다
+        external = GuardLog(events=collector.guard_events).external_cost_usd
+        cost = None if external is None else cost + external
     models = tuple(sorted({r.model_id for r in recorder.records if r.model_id}))
     providers = tuple(sorted({r.provider for r in recorder.records if r.provider}))
     mismatch = (
@@ -539,7 +581,23 @@ async def run_episode(
         llm_calls_by_kind=_calls_by_kind(recorder),
         pattern_stats=output.pattern_stats if output is not None else None,
         rag_diag=output.rag_diag if output is not None else None,
+        safety=safety,
+        approvals=list(oracle.records) if safety is not None and oracle is not None else None,
+        guard=guard,
     )
+
+
+def _guard_block(trace: EpisodeTrace) -> dict[str, Any] | None:
+    """가드레일을 켠 에피소드의 `guard` 항목. 켜지 않았으면 None이라 행이 달라지지 않는다."""
+    if not trace.guards:
+        return None
+    events = [dict(e) for e in trace.guard_events]
+    return {
+        "names": list(trace.guards),
+        "events": events,
+        "guard_blocked": any(bool(e.get("blocked")) for e in events),
+        "approval_requests": trace.approval_requests,
+    }
 
 
 def _calls_by_kind(recorder: UsageRecorder) -> dict[str, int] | None:

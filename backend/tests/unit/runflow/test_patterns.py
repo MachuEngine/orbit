@@ -103,7 +103,12 @@ def test_sut_version_and_config_info_record_pattern() -> None:
         "runflow_fingerprint", "answer_extension", "variants", "index_mode",
         "max_approvals_per_run",
     }  # fmt: skip
-    assert react["runflow_fingerprint"] == config_fingerprint("m", INFO, answer_extension=True)
+    assert react["runflow_fingerprint"] == config_fingerprint(
+        "m",
+        INFO,
+        answer_extension=True,
+        reminder_approval=False,  # S0
+    )
     with pytest.raises(ValueError):
         RunflowV0SUT(pattern="nope")
 

@@ -29,5 +29,7 @@ def approval_summary(
                 "cc_count": len(args.get("cc", [])),
                 "is_reply": args.get("reply_to_thread_id") is not None,
             }
+        case "create_reminder":
+            return {"due_at": args.get("due_at")}
         case _:
             return {}

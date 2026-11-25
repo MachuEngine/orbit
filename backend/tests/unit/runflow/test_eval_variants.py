@@ -30,10 +30,13 @@ def test_prompts_match_pinned_hashes_after_clarify_and_answer_guide() -> None:
     # 경계값 B123 기준 출력의 SHA-256이다.
     digest = hashlib.sha256(assistant_prompt(NOW, TZ, "B123").encode()).hexdigest()
     assert digest == "f45d0539460b94eeeddc5d7fb5e37c5d6aa39885a4cd1aa3e2e9a2416f258ff1"
-    text = runflow_prompt(NOW, TZ, "B123")
+    text = runflow_prompt(NOW, TZ, "B123", reminder_approval=False)  # S0(승인 없는 리마인더) 문구
     assert hashlib.sha256(text.encode()).hexdigest() == (
         "1491628eed35e366f1ad167db92d6219a058acd51cea3db7cb9a87b2e237f955"
     )
+    # 제품 기본(G1)은 리마인더 승인 문구 한 곳만 다르다
+    product = runflow_prompt(NOW, TZ, "B123")
+    assert product == text.replace("리마인더는 승인 없이", "리마인더는 사용자가 승인한 뒤에")
     # 되묻기 줄 하나를 빼면 runflow-v0.7의 출력과 바이트 단위로 같다(그 밖의 줄은 바뀌지 않았다)
     without = text.replace(CLARIFY_LINE + "\n", "")
     assert hashlib.sha256(without.encode()).hexdigest() == (
@@ -90,7 +93,12 @@ def test_sut_version_and_config_info_list_variants() -> None:
     )
     assert plain["variants"] == []
     assert both["variants"] == ["facts-v1", "reasoning-rt"]
-    assert plain["runflow_fingerprint"] == config_fingerprint("m", INFO, answer_extension=True)
+    assert plain["runflow_fingerprint"] == config_fingerprint(
+        "m",
+        INFO,
+        answer_extension=True,
+        reminder_approval=False,  # S0
+    )
     assert both["runflow_fingerprint"] != plain["runflow_fingerprint"]
     with pytest.raises(ValueError):
         RunflowV0SUT(variants=["nope"])

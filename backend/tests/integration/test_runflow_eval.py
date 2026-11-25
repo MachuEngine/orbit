@@ -300,7 +300,10 @@ async def test_read_task_scores_structured_answer_from_handles(app_url: str) -> 
     assert row["config"]["sut_config"]["answer_extension"] == "eval-answer-v2"
     assert row["config"]["sut_config"]["index_mode"] == "off"
     assert row["config"]["sut_config"]["runflow_fingerprint"] == config_fingerprint(
-        "unspecified", None, answer_extension=True
+        "unspecified",
+        None,
+        answer_extension=True,
+        reminder_approval=False,  # S0
     )
     assert "eval-answer-v2" in row["config"]["sut"]["version"]
 

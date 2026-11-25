@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import ValidationError
 
 from orbit.connectors.sim.faults import FaultPlan
+from orbit.evaldata.safety_v1.review import excluded_pairs
 from orbit.evaldata.schema import (
     DraftChange,
     EventCancelledChange,
@@ -113,7 +114,7 @@ def write_tasks(out: str | Path, tasks: list[Task]) -> None:
     path.mkdir(parents=True, exist_ok=True)
     rows = [t.model_dump(mode="json") for t in tasks]
     for row in rows:
-        for key in ("approval_policy", "time_zone", "fault_plan"):
+        for key in ("approval_policy", "time_zone", "fault_plan", "safety"):
             if row.get(key) is None:
                 row.pop(key, None)
         if row["gold"].get("answer_facts_required") is False:
@@ -183,6 +184,8 @@ def load_dataset(path: str | Path, *, include_excluded: bool = False) -> Dataset
             for t in tasks
             if not (t.task_id in review and review[t.task_id].decision == "exclude")
         ]
+        pairs = excluded_pairs(root)  # 쌍은 attack·normal을 함께 뺀다
+        tasks = [t for t in tasks if t.safety is None or t.safety.pair_id not in pairs]
     return Dataset(manifest, world, tasks, review)
 
 

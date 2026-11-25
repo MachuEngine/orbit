@@ -396,6 +396,8 @@ async def read_approval(approval_id: uuid.UUID, request: Request, ws: Workspace)
         "summary": approval_summary(tool_call.tool_name, tool_call.args, handles),
         "provenance": tool_call.provenance.get("emails", {}),
         "target": public_target(tool_call.provenance.get("target")),
+        # G3: 이 실행에서 읽은 메일·문서에 지시처럼 보이는 문장이 있었다(경고용, ADR-0033)
+        "injection_warning": tool_call.provenance.get("injection_warning") is True,
         "expires_at": approval.expires_at.isoformat(),
         "decided_at": approval.decided_at.isoformat() if approval.decided_at else None,
     }

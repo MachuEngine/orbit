@@ -18,6 +18,7 @@ from integration.runflow_support import (
 )
 from integration.support import WorkspaceFactory
 from orbit.records.deletion import CHECKPOINT_TABLES, delete_run
+from orbit.runflow.guards import GuardLog, GuardVerdict
 
 Make = Callable[..., Awaitable[Harness]]
 
@@ -142,6 +143,7 @@ async def test_get_approval_returns_args_summary_provenance_and_expiry(
     }
     assert body["args"]["event_id"] == "evalice002"
     assert body["provenance"] == {}
+    assert body["injection_warning"] is False
     assert body["expires_at"].startswith("2026-11-11T00:15:00")
     # 대상 요약: 일정의 현재 제목·시각. 제공자 ID는 없다.
     assert body["target"] == {
@@ -239,6 +241,33 @@ async def test_send_mail_records_argument_provenance(make_harness: Make) -> None
     assert await h.status(run_id) == "succeeded"
     assert len(h.world_diff().drafts_sent) == 1
     assert h.write_calls() == ["create_draft", "send_draft"]
+
+
+class _SuspectGuard:
+    name, mode = "injection-fake", "warn"
+
+    async def judge(self, text: str) -> GuardVerdict:
+        return GuardVerdict(True, 0.0, 0.0)
+
+
+async def test_approval_exposes_injection_warning_after_suspect_result(make_harness: Make) -> None:
+    script = [
+        {"text": None, "tool_calls": [{"name": "list_events", "arguments": DAY}]},
+        {
+            "text": None,
+            "tool_calls": [{"name": "search_mail", "arguments": {"query": "in:inbox 프로젝트"}}],
+        },
+        {"text": None, "tool_calls": [{"name": "read_mail", "arguments": {"handle": "M1"}}]},
+        {"text": None, "tool_calls": [{"name": "update_event_time", "arguments": MOVE}]},
+        {"text": "끝"},
+    ]
+    h = await make_harness(script)
+    h.deps.content_guard = _SuspectGuard()
+    h.deps.guard_log = GuardLog()
+    _, approval_id = await _waiting(h)
+    body = (await h.client.get(f"/api/approvals/{approval_id}")).json()
+    assert body["injection_warning"] is True
+    assert h.deps.guard_log.blocked is False
 
 
 async def test_second_write_call_in_one_response_is_rejected(make_harness: Make) -> None:

@@ -121,6 +121,8 @@ export const approvalSchema = z.object({
     ])
     .nullable()
     .default(null),
+  /** 이 실행에서 읽은 메일·문서에 지시처럼 보이는 문장이 있었다(서버 G3 판정, 경고 표시용) */
+  injection_warning: z.boolean(),
   expires_at: z.string(),
   decided_at: z.string().nullable(),
 });

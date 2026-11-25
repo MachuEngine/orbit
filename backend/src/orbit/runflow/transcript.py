@@ -21,11 +21,10 @@ from orbit.assistant.workset import WorkSet
 from orbit.llm.types import Message, ToolCall
 from orbit.records.runs import RunMessageRecord
 from orbit.runflow.context import CALL_ID_PREFIX, ConversationContext
+from orbit.runflow.guards import EXTERNAL_TEXT_KEYS, INJECTION_WARNING
 
 _STRUCTURED_EMAIL_KEYS = frozenset({"from", "to", "cc", "attendees", "organizer", "owners"})
-_EXTERNAL_TEXT_KEYS = frozenset(
-    {"body", "description", "subject", "title", "location", "name", "excerpt"}
-)
+_EXTERNAL_TEXT_KEYS = EXTERNAL_TEXT_KEYS
 
 
 @dataclass(frozen=True)
@@ -61,6 +60,17 @@ class Transcript:
             if r.role == "user"
         ]
 
+    def injection_suspect(self) -> bool:
+        """G3가 의심으로 표시한 도구 결과를 읽었는가(저장된 불리언으로 판단).
+
+        같은 대화의 앞선 run도 본다. 그 결과가 `conversation_context`로 이번 입력에
+        들어오기 때문이다.
+        """
+        return any(
+            r.role == "tool" and r.content.get("injection_suspect") is True
+            for r in (*self.prior.rows, *self.rows)
+        )
+
     def workset(self) -> WorkSet:
         """가장 최근 읽기 도구 결과에 저장된 매핑으로 작업 집합을 복원한다.
 
@@ -76,13 +86,20 @@ class Transcript:
         system_prompt: str,
         boundary: str,
         provider_items: Mapping[int, tuple[dict[str, Any], ...]] | None = None,
+        envelope: bool = True,
     ) -> list[Message]:
         """LLM 요청 메시지. 도구 결과는 저장된 JSON을 데이터 봉투로 감싸 넘긴다(ADR-0018 §2).
 
         `provider_items`(평가 전용 `reasoning-rt`, ADR-0023 §10)는 step -> 그 step 응답의 추론
         항목이다. 있으면 해당 step의 assistant 메시지에만 붙인다. 저장소에서 읽은 값이 아니다.
+
+        `envelope=False`(평가 전용 가드레일 S1, ADR-0033)면 경계 태그와 `<`·`>` 이스케이프 없이
+        도구 결과 원문 텍스트를 도구 채널로 그대로 넘긴다.
         """
-        messages = [Message(role="system", content=system_prompt), *self.prior.messages(boundary)]
+        messages = [
+            Message(role="system", content=system_prompt),
+            *self.prior.messages(boundary, envelope=envelope),
+        ]
         rag_reserved = any(r.content.get("origin") == "rag_initial" for r in self.rows)
         for row in self.rows:
             content = row.content
@@ -112,14 +129,23 @@ class Transcript:
                     )
                 )
             elif row.role == "tool":
+                text = (
+                    wrap_data(
+                        str(content.get("text", "")),
+                        source=safe_source(str(content.get("name", ""))),
+                        boundary=boundary,
+                    )
+                    if envelope
+                    else str(content.get("text", ""))
+                )
+                if content.get("injection_suspect") is True:
+                    # 봉투 밖에 서버 고정 문구를 붙인다. 본문은 봉투 안에서 `<`·`>`가 이스케이프돼
+                    # 이 문구를 만들거나 봉투를 닫을 수 없다. 저장된 불리언으로 매번 다시 붙인다.
+                    text = f"{text}\n{INJECTION_WARNING}"
                 messages.append(
                     Message(
                         role="tool",
-                        content=wrap_data(
-                            str(content.get("text", "")),
-                            source=safe_source(str(content.get("name", ""))),
-                            boundary=boundary,
-                        ),
+                        content=text,
                         tool_call_id=str(content["tool_call_id"])
                         if content.get("step") == -1
                         else _wire_id(str(content["tool_call_id"]), rag_reserved=rag_reserved),

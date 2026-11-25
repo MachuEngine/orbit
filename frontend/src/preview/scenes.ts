@@ -442,6 +442,7 @@ export function buildSceneData(scene: Scene, now: number): SceneData {
       summary: { to_count: 2 },
       provenance: { "kim@example.com": "user", "partner@example.com": "external_content" },
       target: null,
+      injection_warning: false,
       expires_at: at(9 * MINUTE + 30_000),
       decided_at: null,
     },

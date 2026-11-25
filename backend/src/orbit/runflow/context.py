@@ -117,7 +117,7 @@ class ConversationContext:
             return {"earlier_requests": [], "targets": []}
         return {"earlier_requests": self.earlier_requests(), "targets": self.targets()}
 
-    def messages(self, boundary: str) -> list[Message]:
+    def messages(self, boundary: str, *, envelope: bool = True) -> list[Message]:
         """시스템 프롬프트 뒤, 지금 run의 메시지 앞에 들어갈 메시지. 앞선 run이 없으면 비어 있다.
 
         이전 요청·대상이 있으면 `conversation_context` 합성 호출과 봉투에 싼 결과가 맨 앞에 온다.
@@ -139,7 +139,9 @@ class ConversationContext:
                     role="tool",
                     content=wrap_data(
                         context_json(payload), source=CONVERSATION_CONTEXT, boundary=boundary
-                    ),
+                    )
+                    if envelope
+                    else context_json(payload),
                     tool_call_id=CONTEXT_CALL_ID,
                 )
             )
