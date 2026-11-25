@@ -30,6 +30,8 @@
   `ORBIT_VOICE_MAX_TRANSCRIBES_PER_HOUR`(워크스페이스당 시간당 전사 횟수, 기본 60),
   `ORBIT_VOICE_MAX_SECONDS_PER_DAY`(워크스페이스당 24시간 총 녹음 시간 초, 기본 1800).
   OpenAI 구현의 키와 주소는 `LLMSettings`의 `ORBIT_OPENAI_API_KEY`·`ORBIT_OPENAI_BASE_URL`을 쓴다.
+- G3 인젝션 경고(ADR-0033): `ORBIT_INJECTION_GUARD`(`off`|`jev`, 기본 off). jev면 읽은 메일·문서
+  본문을 Jev(`AI_GATEWAY_API_KEY`)로 판정해 의심이면 경고한다. 키가 없으면 워커가 시작하지 않는다.
 """
 
 import uuid
@@ -83,6 +85,9 @@ class Settings(BaseSettings):
     mail_index_sync_interval_seconds: float = Field(default=900.0, gt=0)
     mail_index_query_stale_seconds: float = Field(default=300.0, ge=0)
     mail_index_query_sync_timeout_seconds: float = Field(default=10.0, gt=0)
+
+    # G3 인젝션 경고(ADR-0033). jev면 Jev 판정기를 켠다. 키가 없으면 워커가 시작하지 않는다
+    injection_guard: Literal["off", "jev"] = "off"
 
     # 음성 입력 (ADR-0025)
     stt_provider: Literal["openai", "fake"] = "openai"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeApproval, formatTimeRange, hasProvenanceWarning } from "./describe";
+import { describeApproval, formatDueAt, formatTimeRange, hasProvenanceWarning } from "./describe";
 
 describe("describeApproval", () => {
   it("메일은 수신자·제목·본문 항목으로 나눈다", () => {
@@ -117,6 +117,30 @@ describe("출처 fail-closed와 숨겨진 항목", () => {
       provenance: {},
     });
     expect(clean.hiddenKeys).toEqual([]);
+  });
+
+  it("서버가 injection_warning을 켠 승인만 경고를 표시하고 값이 없으면 끈다", () => {
+    const base = { tool_name: "send_mail", args: {}, summary: {}, provenance: {} };
+    expect(describeApproval({ ...base, injection_warning: true }).injectionWarning).toBe(true);
+    expect(describeApproval({ ...base, injection_warning: false }).injectionWarning).toBe(false);
+    expect(describeApproval(base).injectionWarning).toBe(false);
+  });
+
+  it("리마인더는 내용과 알림 시각 행만 만들고 내부 값은 숨긴 항목으로 두지 않는다", () => {
+    const view = describeApproval({
+      tool_name: "create_reminder",
+      args: { kind: "create_reminder", text: "합성 보고서 제출", due_at: "2026-11-11T06:00:00Z" },
+      summary: { due_at: "2026-11-11T06:00:00Z" },
+      provenance: {},
+    });
+    expect(view.rows).toEqual([
+      { kind: "text", label: "내용", value: "합성 보고서 제출" },
+      { kind: "text", label: "알림 시각", value: formatDueAt("2026-11-11T06:00:00Z") },
+    ]);
+    expect(view.hiddenKeys).toEqual([]);
+    expect(view.strayWarnings).toEqual([]);
+    expect(formatDueAt("2026-11-11T06:00:00Z", "Asia/Seoul")).toContain("15:00");
+    expect(formatDueAt("not-a-time")).toBe("not-a-time");
   });
 
   it("모르는 도구의 객체 인자는 숨겨진 항목이다", () => {

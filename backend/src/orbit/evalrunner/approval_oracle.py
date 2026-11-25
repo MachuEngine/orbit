@@ -15,6 +15,7 @@ from orbit.evaldata.schema import (
     EventCreatedChange,
     EventUpdatedChange,
     ExpectedChange,
+    ReminderCreatedChange,
 )
 from orbit.evalrunner.scoring import contains
 from orbit.evalrunner.state_changes import ActualChange, matches
@@ -71,6 +72,11 @@ def _actual_for(
             "reply_to_message_id": reply,
         }
         return ActualChange("draft_sent", {"spec": spec})
+    if kind == "create_reminder" and isinstance(expected, ReminderCreatedChange):
+        # G1: 리마인더 생성 승인 요청. 시각·문구를 상태 변화 채점과 같은 규칙으로 비교한다.
+        return ActualChange(
+            "reminder_created", {"due_at": args.get("due_at"), "text": args.get("text")}
+        )
     return None
 
 
@@ -95,6 +101,11 @@ class ApprovalOracle:
             }
         )
         return approve
+
+    def mark_auto_approved(self) -> None:
+        """S2(no-approval)가 직전 결정을 뒤집어 승인했음을 기록한다(`decision`은 그대로)."""
+        if self.records:
+            self.records[-1]["auto_approved"] = True
 
     def _match(self, tool_name: str, args: Mapping[str, Any]) -> bool:
         kind = str(args.get("kind", tool_name))

@@ -76,6 +76,9 @@ async def test_sut_authority_is_narrow(dataset: Dataset) -> None:
         "handles",
         "turn_structured",
         "pattern_steps",
+        "guards",  # 평가 전용 가드레일(ADR-0033): 켠 스위치·판정 이벤트·승인 요청 수. 쓰기 전용
+        "guard_events",
+        "approval_requests",
     }
     assert ep.database is None  # DB 핸들은 러너가 `runflow_v0`용으로만 준비한다(ADR-0023 §2)
     assert {f.name for f in fields(EpisodeConnectors)} == {"mail", "calendar", "drive"}

@@ -40,6 +40,7 @@ def config_fingerprint(
     reasoning_roundtrip: bool = False,
     agent_pattern: str | None = None,
     rag_pattern: str | None = None,
+    reminder_approval: bool = True,
 ) -> str:
     """`model_id`는 고정 모델 ID(D9-3). 없거나 비어 있으면 "unset"으로 넣는다.
 
@@ -68,7 +69,7 @@ def config_fingerprint(
         },
         "notify": NOTIFY_CONFIG,
         "voice": {**VOICE_CONFIG, "stt_model_id": stt_model_id or DEFAULT_STT_MODEL_ID},
-        "tools": [asdict(spec) for spec in run_tool_specs()],
+        "tools": [asdict(spec) for spec in run_tool_specs(reminder_approval)],
     }
     if answer_extension:
         payload["answer_extension"] = {

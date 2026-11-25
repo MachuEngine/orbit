@@ -51,11 +51,14 @@ from orbit.records.errors import InvalidJobArgs
 from orbit.records.jobs import make_procrastinate_app, recover_stalled_jobs, validate_job_args
 from orbit.runflow.deps import NoConnection, RunDeps
 from orbit.runflow.graph import advance_run, expire_if_due
+from orbit.runflow.guards import GuardLog
+from orbit.runflow.injection import build_injection_guard
 from orbit.runflow.jobs import EXECUTE_RUN, EXPIRE_APPROVALS, RECOVER_STALLED, RESUME_RUN
 from orbit.runflow.nodes import ExecutionNotSettled
 
 logger = logging.getLogger(__name__)
 
+GUARD_LOG_MAX_EVENTS = 1000  # 오래 사는 워커의 메모리 상한. 이벤트에는 본문이 없다
 PURGE_DESKTOP_HANDOFF = "purge_desktop_handoff"
 PURGE_DESKTOP_HANDOFF_CRON = "*/15 * * * *"
 
@@ -421,6 +424,10 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(f"{exc} (테스트·Sim이면 ORBIT_EMBEDDING_PROVIDER=fake)") from None
     ids = Uuid7Generator(clock)
+    try:
+        content_guard = build_injection_guard(settings.injection_guard)
+    except ValueError as exc:
+        raise SystemExit(f"{exc} (ORBIT_INJECTION_GUARD=off면 끌 수 있다)") from None
     deps = RunDeps(
         db=db,
         clock=clock,
@@ -430,6 +437,8 @@ def main() -> None:
         tz=ZoneInfo(settings.user_timezone),
         checkpoint_conninfo=make_url(url).set(drivername="postgresql").render_as_string(False),
         approval_ttl=timedelta(seconds=settings.approval_ttl_seconds),
+        content_guard=content_guard,
+        guard_log=GuardLog(max_events=GUARD_LOG_MAX_EVENTS) if content_guard else None,
         mail_index=MailIndexDeps(
             db=db,
             clock=clock,

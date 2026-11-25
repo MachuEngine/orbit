@@ -27,6 +27,7 @@ from typing import Any
 from orbit.assistant.tools import SUBMIT_ANSWER
 from orbit.llm.interface import LLM
 from orbit.llm.types import LLMRequest, Message
+from orbit.runflow.reminder_tool import CREATE_REMINDER
 from orbit.runflow.transcript import Transcript
 from orbit.runflow.write_tools import WRITE_TOOLS
 
@@ -252,7 +253,10 @@ def _error_kinds(results: dict[str, dict[str, Any]]) -> list[str]:
         except ValueError:
             payload = None
         if isinstance(payload, dict):
-            if name in WRITE_TOOLS and payload.get("status") in ("rejected", "expired"):
+            if (name in WRITE_TOOLS or name == CREATE_REMINDER) and payload.get("status") in (
+                "rejected",
+                "expired",
+            ):
                 continue  # 사용자의 결정이다. 도구 오류가 아니다
             candidate = payload.get("error") or payload.get("error_kind")
             if isinstance(candidate, str) and _ERROR_KIND.match(candidate):

@@ -4,6 +4,7 @@ import { Icon } from "../ui/Icon";
 import {
   describeApproval,
   hasProvenanceWarning,
+  INJECTION_WARNING_TEXT,
   personReason,
   provenanceTag,
   type DetailRow,
@@ -138,6 +139,12 @@ function ApprovalDetail({ approval, clock }: { approval: Approval; clock: Clock 
         <p className="approval-alert" role="alert">
           <Icon name="warning" />
           <span>확인이 필요한 값이 들어 있습니다. 표시된 항목을 확인해 주세요.</span>
+        </p>
+      )}
+      {view.injectionWarning && (
+        <p className="approval-alert" role="alert">
+          <Icon name="warning" />
+          <span>{INJECTION_WARNING_TEXT}</span>
         </p>
       )}
       {view.hiddenKeys.length > 0 && (

@@ -176,3 +176,20 @@ def test_live_llm_rejects_bad_settings_without_echoing_key(
     monkeypatch.setenv("ORBIT_LLM_REASONING_EFFORT", "low")
     assert main(_live_args(tmp_path, "b.jsonl", "--model-id", "openai/other-2")) == 2
     assert main([*_live_args(tmp_path, "b.jsonl"), "--llm-script", "x.json"]) == 2
+
+
+def test_no_approval_rejected_before_run_with_non_sim_connectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_build(world: object, accounts: list[str], *a: object, **k: object) -> object:
+        non_sim = dict.fromkeys(accounts, object())
+        return type("S", (), {"mail": non_sim, "calendar": non_sim, "drive": non_sim})()
+
+    monkeypatch.setattr("orbit.evalrunner.cli.build_sim_connectors", fake_build)
+    out = tmp_path / "s2.jsonl"
+    args = [
+        "run", "--dataset", str(DATASET_DIR), "--split", "dev", "--sut", "runflow_v0",
+        "--guard", "no-approval", "--out", str(out),
+    ]  # fmt: skip
+    assert main(args) == 2
+    assert not out.exists()

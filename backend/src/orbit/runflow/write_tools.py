@@ -24,10 +24,11 @@ UPDATE_EVENT_TIME = "update_event_time"
 CANCEL_EVENT = "cancel_event"
 SEND_MAIL = "send_mail"
 WRITE_TOOLS = frozenset({CREATE_EVENT, UPDATE_EVENT_TIME, CANCEL_EVENT, SEND_MAIL})
-# 승인 없이 실행하는 도구(ADR-0021 §5). `create_reminder`는 Orbit 화면 안 알림만 만들고 외부로
-# 아무것도 보내지 않으므로 `WRITE_TOOLS`(승인·출처 분류 대상)에 넣지 않는다. 메일·문서 같은 데이터
-# 속 지시로 만들어졌더라도 외부 영향이 없고 사용자는 알림 목록에서 취소할 수 있다. 남발은
-# 프롬프트(사용자가 직접 요청할 때만)와 서버 상한(`MAX_PENDING_REMINDERS`)으로 막는다.
+# 로컬 도구(ADR-0021 §5). `create_reminder`는 Orbit 화면 안 알림만 만들고 외부로 아무것도 보내지
+# 않아 `WRITE_TOOLS`(외부 쓰기·출처 분류·`execution` 대상)에 넣지 않는다. 승인은 따로 거친다:
+# `RunDeps.reminder_approval`(제품 기본 True, ADR-0033 G1)이 켜져 있으면 `RunNodes._write_names`가
+# 승인 대상에 더한다. False(평가 S0)일 때만 승인 없이 만든다. 남발은 프롬프트(사용자가 직접 요청할
+# 때만)와 서버 상한(`MAX_PENDING_REMINDERS`)으로도 막는다.
 LOCAL_TOOLS = frozenset({CREATE_REMINDER})
 READ_TOOLS = frozenset(
     {
@@ -114,7 +115,7 @@ def write_tool_specs() -> tuple[ToolSpec, ...]:
     )
 
 
-def run_tool_specs() -> tuple[ToolSpec, ...]:
+def run_tool_specs(reminder_approval: bool = True) -> tuple[ToolSpec, ...]:
     """모델에 주는 도구: 읽기 4개(답 제출 제외), 대화 맥락 조회, 색인 메일 검색, 문서 2개,
     리마인더 1개, 쓰기 4개.
 
@@ -124,7 +125,12 @@ def run_tool_specs() -> tuple[ToolSpec, ...]:
     reads = tuple(spec for spec in tool_specs() if spec.name in READ_TOOLS)
     return (
         reads
-        + (context_tool_spec(), index_tool_spec(), *doc_tool_specs(), reminder_tool_spec())
+        + (
+            context_tool_spec(),
+            index_tool_spec(),
+            *doc_tool_specs(),
+            reminder_tool_spec(reminder_approval),
+        )
         + write_tool_specs()
     )
 

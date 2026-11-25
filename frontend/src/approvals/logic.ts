@@ -96,6 +96,13 @@ export function actionLabel(toolName: string): ActionLabel | null {
         done: "일정을 취소했습니다.",
         failed: "일정을 취소하지 못했습니다.",
       };
+    case "create_reminder":
+      return {
+        name: "리마인더 만들기",
+        confirm: "리마인더 만들기",
+        done: "리마인더를 만들었습니다.",
+        failed: "리마인더를 만들지 못했습니다.",
+      };
     default:
       return null;
   }

@@ -125,7 +125,12 @@ def test_non_rag_runflow_fingerprint_is_unchanged_by_answer_note() -> None:
     sut = RunflowV0SUT(index_mode="off")
     assert sut.version == "0+runflow-v0.8+eval-answer-v2+index-off"
     info = sut.config_info(model_id="m")
-    assert info["runflow_fingerprint"] == config_fingerprint("m", None, answer_extension=True)
+    assert info["runflow_fingerprint"] == config_fingerprint(
+        "m",
+        None,
+        answer_extension=True,
+        reminder_approval=False,  # S0: 승인 없는 리마인더
+    )
     assert "rag_answer_note_sha" not in info
     note_sut = RunflowV0SUT(index_mode="off", answer_note=RAG_ANSWER_NOTE)
     assert note_sut.version != sut.version  # note가 있으면 지문이 다르다

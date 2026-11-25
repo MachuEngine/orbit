@@ -43,6 +43,7 @@ from orbit.llm.interface import LLM
 from orbit.mailindex.deps import MailIndexDeps
 from orbit.runflow.answer import AnswerSink
 from orbit.runflow.eval_variants import ReasoningCache
+from orbit.runflow.guards import ContentGuard, GuardLog, IntentGuard
 from orbit.runflow.patterns import PATTERNS, REACT, PatternMemory
 from orbit.runflow.rag import RagPolicy
 from orbit.runflow.tool_limits import ToolLimits
@@ -260,8 +261,16 @@ class RunDeps:
     pattern_memory: PatternMemory | None = None
     rag: RagPolicy | None = None  # 평가 CLI에서만 주입(ADR-0035)
     tool_limits: ToolLimits | None = None  # 평가 전용 도구 제한·맥락 상한(ADR-0036 A2)
+    # 가드레일 스위치(ADR-0033). 기본값이 제품 경로다. 평가가 끄거나 켜서 ablation한다.
+    envelope: bool = True  # False(S1)면 도구 결과를 봉투 없이 넘긴다
+    reminder_approval: bool = True  # G1(제품 기본). False(평가 S0)면 리마인더를 승인 없이 만든다
+    content_guard: ContentGuard | None = None  # G3. 외부 본문을 모델에 넘기기 전에 판정한다
+    intent_guard: IntentGuard | None = None  # G4. 쓰기 호출이 사용자 요청인지 판정한다
+    guard_log: GuardLog | None = None  # 가드 이벤트 기록. 가드가 있으면 없을 때 새로 만든다
 
     def __post_init__(self) -> None:
+        if self.guard_log is None and (self.content_guard or self.intent_guard):
+            self.guard_log = GuardLog()
         if self.pattern is None:
             return
         if self.pattern not in PATTERNS:

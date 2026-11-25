@@ -12,6 +12,7 @@
 `UsageRecorder`에서 직접 읽는다(ADR-0009 §3).
 """
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -28,6 +29,18 @@ from orbit.evalrunner.episode import (
     EpisodeDatabase,
     EpisodeOutput,
     SutTurn,
+)
+from orbit.evalrunner.guards import (
+    ENVELOPE_OFF,
+    NO_APPROVAL,
+    REMINDER_APPROVAL,
+    JudgeBackends,
+    approve_all,
+    build_content_guard,
+    build_intent_guard,
+    guard_info,
+    require_sim_connectors,
+    validate_guards,
 )
 from orbit.evalrunner.rag_arch.a1_steps import compress_mails, rewrite_query
 from orbit.evalrunner.rag_arch.agentic_search import AgenticSearch
@@ -71,9 +84,11 @@ from orbit.runflow.eval_variants import (
 )
 from orbit.runflow.fingerprint import PATTERN, config_fingerprint
 from orbit.runflow.graph import advance_run
+from orbit.runflow.guards import GuardLog, GuardVerdict
 from orbit.runflow.patterns import PATTERN_VERSIONS, PATTERNS, REACT, PatternMemory
 from orbit.runflow.prompt import PROMPT_VERSION
 from orbit.runflow.rag import AGENTIC, RAG_PATTERNS, RAG_VERSION, RagPolicy
+from orbit.runflow.reminder_tool import CREATE_REMINDER
 from orbit.runflow.repo import get_tool_call, latest_approval_for_run, lock_run
 from orbit.runflow.tool_limits import ToolLimits
 
@@ -208,7 +223,17 @@ class RunflowV0SUT:
         search_variant: str = "default",
         reranker: Reranker | None = None,
         prompt_canary: str | None = None,
+        guards: Sequence[str] = (),
+        guard_backends: JudgeBackends | None = None,
     ) -> None:
+        self._guards = validate_guards(guards)  # 정렬된 이름. 비어 있으면 기존 지문과 같다
+        self._backends = (
+            guard_backends
+            if guard_backends is not None
+            else JudgeBackends.for_guards(self._guards)
+            if self._guards
+            else None
+        )
         if index_mode not in INDEX_MODES:
             raise ValueError(f"지원하지 않는 색인 모드: {index_mode!r} (지원: {INDEX_MODES})")
         if (index_mode == "on") != (index is not None):
@@ -293,6 +318,7 @@ class RunflowV0SUT:
                 A1_REWRITE_VERSION,
                 A1_COMPRESS_VERSION,
             ]
+        extra += [f"guard-{g}" for g in self._guards]  # 가드레일이 없으면 기존 이름 그대로다
         return "".join([base, *(f"+{n}" for n in ordered), *(f"+{n}" for n in extra)])
 
     def config_info(
@@ -308,6 +334,7 @@ class RunflowV0SUT:
                 reasoning_roundtrip=self._reasoning_rt,
                 agent_pattern=self._pattern,
                 rag_pattern=self._rag_pattern,
+                reminder_approval=REMINDER_APPROVAL in self._guards,
             ),
             "answer_extension": ANSWER_EXTENSION_VERSION,
             "variants": self.variant_names,
@@ -329,6 +356,8 @@ class RunflowV0SUT:
             info["rag_version"] = RAG_VERSION
         if self._search_variant == "advanced":  # default는 키를 더하지 않는다(기존 지문 불변)
             info["search"] = self._search_info()
+        if self._guards:  # 없으면 키를 더하지 않는다(기존 지문 불변)
+            info["guards"] = guard_info(self._guards, self._backends)
         return info
 
     def _search_info(self) -> dict[str, Any]:
@@ -362,6 +391,7 @@ class RunflowV0SUT:
             reasoning_roundtrip=self._reasoning_rt,
             agent_pattern=self._pattern,
             rag_pattern=self._rag_pattern,
+            reminder_approval=REMINDER_APPROVAL in self._guards,
         )
         extras: list[str] = []
         if self._search_variant == "advanced":
@@ -371,7 +401,11 @@ class RunflowV0SUT:
             if self._answer_note is not None:
                 extras.append(f"answer-note-{_note_sha(self._answer_note)}")
             extras.append(f"canary-{_note_sha(PROMPT_CANARIES[self._prompt_canary])}")
-        if not extras:  # 카나리가 없으면 기존 지문 그대로다
+        if self._guards:
+            extras.append(
+                "guards:" + json.dumps(guard_info(self._guards, self._backends), sort_keys=True)
+            )
+        if not extras:  # 카나리·가드레일이 없으면 기존 지문 그대로다
             return base
         return hashlib.sha256(f"{base}|{'|'.join(extras)}".encode()).hexdigest()
 
@@ -419,6 +453,21 @@ class RunflowV0SUT:
             mail=episode.connectors.mail,
             drive=_require_drive(episode),
         )
+        guards = self._guards
+        episode.trace.guards = guards
+        guard_log = GuardLog(events=episode.trace.guard_events) if guards else None
+        if NO_APPROVAL in guards:  # S2: Sim이 아니면 켜지 못한다. 가장 먼저 검사한다
+            require_sim_connectors(
+                episode.connectors.mail, episode.connectors.calendar, episode.connectors.drive
+            )
+            database = dataclasses.replace(
+                database, approval_decider=approve_all(database.approval_decider)
+            )
+        elif REMINDER_APPROVAL in guards and guard_log is not None:
+            database = dataclasses.replace(
+                database,
+                approval_decider=_log_reminder_rejections(database.approval_decider, guard_log),
+            )
         deps = RunDeps(
             db=database.db,
             clock=clock,
@@ -440,6 +489,13 @@ class RunflowV0SUT:
             rag=rag,
             tool_limits=limits,
             answer_note=self._combined_note(),
+            envelope=ENVELOPE_OFF not in guards,
+            reminder_approval=REMINDER_APPROVAL in guards,
+            content_guard=build_content_guard(guards, episode.llm, self._backends)
+            if self._backends is not None
+            else None,
+            intent_guard=build_intent_guard(guards, episode.llm),
+            guard_log=guard_log,
         )
         fingerprint = self._run_fingerprint()
         decisions = 0  # 에피소드 전체의 승인 결정 수(정책 순번)
@@ -466,6 +522,8 @@ class RunflowV0SUT:
         finally:
             if rag is not None:
                 episode.trace.pattern_steps.extend(rag.steps)
+            if guards:
+                episode.trace.approval_requests = decisions
         self._raise_budget_error()
         return EpisodeOutput(
             final_text=text,
@@ -504,6 +562,28 @@ class RunflowV0SUT:
             ids=database.ids,
             episode_workspace=database.workspace_id,
         )
+
+
+def _log_reminder_rejections(inner: Any, log: GuardLog) -> Any:
+    """G1: 오라클이 리마인더 승인 요청을 거절하면 가드 이벤트로 남긴다(정상 쓰기 오탐 측정용).
+
+    결정은 바꾸지 않는다. 결정기가 없으면(정책 승인) 그대로 둔다.
+    """
+    if inner is None:
+        return None
+
+    def decide(tool_name: str, args: Mapping[str, Any], kinds: Sequence[str] = ()) -> bool:
+        approve = bool(inner(tool_name, args, kinds))
+        if tool_name == CREATE_REMINDER:
+            log.add(
+                REMINDER_APPROVAL,
+                tool_name,
+                GuardVerdict(not approve),
+                blocked=not approve,
+            )
+        return approve
+
+    return decide
 
 
 def _require_drive(episode: Episode) -> Any:

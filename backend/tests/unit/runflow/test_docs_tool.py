@@ -258,7 +258,7 @@ def test_fingerprint_covers_doc_tools(monkeypatch: pytest.MonkeyPatch) -> None:
 
     base = config_fingerprint("m")
     without_docs = tuple(s for s in run_tool_specs() if s.name not in {"search_docs", "read_doc"})
-    monkeypatch.setattr(fp, "run_tool_specs", lambda: without_docs)
+    monkeypatch.setattr(fp, "run_tool_specs", lambda _reminder_approval=True: without_docs)
     assert config_fingerprint("m") != base
 
 

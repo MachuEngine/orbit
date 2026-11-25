@@ -56,6 +56,7 @@ from orbit.evalrunner.task_source import SPLITS, Dataset, DatasetError, TaskView
 from orbit.evalrunner.trace import RESULT_SCHEMA_VERSION, EpisodeTrace, build_trace
 from orbit.llm.interface import LLM, UsageRecorder
 from orbit.llm.model_id import is_declared_model
+from orbit.runflow.guards import GuardLog
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +225,8 @@ class EpisodeResult:
     # 안전 세트(ADR-0033) 공격 채점과 승인 오라클 결정 기록. 안전 과제가 아니면 None이고 행에 없다.
     safety: Mapping[str, Any] | None = None
     approvals: Sequence[Mapping[str, Any]] | None = None
+    # 평가 전용 가드레일(ADR-0033): 켠 스위치, 판정 이벤트, 막힘 여부, 승인 요청 수. 없으면 없다.
+    guard: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         row = self._base_dict()
@@ -237,6 +240,8 @@ class EpisodeResult:
             row["safety"] = dict(self.safety)
         if self.approvals is not None:
             row["approvals"] = [dict(a) for a in self.approvals]
+        if self.guard is not None:
+            row["guard"] = dict(self.guard)
         if self.cleanup_failed is not None:  # DB를 쓴 에피소드(관찰이 실패하면 turns가 없다)
             row["approval_violations"] = self.approval_violations
             row["turns"] = None if self.turns is None else [dict(t) for t in self.turns]
@@ -458,6 +463,13 @@ async def run_episode(
         approvals=oracle.records if oracle is not None else (),
         observed=observation is not None or database_env is None,
     )
+    guard = _guard_block(collector)
+    if safety is not None and guard is not None:
+        safety = {
+            **safety,
+            "guard_events": guard["events"],
+            "guard_blocked": guard["guard_blocked"],
+        }
     failure: FailureType | None
     if score.failure_type == "forbidden_tool":
         # 안전 위반은 오류·예산 초과에 가려지지 않는다
@@ -480,6 +492,9 @@ async def run_episode(
     recorded = recorder.total_cost_usd
     # 취소된 호출의 비용은 알 수 없다. 합계가 있어도 과소 집계이므로 None으로 둔다.
     cost = None if recording_llm.cancelled or recorded is None else float(recorded)
+    if cost is not None and guard is not None:  # 기록기 밖(Jev) 판정 비용을 더한다
+        external = GuardLog(events=collector.guard_events).external_cost_usd
+        cost = None if external is None else cost + external
     models = tuple(sorted({r.model_id for r in recorder.records if r.model_id}))
     providers = tuple(sorted({r.provider for r in recorder.records if r.provider}))
     mismatch = (
@@ -568,7 +583,21 @@ async def run_episode(
         rag_diag=output.rag_diag if output is not None else None,
         safety=safety,
         approvals=list(oracle.records) if safety is not None and oracle is not None else None,
+        guard=guard,
     )
+
+
+def _guard_block(trace: EpisodeTrace) -> dict[str, Any] | None:
+    """가드레일을 켠 에피소드의 `guard` 항목. 켜지 않았으면 None이라 행이 달라지지 않는다."""
+    if not trace.guards:
+        return None
+    events = [dict(e) for e in trace.guard_events]
+    return {
+        "names": list(trace.guards),
+        "events": events,
+        "guard_blocked": any(bool(e.get("blocked")) for e in events),
+        "approval_requests": trace.approval_requests,
+    }
 
 
 def _calls_by_kind(recorder: UsageRecorder) -> dict[str, int] | None:
