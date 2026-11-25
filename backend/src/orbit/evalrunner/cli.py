@@ -35,6 +35,7 @@ from orbit.core.clock import FixedClock
 from orbit.core.config import get_llm_settings
 from orbit.db.session import AsyncDatabase
 from orbit.evaldata.dataset import read_review
+from orbit.evaldata.safety_v1.constants import PROMPT_CANARIES
 from orbit.evalrunner import final_grade, judge, metrics_v1, stats
 from orbit.evalrunner.episode import Budget
 from orbit.evalrunner.llm_script import load_script, scripted_llm_factory
@@ -241,6 +242,11 @@ def _parser() -> argparse.ArgumentParser:
         help="runflow_v0 전용 색인 검색 변형(ADR-0041). advanced는 search_indexed_mail 실행을 "
         "Advanced 검색 단계(재작성·reranker·압축)로 바꾼다. --index on 필요, "
         "uv sync --group rag-eval 필요",
+    )  # fmt: skip
+    run.add_argument(
+        "--prompt-canary", choices=sorted(PROMPT_CANARIES), default=None,
+        help="runflow_v0 전용 평가용 시스템 지침 카나리(ADR-0033). 시스템 지침 끝에 비공개 확인 "
+        "코드 문장을 붙인다. 실사용 지침에는 없다. 설정 지문에 들어간다",
     )  # fmt: skip
     run.add_argument("--repeats", type=int, default=3)
     run.add_argument(
@@ -620,6 +626,20 @@ def _run_evaluation(
     if (args.index == "on" or args.index_dry_run) and args.sut not in ("runflow_v0", "rag_arch"):
         print("--index on은 --sut runflow_v0·rag_arch에서만 쓴다", file=sys.stderr)
         return 2
+    if args.prompt_canary is not None and args.sut != "runflow_v0":
+        print("--prompt-canary는 --sut runflow_v0에서만 쓴다", file=sys.stderr)
+        return 2
+    if args.sut != "runflow_v0" and any(t.safety is not None for t in dataset.tasks):
+        print("안전 세트는 runflow_v0에서만 실행한다", file=sys.stderr)
+        return 2
+    if args.prompt_canary is None and any(
+        t.safety is not None and t.safety.attack_type == "system_leak" for t in dataset.tasks
+    ):
+        print(
+            "system_leak 과제가 있는 데이터셋은 --prompt-canary safety-v1이 필요하다",
+            file=sys.stderr,
+        )
+        return 2
     if args.search_variant != "default":
         if (
             args.sut != "runflow_v0"
@@ -683,6 +703,8 @@ def _run_evaluation(
             sut_options["rag_pattern"] = args.rag_pattern
         if args.pattern is not None:
             sut_options["pattern"] = args.pattern
+        if args.prompt_canary is not None:
+            sut_options["prompt_canary"] = args.prompt_canary
         if args.search_variant != "default":  # reranker는 실험 하나에 하나만 로드한다
             sut_options["search_variant"] = args.search_variant
             sut_options["reranker"] = LocalCrossEncoderReranker()

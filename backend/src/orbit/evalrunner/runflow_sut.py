@@ -16,11 +16,13 @@ import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from orbit.core.clock import FixedClock
+from orbit.evaldata.safety_v1.constants import PROMPT_CANARIES
+from orbit.evalrunner.approval_oracle import ORACLE_POLICY
 from orbit.evalrunner.episode import (
     Episode,
     EpisodeDatabase,
@@ -72,7 +74,7 @@ from orbit.runflow.graph import advance_run
 from orbit.runflow.patterns import PATTERN_VERSIONS, PATTERNS, REACT, PatternMemory
 from orbit.runflow.prompt import PROMPT_VERSION
 from orbit.runflow.rag import AGENTIC, RAG_PATTERNS, RAG_VERSION, RagPolicy
-from orbit.runflow.repo import latest_approval_for_run, lock_run
+from orbit.runflow.repo import get_tool_call, latest_approval_for_run, lock_run
 from orbit.runflow.tool_limits import ToolLimits
 
 logger = logging.getLogger(__name__)
@@ -205,6 +207,7 @@ class RunflowV0SUT:
         answer_note: str | None = None,
         search_variant: str = "default",
         reranker: Reranker | None = None,
+        prompt_canary: str | None = None,
     ) -> None:
         if index_mode not in INDEX_MODES:
             raise ValueError(f"지원하지 않는 색인 모드: {index_mode!r} (지원: {INDEX_MODES})")
@@ -239,12 +242,24 @@ class RunflowV0SUT:
         self._search_variant = search_variant
         self._reranker = reranker
         self._rag_pattern = rag_pattern
+        if prompt_canary is not None and prompt_canary not in PROMPT_CANARIES:
+            raise ValueError(
+                f"지원하지 않는 카나리: {prompt_canary!r} (지원: {sorted(PROMPT_CANARIES)})"
+            )
+        if prompt_canary is not None and search_variant == "advanced":
+            raise ValueError("advanced 검색은 카나리와 함께 쓰지 않는다")
+        self._prompt_canary = prompt_canary  # 평가 전용 시스템 지침 카나리(ADR-0033)
         self._answer_note = answer_note  # 평가 전용 답 제출 추가 단락(ADR-0036)
         self._limits_factory = limits_factory  # 평가 전용 도구 제한(ADR-0036 A2)
         self._pattern = pattern
         self._index_mode = index_mode
         self._facts = "facts" in chosen
         self._reasoning_rt = "reasoning-rt" in chosen
+
+    def _combined_note(self) -> str | None:
+        canary = PROMPT_CANARIES[self._prompt_canary] if self._prompt_canary else None
+        parts = [p for p in (self._answer_note, canary) if p]
+        return "\n".join(parts) if parts else None
 
     @property
     def variant_names(self) -> list[str]:
@@ -269,6 +284,8 @@ class RunflowV0SUT:
             extra.append(f"{RAG_VERSION}-{self._rag_pattern}")
         if self._answer_note is not None:  # None이면 기존 지문과 같다
             extra.append(f"answer-note-{_note_sha(self._answer_note)}")
+        if self._prompt_canary is not None:  # None이면 기존 지문과 같다
+            extra.append(f"canary-{_note_sha(PROMPT_CANARIES[self._prompt_canary])}")
         if self._search_variant == "advanced":
             extra += [
                 A2X_SEARCH_VERSION,
@@ -299,6 +316,9 @@ class RunflowV0SUT:
         }
         if self._answer_note is not None:
             info["answer_note_sha"] = _note_sha(self._answer_note)
+        if self._prompt_canary is not None:
+            info["prompt_canary"] = self._prompt_canary
+            info["prompt_canary_sha"] = _note_sha(PROMPT_CANARIES[self._prompt_canary])
         if self._index is not None:  # off는 키를 더하지 않는다(기존 결과와 같게 둔다)
             info["index"] = self._index.config_info()
         if self._pattern != REACT:  # react는 키를 더하지 않는다(기존 결과와 같게 둔다)
@@ -335,7 +355,7 @@ class RunflowV0SUT:
         }
 
     def _run_fingerprint(self) -> str:
-        """DB run 행 지문. default는 기존 그대로, advanced만 검색 변형을 더 해시한다."""
+        """DB run 행 지문. default는 기존 그대로, advanced 변형과 카나리일 때만 더 해시한다."""
         base = config_fingerprint(
             answer_extension=True,
             facts_extension=self._facts,
@@ -343,10 +363,17 @@ class RunflowV0SUT:
             agent_pattern=self._pattern,
             rag_pattern=self._rag_pattern,
         )
-        if self._search_variant != "advanced":
+        extras: list[str] = []
+        if self._search_variant == "advanced":
+            extras.append(json.dumps(self._search_info(), sort_keys=True, ensure_ascii=False))
+        if self._prompt_canary is not None:
+            # 카나리가 있을 때만 키를 더한다. answer_note 단독 run의 기존 지문은 바꾸지 않는다.
+            if self._answer_note is not None:
+                extras.append(f"answer-note-{_note_sha(self._answer_note)}")
+            extras.append(f"canary-{_note_sha(PROMPT_CANARIES[self._prompt_canary])}")
+        if not extras:  # 카나리가 없으면 기존 지문 그대로다
             return base
-        extra = json.dumps(self._search_info(), sort_keys=True, ensure_ascii=False)
-        return hashlib.sha256(f"{base}|{extra}".encode()).hexdigest()
+        return hashlib.sha256(f"{base}|{'|'.join(extras)}".encode()).hexdigest()
 
     def _advanced_limits(
         self, episode: Episode, mail_index: MailIndexDeps | None
@@ -412,7 +439,7 @@ class RunflowV0SUT:
             pattern_memory=memory,
             rag=rag,
             tool_limits=limits,
-            answer_note=self._answer_note,
+            answer_note=self._combined_note(),
         )
         fingerprint = self._run_fingerprint()
         decisions = 0  # 에피소드 전체의 승인 결정 수(정책 순번)
@@ -423,7 +450,12 @@ class RunflowV0SUT:
                 try:
                     last_run = await _start_run(deps, database, turn, fingerprint)
                     decisions = await _drive(
-                        deps, database, last_run, episode.task.approval_policy, decisions
+                        deps,
+                        database,
+                        last_run,
+                        episode.task.approval_policy,
+                        decisions,
+                        decider=database.approval_decider,
                     )
                 finally:  # 턴별 구조화된 답 기록(ADR-0029). 실패한 턴에도 남긴다
                     episode.trace.record_turn_structured(index, submission.answer)
@@ -513,6 +545,8 @@ async def _drive(
     run_id: uuid.UUID,
     policy: tuple[str, ...],
     decisions: int,
+    *,
+    decider: Callable[[str, Mapping[str, Any], Sequence[str]], bool] | None = None,
 ) -> int:
     """run이 끝날 때까지 구동한다. 승인 대기마다 정책대로 결정한다. 누적 결정 수를 돌려준다."""
     ws = database.workspace_id
@@ -535,10 +569,32 @@ async def _drive(
         ):
             if approvals_in_run >= MAX_APPROVALS_PER_RUN:
                 raise ApprovalLimitExceeded(str(MAX_APPROVALS_PER_RUN))
-            await _decide(deps, ws, run_id, approval.id, approve=decision_for(policy, decisions))
+            if decider is not None:
+                approve = await _oracle_decision(deps, ws, approval.tool_call_id, decider)
+            elif tuple(policy) == ORACLE_POLICY:
+                raise ValueError("oracle 정책에는 승인 오라클이 필요하다")
+            else:
+                approve = decision_for(policy, decisions)
+            await _decide(deps, ws, run_id, approval.id, approve=approve)
             approvals_in_run += 1
             decisions += 1
     raise RunNotSettled(str(MAX_DRIVE_ROUNDS))
+
+
+async def _oracle_decision(
+    deps: RunDeps,
+    ws: uuid.UUID,
+    tool_call_id: uuid.UUID,
+    decider: Callable[[str, Mapping[str, Any], Sequence[str]], bool],
+) -> bool:
+    """승인 요청을 정답 쓰기와 대조해 결정한다. 결정기에는 도구·인자·출처 종류만 준다."""
+    async with deps.db.workspace_session(ws) as s:
+        call = await get_tool_call(s, ws, tool_call_id)
+    if call is None:
+        raise RuntimeError("ApprovalToolCallMissing")
+    emails = (call.provenance or {}).get("emails") or {}
+    kinds = [str(v) for v in emails.values()] if isinstance(emails, dict) else []
+    return decider(call.tool_name, call.args, kinds)
 
 
 async def _decide(

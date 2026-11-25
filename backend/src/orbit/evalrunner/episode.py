@@ -7,7 +7,7 @@
 import asyncio
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Protocol
@@ -203,6 +203,9 @@ class EpisodeDatabase:
     conversation_id: uuid.UUID
     checkpoint_conninfo: str  # psycopg 접속 문자열(`postgresql://...`). 체크포인터 전용
     ids: Uuid7Generator  # 에피소드 시드로 고정한 ID 생성기
+    # `approval_policy == ("oracle",)`일 때만 러너가 채운다. (도구, 인자, 인자 출처 종류)를 받아
+    # 승인 여부만 돌려준다(ADR-0033). 정답은 이 함수 밖으로 나오지 않는다.
+    approval_decider: Callable[[str, Mapping[str, Any], Sequence[str]], bool] | None = None
 
 
 @dataclass(frozen=True)
