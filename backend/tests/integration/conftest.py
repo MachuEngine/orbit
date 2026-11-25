@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from alembic import command
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, text
 
 from integration.mailindex_support import EXTRAS, IndexEnv, cleanup_users, env_iter
 from integration.runflow_support import Harness, build_harness
@@ -20,6 +20,13 @@ def migrated_test_database(app_url: str, owner_url: str) -> None:
     require_test_database(app_url)
     require_test_database(owner_url)
     command.upgrade(alembic_config(owner_url), "head")
+    # prod 시작 점검이 orbit_app으로 alembic_version을 읽는다(배포 절차 문서의 권한 부여와 같다).
+    engine = create_engine(owner_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("GRANT SELECT ON alembic_version TO orbit_app"))
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

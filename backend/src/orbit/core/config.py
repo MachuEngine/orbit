@@ -32,6 +32,8 @@
   OpenAI 구현의 키와 주소는 `LLMSettings`의 `ORBIT_OPENAI_API_KEY`·`ORBIT_OPENAI_BASE_URL`을 쓴다.
 - G3 인젝션 경고(ADR-0033): `ORBIT_INJECTION_GUARD`(`off`|`jev`, 기본 off). jev면 읽은 메일·문서
   본문을 Jev(`AI_GATEWAY_API_KEY`)로 판정해 의심이면 경고한다. 키가 없으면 워커가 시작하지 않는다.
+- 운영 배포(ADR-0022): `ORBIT_EMBEDDED_WORKER`(기본 false, true면 API 프로세스 안에서 작업 워커를
+  함께 돌린다), `ORBIT_STATIC_DIR`(빌드한 프론트 디렉터리. 있으면 `/api` 밖의 경로를 서빙한다).
 """
 
 import uuid
@@ -100,6 +102,10 @@ class Settings(BaseSettings):
     def _fixed_stt_model_id(cls, value: str) -> str:
         return validate_stt_model_id(value)  # 빈 값·별칭이면 ValueError라 시작이 실패한다
 
+    # 운영 배포 (ADR-0022)
+    embedded_worker: bool = False  # true면 API 프로세스가 작업 워커를 같은 이벤트 루프에서 돌린다
+    static_dir: str | None = None  # 있으면 /api 밖의 경로에 이 디렉터리(빌드한 프론트)를 서빙한다
+
     @field_validator("log_level", mode="before")
     @classmethod
     def _upper_log_level(cls, value: object) -> object:
@@ -113,6 +119,7 @@ class Settings(BaseSettings):
         "session_signing_key_file",
         "google_connect_redirect_uri",
         "data_key_file",
+        "static_dir",
         mode="before",
     )
     @classmethod
